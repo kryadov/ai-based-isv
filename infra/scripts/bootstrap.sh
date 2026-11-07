@@ -104,12 +104,33 @@ section_argocd() {
   echo "argocd: ready (ui http://localhost:30081)"
 }
 
+section_monitoring() {
+  helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null 2>&1 || true
+  helm repo update prometheus-community >/dev/null
+  local pw
+  pw="$(vcli kv get -field=password secret/grafana/admin 2>/dev/null || true)"
+  [ -n "$pw" ] || { pw="$(openssl rand -hex 12)"; vcli kv put secret/grafana/admin username=admin "password=$pw" >/dev/null; }
+  kubectl -n "$NS" create secret generic grafana-admin \
+    --from-literal=username=admin --from-literal="password=$pw" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+    --version 93.0.0 \
+    --namespace "$NS" \
+    -f "$ROOT/monitoring/values.yaml" --wait --timeout 15m
+  kubectl -n "$NS" wait --for=condition=Available deployment/kube-prometheus-stack-grafana --timeout=300s 2>/dev/null || true
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' -u "admin:$pw" http://localhost:30082/api/health || true)"
+  [ "$code" = "200" ] || { echo "grafana: not reachable ($code)"; exit 1; }
+  echo "monitoring: kube-prometheus-stack ready (grafana http://localhost:30082)"
+}
+
 case "${1:-all}" in
   vault)  section_vault ;;
   cnpg)   section_cnpg ;;
   gitea)  section_gitea ;;
   runner) section_runner ;;
   argocd) section_argocd ;;
-  all)    section_vault; section_cnpg; section_gitea; section_runner; section_argocd ;;
-  *) echo "usage: $0 [vault|cnpg|gitea|runner|argocd|all]"; exit 2 ;;
+  monitoring) section_monitoring ;;
+  all)    section_vault; section_cnpg; section_gitea; section_runner; section_argocd; section_monitoring ;;
+  *) echo "usage: $0 [vault|cnpg|gitea|runner|argocd|monitoring|all]"; exit 2 ;;
 esac
