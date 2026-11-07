@@ -5,6 +5,9 @@ description = "Swarm control plane API: task queue, leases, HITL inbox, audit"
 requires-python = ">=3.12"
 dependencies = ["fastapi>=0.115", "uvicorn>=0.34"]
 
+[dependency-groups]
+dev = ["httpx2>=2.16"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
