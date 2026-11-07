@@ -1,5 +1,4 @@
 from fastapi.testclient import TestClient
-
 from isv_product.main import create_app
 
 
