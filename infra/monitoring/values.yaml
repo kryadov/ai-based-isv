@@ -1,0 +1,53 @@
+# kube-prometheus-stack: Prometheus + Grafana + Alertmanager (спека §6, наблюдаемость).
+grafana:
+  service:
+    type: NodePort
+    nodePort: 30082
+  admin:
+    existingSecret: grafana-admin
+    userKey: username
+    passwordKey: password
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      url: http://loki.platform.svc.cluster.local:3100
+      isDefault: false
+  resources:
+    requests:
+      cpu: 50m
+      memory: 192Mi
+    limits:
+      memory: 512Mi
+prometheus:
+  prometheusSpec:
+    retention: 3d
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        memory: 1Gi
+    # ServiceMonitor'ы во всех namespace (дефолт — только в релизном)
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+alertmanager:
+  enabled: false
+defaultRules:
+  create: false
+kubeStateMetrics:
+  enabled: true
+nodeExporter:
+  enabled: true
+prometheusOperator:
+  # v0.95.1 без arm64-образа (ноутбук arm64) — пин последней мультиарх-версии
+  image:
+    tag: v0.94.1
+  prometheusConfigReloader:
+    image:
+      tag: v0.94.1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 192Mi
+    limits:
+      memory: 512Mi
