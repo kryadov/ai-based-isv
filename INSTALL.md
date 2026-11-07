@@ -52,13 +52,18 @@ Python 3.12 подхватится автоматически (`.python-version`
 | Gitea Web/API | http://localhost:30080 | админ `swarm-admin` (пароль — в Vault) |
 | Gitea SSH | localhost:30022 | git over ssh |
 | Vault | port-forward 8200 | root token: `kubectl -n platform exec vault-0 -- vault print token` |
-| Postgres | внутри кластера `postgres-platform-rw.platform:5432` | БД `gitea`, user `gitea` (secret `postgres-platform-credentials`) |
+| Postgres | внутри кластера `postgres-platform-rw.platform:5432` | БД `gitea`, user `gitea` (secret `postgres-platform-app`) |
+| Argo CD UI | http://localhost:30081 | `admin` / пароль из secret `argocd-initial-admin-secret` |
+| Grafana | http://localhost:30082 | `admin` / пароль в Vault `secret/grafana/admin` |
 
 ## 5. Acceptance-тесты L0
 
 ```bash
-./infra/tests/m2a_pr_flow.sh   # PR-flow с branch protection
+./infra/tests/m2a_pr_flow.sh      # PR-flow с branch protection (нужен работающий bootstrap)
+./infra/tests/m2b_deploy_flow.sh  # GitOps demo-deploy в prod + метрики + логи (нужен merge в main: Application следит за main)
 ```
+
+Примечание: m2b-тест выполняется после `./infra/scripts/bootstrap.sh demo` на состоянии main (Application demo-prod синкается из GitHub main).
 
 ## 6. Troubleshooting
 

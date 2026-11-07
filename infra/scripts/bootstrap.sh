@@ -124,6 +124,40 @@ section_monitoring() {
   echo "monitoring: kube-prometheus-stack ready (grafana http://localhost:30082)"
 }
 
+section_loki() {
+  helm upgrade --install loki grafana/loki \
+    --version 7.5.0 \
+    --namespace "$NS" \
+    -f "$ROOT/loki/values.yaml" --wait --timeout 10m
+  helm upgrade --install alloy grafana/alloy \
+    --version 1.15.0 \
+    --namespace "$NS" \
+    --values "$ROOT/loki/alloy.yaml" --wait --timeout 10m
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3100/ready || true)"
+  # Loki без NodePort снаружи — проверка через порт-форвард kubectl
+  if [ "$code" != "200" ]; then
+    kubectl -n "$NS" port-forward svc/loki 3100:3100 >/tmp/loki-pf.log 2>&1 &
+    PF=$!; sleep 3
+    code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3100/ready || true)"
+    kill $PF 2>/dev/null || true
+  fi
+  [ "$code" = "200" ] || { echo "loki: not ready ($code)"; exit 1; }
+  echo "loki: ready; alloy: $(kubectl -n "$NS" get ds alloy -o jsonpath='{.status.numberReady}') ready"
+}
+
+section_demo() {
+  # Окружения + GitOps: AppProject (граница prod/staging) + Application demo-prod (auto-sync).
+  # ВАЖНО: Application смотрит targetRevision=main — запускать после merge инкремента в main.
+  kubectl create namespace prod --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  kubectl create namespace staging --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  kubectl apply -f "$ROOT/../infra/argocd/appproject.yaml"
+  kubectl apply -f "$ROOT/../infra/argocd/application-demo.yaml"
+  kubectl -n "$NS" wait --for=jsonpath='{.status.sync.status}'=Synced application/demo-prod --timeout=300s
+  kubectl -n prod wait --for=condition=Ready pod -l app=podinfo --timeout=300s
+  echo "demo: podinfo Running in prod (argocd Synced)"
+}
+
 case "${1:-all}" in
   vault)  section_vault ;;
   cnpg)   section_cnpg ;;
@@ -131,6 +165,8 @@ case "${1:-all}" in
   runner) section_runner ;;
   argocd) section_argocd ;;
   monitoring) section_monitoring ;;
-  all)    section_vault; section_cnpg; section_gitea; section_runner; section_argocd; section_monitoring ;;
-  *) echo "usage: $0 [vault|cnpg|gitea|runner|argocd|monitoring|all]"; exit 2 ;;
+  loki)   section_loki ;;
+  demo)   section_demo ;;
+  all)    section_vault; section_cnpg; section_gitea; section_runner; section_argocd; section_monitoring; section_loki; section_demo ;;
+  *) echo "usage: $0 [vault|cnpg|gitea|runner|argocd|monitoring|loki|demo|all]"; exit 2 ;;
 esac
