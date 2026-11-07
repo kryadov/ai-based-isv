@@ -41,9 +41,9 @@ Python 3.12 подхватится автоматически (`.python-version`
 ./infra/bootstrap.sh
 ```
 
-Идемпотентен: повторный прогон не разрушает данные. Скрипт создаёт k3d-кластер `swarm-lab`, разворачивает Vault (dev-mode), Postgres (CNPG + pgvector), Gitea (NodePort `30080`, SSH `30022`) и act_runner; административный токен Gitea кладёт в Vault.
+Идемпотентен: повторный прогон не разрушает данные. Скрипт создаёт k3d-кластер `swarm-lab`, разворачивает Vault (dev-mode), Postgres (CNPG, образ с pgvector), Gitea (NodePort `30080`, SSH `30022`, внешняя БД) и act_runner; административный токен Gitea кладёт в Vault (`secret/gitea/admin`).
 
-> Раздел финализируется в M2a Task 8 — после стабилизации фактических шагов.
+Факты стенда фиксируются в `infra/env.yaml` (генерируется автоматически — артефакт VET, руками не редактировать). Секции можно гонять по отдельности: `./infra/scripts/bootstrap.sh [vault|cnpg|gitea|runner]`.
 
 ## 4. Доступ к сервисам
 
