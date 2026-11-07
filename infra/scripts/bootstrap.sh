@@ -98,10 +98,27 @@ section_argocd() {
     --namespace "$NS" \
     -f "$ROOT/argocd/values.yaml" --wait --timeout 10m
   kubectl -n "$NS" wait --for=condition=Available deployment/argocd-server --timeout=300s
+  # Приватный GitHub-репо требует креды для Argo CD; публичный клонируется анонимно.
+  if [ "$(curl -s -o /dev/null -w '%{http_code}' 'https://github.com/kryadov/ai-based-isv/info/refs?service=git-upload-pack')" != "200" ]; then
+    local gtok
+    gtok="${GITHUB_TOKEN:-$(gh auth token 2>/dev/null || true)}"
+    [ -n "$gtok" ] || { echo "argocd: репо приватное и нет gh-токена (gh auth login или GITHUB_TOKEN)"; exit 1; }
+    kubectl -n "$NS" create secret generic argocd-repo-github-ai-based-isv \
+      --from-literal=url=https://github.com/kryadov/ai-based-isv \
+      --from-literal=username=kryadov \
+      --from-literal="password=$gtok" \
+      --type=Opaque \
+      --dry-run=client -o yaml \
+    | kubectl label --local -f - argocd.argoproj.io/secret-type=repository --dry-run=client -o yaml \
+    | kubectl apply -f - >/dev/null
+    echo "argocd: repo creds wired (private repo)"
+  else
+    echo "argocd: repo public — anonymous clone"
+  fi
   local code
   code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:30081/api/version || true)"
   [ "$code" = "200" ] || { echo "argocd: api not reachable ($code)"; exit 1; }
-  echo "argocd: ready (ui http://localhost:30081)"
+  echo "argocd: ready (ui http://localhost:30081, repo creds wired)"
 }
 
 section_monitoring() {

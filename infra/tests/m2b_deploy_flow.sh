@@ -35,14 +35,14 @@ PF1=$!
 sleep 4
 trap 'kill $PF1 2>/dev/null || true' EXIT
 PROM_JSON="$(mktemp)"
-curl -sf "http://localhost:9090/api/v1/query?query=podinfo_requests_total" > "$PROM_JSON" \
+curl -sf "http://localhost:9090/api/v1/query?query=http_requests_total%7Bjob%3D%22podinfo%22%7D" > "$PROM_JSON" \
   || fail "prometheus api недоступна"
-python3 - "$PROM_JSON" <<'EOF' || fail "метрика podinfo_requests_total отсутствует в Prometheus"
+python3 - "$PROM_JSON" <<'EOF' || fail "метрика http_requests_total{job=podinfo} отсутствует в Prometheus"
 import json, sys
 d = json.load(open(sys.argv[1]))
 assert d["status"] == "success" and len(d["data"]["result"]) > 0, f"result={d['data']['result']}"
 EOF
-echo "prometheus: podinfo_requests_total present"
+echo "prometheus: http_requests_total{job=podinfo} present"
 
 # 4) Loki: логи из namespace prod
 kubectl -n "$NS" port-forward svc/loki 3100:3100 >/tmp/m2b-pf-loki.log 2>&1 &
