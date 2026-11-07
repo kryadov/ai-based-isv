@@ -1,0 +1,18 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: postgres-platform
+  namespace: platform
+spec:
+  # Standard-образ CNPG уже содержит pgvector + PGAudit + JIT; multi-arch (amd64/arm64).
+  # Пин тега — из infra/env.yaml при бутстрапе; формат тегов CNPG: <major.minor>-standard-<distro>.
+  imageName: ghcr.io/cloudnative-pg/postgresql:17.11-202610050823-standard-bookworm
+  instances: 1
+  storage:
+    size: 5Gi
+  bootstrap:
+    initdb:
+      database: gitea
+      owner: gitea
+      postInitApplicationSQL:
+        - CREATE EXTENSION IF NOT EXISTS vector;

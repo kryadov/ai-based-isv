@@ -1,5 +1,5 @@
 # Gitea: git+PR+CI+OCI-registry. NodePort 30080 (HTTP), 30022 (SSH).
-# M2a: sqlite (лаб, один узел); external CNPG подключается values-external-db.yaml (Task 5).
+# БД: внешний CNPG Cluster postgres-platform (values-external-db.yaml); встроенные bitnami-субчарты отключены.
 gitea:
   admin:
     username: swarm-admin
@@ -24,6 +24,8 @@ service:
     type: NodePort
     nodePort: 30022
 postgresql:
+  enabled: false
+postgresql-ha:
   enabled: false
 persistence:
   enabled: true

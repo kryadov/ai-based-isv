@@ -27,7 +27,7 @@ section_gitea() {
     --set gitea.admin.username=swarm-admin \
     --set "gitea.admin.password=$pw" \
     --values "$ROOT/gitea/values.yaml" --wait --timeout 10m
-  kubectl -n "$NS" wait --for=condition=Ready pod -l app.kubernetes.io/name=gitea --timeout=300s
+  kubectl -n "$NS" wait --for=condition=Ready pod -l app.kubernetes.io/name=gitea --timeout=300s 2>/dev/null || true
 
   # токен администратора: если в Vault валидный — не пересоздаём
   local old tok code
@@ -49,9 +49,27 @@ section_gitea() {
   echo "gitea: admin token stored in vault"
 }
 
+section_gitea_db() {
+  # Переключение Gitea на внешний CNPG (пароль — из secret postgres-platform-app).
+  local dbpw
+  dbpw="$(kubectl -n "$NS" get secret postgres-platform-app -o jsonpath='{.data.password}' | base64 -d)"
+  helm upgrade --install gitea gitea/gitea \
+    --namespace "$NS" \
+    --set gitea.admin.username=swarm-admin \
+    --set "gitea.config.database.PASSWD=$dbpw" \
+    --values "$ROOT/gitea/values.yaml" \
+    --values "$ROOT/gitea/values-external-db.yaml" --wait --timeout 10m
+  kubectl -n "$NS" wait --for=condition=Ready pod -l app.kubernetes.io/name=gitea --timeout=300s 2>/dev/null || true
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:30080/api/v1/version || true)"
+  [ "$code" = "200" ] || { echo "gitea: external-db switch failed (version api $code)"; exit 1; }
+  echo "gitea: external db ok"
+}
+
 case "${1:-all}" in
-  vault) section_vault ;;
-  gitea) section_gitea ;;
-  all)   section_vault; section_gitea ;;
-  *) echo "usage: $0 [vault|gitea|all]"; exit 2 ;;
+  vault)      section_vault ;;
+  gitea)      section_gitea ;;
+  gitea_db)   section_gitea_db ;;
+  all)        section_vault; section_gitea; section_gitea_db ;;
+  *) echo "usage: $0 [vault|gitea|gitea_db|all]"; exit 2 ;;
 esac
