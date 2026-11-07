@@ -1,6 +1,5 @@
-from fastapi.testclient import TestClient
-
 from agent_api.main import create_app
+from fastapi.testclient import TestClient
 
 
 def test_healthz() -> None:
