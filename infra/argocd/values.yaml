@@ -1,0 +1,33 @@
+# Argo CD (GitOps control plane) — спека §6. UI за NodePort без TLS (лаборатория).
+configs:
+  # insecure = без TLS-редиректа (NodePort-лаборатория); chart v10 читает это из params
+  params:
+    "server.insecure": true
+server:
+  service:
+    type: NodePort
+    nodePortHttp: 30081
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+controller:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 384Mi
+    limits:
+      memory: 1Gi
+redis:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+applicationSet:
+  enabled: false
+notifications:
+  enabled: false
