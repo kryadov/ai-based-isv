@@ -165,7 +165,12 @@ docs/              архитектура, ADR, спеки
 - **Скоупы:** проект (working/episodic/semantic) + организация (semantic-конституция, reuse-каталог, lessons, eval-знания). Проекты не связаны → общий только org-уровень; связанные → плюс явные ссылки между семантиками проектов.
 - **Хранилище:** semantic (оба уровня) — git-репозиторий памяти, markdown/структурированные записи, изменения через PR (ревью человек/champion); working/episodic — Postgres + pgvector-индекс для retrieval; session logs — append-only NDJSON в объектном хранилище/томе, связь через run_id.
 - **Запись:** session log — все, append-only; working — координатор/владелец задачи; episodic — на контрольных точках; semantic — только через PR после верификации «знание улучшает результат» (eval на исторических задачах — принцип «опубликован ≠ улучшает результат»).
-- **Чтение:** progressive disclosure — срезы под задачу (релевантные lessons, куски глоссария, reuse-ссылки), углубление по требованию; порог входа в контекст снижается тем, что требования/изменения/результаты проверок хранятся рядом.
+- **Чтение** — progressive disclosure — срезы под задачу (релевантные уроки, куски глоссария, reuse-ссылки), углубление по требованию; порог входа в контекст снижается тем, что требования/изменения/результаты проверок хранятся рядом.
+- **Интеграция памяти с циклом исполнения** (где именно память живёт в конвейере):
+  1. *Проектный semantic* (глоссарий домена, инварианты, конвенции) физически лежит в целевом репо (`.specs/`, включения AGENTS.md) — harness OpenCode подхватывает его нативно, слой 0 progressive disclosure;
+  2. *На старте вершины* воркер запрашивает у `context_engine` срез: релевантные org-semantic правила + reuse-каталог по зоне задачи + project-episodic уроки по затронутым файлам — срез попадает в контекст сессии (в промпт/генерируемый `.swarm/context.md` в worktree);
+  3. *На закрытии вершины* PydanticAI-роль **memory-extractor** читает session log + handoff + дифф и предлагает episodic-записи (что пробовали, что не сработало, решения) — пишет в project episodic по правам;
+  4. *На закрытии Run* job консолидации дистиллирует уроки и открывает **promotion PR в org-репозиторий памяти** (ревью человек/champion); reuse-каталог пополняется при выносе общих компонентов.
 - **Защиты:** TTL и периодическая консолидация (дедуп, пересмотр), права записи по ролям, детект дрейфа (semantic vs реальный код — сверка на scheduled sweep), запрет секретов/PII.
 
 ### 7.5 Security / AOP-слой
@@ -193,12 +198,14 @@ docs/              архитектура, ADR, спеки
 
 | Слой | Выбор | Обоснование |
 |---|---|---|
-| Агентная петля (brain) | **PydanticAI** (v2, MIT) | типизированные агенты поверх pydantic v2 — родной для стека (mypy strict); нативный MCP-клиент (toolsets); model-agnostic через LiteLLM (OpenAI-compatible endpoint); structured outputs; usage-метеринг для бюджетов. Альтернативы отклонены: LangGraph — граф-оркестрация дублирует наш control plane, рекомендован при уже имеющемся LangSmith-стеке; OpenAI Agents SDK — vendor-центричный (не-OpenAI модели через beta-адаптеры); CrewAI / Microsoft Agent Framework — роль-рантаймы со слабой типизацией |
-| Durable execution вершины | **DBOS** (`pydantic-ai[dbos]`) | durable execution как библиотека поверх Postgres (без отдельного сервера): крэш-резюм вершины, HITL-ожидания как durable waits, журнал шагов. Апгрейд-путь — Temporal (нативно поддержан PydanticAI) при выходе за лабораторию |
-| MCP-серверы | **FastMCP / официальный `mcp` SDK**, транспорт streamable HTTP | PydanticAI потребляет их как toolsets; AGENTS.md предписывает MCP |
+| Executor coding-вершин | **OpenCode harness** (MIT) в песочнице: `opencode serve` (REST/SSE) за нашим интерфейсом `Executor` | зрелый кодинг-харнесс, который мы не воспроизведём на своей петле: тула редактирования/поиска/bash-политика; нативный OpenAI-compatible endpoint → LiteLLM; AGENTS.md целевого репо читает сам; permission allow/deny/ask (ask → мост в HITL-инбокс); org-level policies; SSE-события (tool calls, диффы) → наш session log; `GET /session/:id/diff` → evidence. Обвязка: свой тонкий клиент по `/openapi.json` (официальный Python SDK alpha и генерирован по V1), pin версии образа `ghcr.io/anomalyco/opencode`, изоляция storage на воркер (`OPENCODE_DB`/volume), явные allow/deny вместо ask по умолчанию (ask в headless висит без ответа, issue #14473) |
+| Лёгкие reasoning-роли | **PydanticAI** (v2, MIT) + DBOS durable | self-eval спеки, бот-ревьюер, judge, memory-extractor и консолидация: structured outputs, без песочницы. Запасной путь: если вершина требует своего loop'а — та же петля с MCP-toolsets |
+| Интерфейс Executor | свой контракт `Executor` (start/deliverable/done_when/paths_allow → события, дифф, статус) | мульти-harness будущее: второй адаптер (Codex app-server / Claude Agent SDK / ACP) без изменений control plane |
+| Durable execution control-plane | **DBOS** (`pydantic-ai[dbos]`) | durable workflow поверх Postgres без отдельного сервера; HITL-ожидания как durable waits; апгрейд-путь — Temporal |
+| MCP-серверы | **FastMCP / официальный `mcp` SDK**, streamable HTTP | task-source, git, ci, deploy/observability, memory, llm; подключаются и к OpenCode-сессиям (`mcp.servers.*`), и к PydanticAI |
 | Control plane | **FastAPI + Postgres** (asyncpg/SQLAlchemy), CLI — **typer** | очередь вершин SKIP LOCKED, merge queue, backpressure, HITL-инбокс, event journal |
-| Память | Postgres + **pgvector**, retrieval — срезы под задачу | semantic — git-репозиторий памяти через PR; session logs — NDJSON |
-| Песочница | **Docker**-контейнер на worktree (v0) | изоляция сети/секретов; см. §7.5 |
+| Память | Postgres + **pgvector**, retrieval — срезы под задачу | semantic (проект+org) — git-репозитории через PR; session logs — NDJSON |
+| Песочница | **Hardened Docker** (v0): non-root, egress-allowlist (LiteLLM/MCP/Gitea), clone-mode worktree, секреты по краткосрочным Vault-токенам | production-путь: k8s agent-sandbox CRD + gVisor/Kata + default-deny NetworkPolicy (см. research-deepdive §3) |
 
 ## 8. Метрики и сдерживание verification debt
 
@@ -247,6 +254,7 @@ docs/              архитектура, ADR, спеки
 - Конституция/org-semantic: изменения только через PR; эскалация для срочных случаев.
 - Reuse: агент предлагает, человек решает о выносе общего компонента.
 - Канонический репозиторий платформы — GitHub (репо = бутстреппер организации, §6.1); целевые проекты каноничны в Gitea с первого дня; CI платформы на M1 — GitHub.
+- Исполнение coding-вершин — OpenCode harness за интерфейсом `Executor` (ресёрч 2026-11-07, deepdive §2.2); лёгкие роли — PydanticAI; песочница v0 — hardened Docker.
 - `isv_product` — demo-проект бутстрепа в репо: маленький реальный сервис с честной SLO-семантикой, не продукт с внешними требованиями.
 - «Prod» в лаборатории: один k3s, окружения — namespace'ами (prod/staging), граница — Argo CD projects/RBAC + prod-монты Vault.
 - Трафик канарейки: синтетическая нагрузка k6 рядом с сервисом, метрики в Prometheus → AnalysisTemplate; smoke-шаги для сервисов без осмысленных метрик.
