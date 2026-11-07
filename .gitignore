@@ -49,3 +49,4 @@ htmlcov/
 
 # Superpowers scratch (sdd workspaces)
 .superpowers/
+input-docs/

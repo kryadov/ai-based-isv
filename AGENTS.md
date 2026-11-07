@@ -1,6 +1,6 @@
 # AI-Native ISV — Engineering Guidelines for AI Agents
 
-Репозиторий платформы агентской разработки (сворм-оркестрация + бутстреп организации + сквозная доставка). Полный дизайн: `docs/superpowers/specs/2026-11-07-swarm-dev-platform-design.md`.
+Репозиторий платформы агентской разработки (swarm-оркестрация + бутстреп организации + сквозная доставка). Полный дизайн: `docs/superpowers/specs/2026-11-07-swarm-dev-platform-design.md`.
 
 ## 1. Prime Directive: Superpowers Methodology
 

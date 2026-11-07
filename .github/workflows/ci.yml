@@ -12,7 +12,7 @@ jobs:
         with:
           enable-cache: true
       - run: uv python install 3.12
-      - run: uv sync --all-packages
+      - run: uv sync --all-packages --locked
       - run: uv run ruff check .
       - run: uv run mypy packages apps
       - run: uv run pytest
