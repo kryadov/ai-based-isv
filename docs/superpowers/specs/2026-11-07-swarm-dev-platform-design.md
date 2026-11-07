@@ -45,7 +45,7 @@
 - Стек платформы — по AGENTS.md: Python ≥3.12, uv-workspace монорепо, pydantic ≥2.0, mypy --strict, ruff, MCP для интеграций. Целевые проекты — любой стек (платформа оркестрирует, а не пишёт сама).
 - Сборка самой платформы — по Superpowers: TDD, brainstorming→план→исполнение, верификация (`uv run ruff check .`, `uv run mypy packages apps`, `uv run pytest`).
 - Деструктивные действия (деплой в prod, миграции, права) — только с явным human approval (gate).
-- Среда v0: лаборатория на одной машине (macOS dev + один Linux-сервер или VM); всё как код, воспроизводимо с нуля.
+- Среда v0: лаборатория на одной машине (macOS dev, k3d + один Linux-сервер/VM с k3s); всё как код, воспроизводимо с нуля. **Все песочницы — поды k3s с первого дня** (решение владельца: Docker не годится), путь в полноценный k8s — те же манифесты.
 - Модели: через единый шлюз (LiteLLM); конкретный провайдер/бюджет — выбор пользователя при запуске (см. §9).
 
 ## 4. Рассмотренные подходы
@@ -90,12 +90,12 @@ L2  Сквозная доставка (конвейер: задача → prod) 
 
 Порядок бутстрапа (по зависимостям данных): Vault → Postgres → Gitea (registry встроен) → трекер → k3s → Prometheus+Grafana (источник данных для analysis-шаблонов) → GitOps/канарейка → Loki → LiteLLM.
 
-**Топология v0:** один Linux-хост (или VM). k3s single-node, namespace'ы: `platform` (Gitea, OpenProject, Vault, Postgres, LiteLLM, Argo, наблюдаемость), `staging` и `prod` (целевые сервисы), `agents` (agent_api + воркеры agent_runtime, Docker-песочницы вершин). Бутстреппер и локальная разработка — с хоста (macOS) через kubeconfig. Грубая смета стенда: ~10–12 ГБ RAM (16 комфортно), 4–8 CPU.
+**Топология v0:** один Linux-хост (или VM). k3s single-node, namespace'ы: `platform` (Gitea, OpenProject, Vault, Postgres, LiteLLM, Argo, наблюдаемость), `staging` и `prod` (целевые сервисы), `agents` (agent_api, воркеры agent_runtime, поды-песочницы вершин). Бутстреппер и локальная разработка — с хоста (macOS, k3d) через kubeconfig. Грубая смета стенда: ~10–12 ГБ RAM (16 комфортно), 4–8 CPU.
 
 ### 6.1 Роль репозитория платформы и бутстреппер
 
 - **Канонический репозиторий платформы — этот GitHub-репозиторий.** Он и есть **бутстреппер организации**: ставится на чистую машину, интерактивный вопросник (`apps/bootstrap`) собирает решения — цель развёртывания (локальная машина/сервер/VM), трекер: развернуть OpenProject или подключить существующий (URL/учётка/webhook), доступы к LLM и бюджет, учётки админов, TLS/домены, создавать ли demo-проект.
-- Результат установки: развёрнутый L0 (§6); **канонические репозитории целевых проектов в Gitea** (из шаблонов, сразу с branch protection, CI-воркфлоу и **check-профилем стека** — §7.2.4); проекты в трекере; **репозиторий org-памяти** (semantic, PR-flow); env-манифест окружения (артефакт VET).
+- Результат установки: развёрнутый L0 (§6); **канонические репозитории целевых проектов в Gitea** (из шаблонов, сразу с branch protection, CI-воркфлоу и **check-профилем стека** — §7.2.4); проекты в трекере; **репозиторий org-памяти** (semantic, PR-flow); **профиль зрелости проекта** (adoption ladder: L1 baseline AGENTS.md → L2 спека-гейты → L3 мультиагент — определяет, какие стадии конвейера включены); env-манифест окружения (артефакт VET).
 - Парадокс M1↔M2 (CI платформы до появления Gitea) решён так: **CI самой платформы на M1 живёт на GitHub**; целевые проекты с первого дня каноничны в Gitea. Платформенное репо в Gitea не мигрирует.
 - **Demo бутстрепа** (`apps/isv_product`, живёт в этом репо): маленький реальный сервис с осмысленной error/latency-семантикой; бутстреппер опционально засеивает его в Gitea + трекер первым целевым проектом — демонстрация E2E-трубы (G2) и приёмка M6. Шаблон живёт в монорепо; засеянная копия канонична в Gitea; повторный засев — явная команда бутстреппера (re-seed), автосинхронизации нет.
 
@@ -144,7 +144,7 @@ docs/              архитектура, ADR, спеки
    - spec self-eval (шкала 0–3 по книге; рубрика — `packages/evals/spec_eval_rubric.md`; порог 2/2/2: тестируемость AC, детерминизм дизайна, декомпозиция; Out of scope и Open questions заполнены) — hook-гейт: FAIL блокирует завершение стадии;
    - **HITL gate №1:** человек аппрувит план для нетривиальных изменений (политика классов: тривиальные по whitelist — без аппрува).
 3. **Исполнение** (граф вершин): планировщик разбивает tasks.md на вершины `{id, deps, paths_allow, paths_avoid, done_when, deliverable}`; на вершину — один писатель в изолированном worktree; специалисты (архитектура, security, тесты) вызываются как review/consult роли, не писатели. Вершины исполняются по зависимостям; передача между агентами — структурированный JSON handoff.
-4. **Gates (один коридор, три точки, параметризован стеком)**: pre-commit (быстрые проверки из **check-профиля стека** целевого проекта: Python — ruff+типы; Java — compile+Checkstyle+SpotBugs; TS/React — eslint+tsc; профиль зашивается бутстреппером в шаблон репо, §6.1) → pre-push (unit + интеграционные + архитектурные тесты) → CI (build, все уровни тестов, security: SAST semgrep, dependency audit, secret scan gitleaks) → бот-ревью (первый проход) → агент обрабатывает замечания (fix + evidence, либо отклонение с обоснованием; споры — человеку; merge заблокирован до закрытия тредов) → **HITL gate №2:** человеческое ревью инвариантов и рисков по evidence pack. Авто-merge — только для заранее разрешённых low-risk классов по политике.
+4. **Gates (один коридор, три точки, параметризован стеком)**: pre-commit (быстрые проверки из **check-профиля стека** целевого проекта: Python — ruff+типы; Java — compile+Checkstyle+SpotBugs; TS/React — eslint+tsc; **LLM-проекты/ассистенты — eval-сьюты как тесты первого класса**, версии промптов — в манифесте прогона; профиль зашивается бутстреппером в шаблон репо, §6.1) → pre-push (unit + интеграционные + архитектурные тесты) → CI (build, unit + интеграционные + e2e, security: SAST semgrep, dependency audit, secret scan gitleaks) → бот-ревью (первый проход) → агент обрабатывает замечания (fix + evidence, либо отклонение с обоснованием; споры — человеку; merge заблокирован до закрытия тредов) → **HITL gate №2:** человеческое ревью инвариантов и рисков по evidence pack. Авто-merge — только для заранее разрешённых low-risk классов по политике. **Миграции БД целевых проектов** — отдельный класс вершин: dry-run на staging-копии БД, деструктивные (drop/alter с потерей данных) — HITL-аппрув, план отката — в evidence.
 5. **Evidence pack** (к каждому MR, генерируется из манифеста и журналов): что меняется и зачем; затронутые инварианты; чем проверено (ссылки на прогонки); маркер успеха после выката; способ отката. Ревьюер читает пакет, а не только diff.
 6. **Выкат.** merge → сборка образа → Argo Rollouts канарейка (шаги 5→25→50→100% с анализом error-rate/latency по SLO сервиса) → успех: маркер успеха пишется в evidence и memory; провал: автороллбэк + черновик пост-мортема в episodic. **HITL gate №3:** первый prod-выкат нового сервиса и изменения deploy-конфига — только человеком.
 7. **Write-back памяти:** episodic на контрольных точках и закрытии; промоция уроков в org — PR в орг-репозиторий памяти; reuse-каталог обновляется при выносе общего компонента.
@@ -176,8 +176,8 @@ docs/              архитектура, ADR, спеки
 ### 7.5 Security / AOP-слой
 
 - Инструментальный шлюз (MCP-прокси): allow-list серверов/тулов, deny опасных операций, аудит всех вызовов LLM и тулов, PII-маскирование.
-- **Исполнение вершины — Docker-контейнер поверх worktree:** сетевой профиль по умолчанию — только к разрешённым endpoint'ам (LiteLLM, MCP-серверы, Gitea); секреты монтируются по краткосрочному Vault-току агента, не env-файлом.
-- Недоверенный контент (вход из трекера/web) в v0: чтение только одноразовыми субагентами в изолированном контейнере **без исходящих тулов** (без сети, MCP и git push). Полноценный taint tracking (метки конфиденциальности, блокировка «заражённых» исходящих) — post-v0 backlog; критерий внедрения: внешние источники контента за пределами трекера (web-тулы, сторонние MCP).
+- **Исполнение вершины — под в k3s** (initContainer: клон/fetch из Gitea в worktree-volume): securityContext non-root, NetworkPolicy default-deny + egress только к разрешённым endpoint'ам (LiteLLM, MCP-серверы, Gitea); секреты — краткосрочный Vault-токен агента, не env-файлом. Манифесты одни и те же для k3s и будущего k8s.
+- Недоверенный контент (вход из трекера/web) в v0: чтение только одноразовыми субагентами в изолированном поде **без исходящих тулов** (без сети, MCP и git push). Полноценный taint tracking (метки конфиденциальности, блокировка «заражённых» исходящих) — post-v0 backlog; критерий внедрения: внешние источники контента за пределами трекера (web-тулы, сторонние MCP).
 - Агент работает в своей ветке/worktree; запрещены direct push в main, доступ к production-секретам, ослабление проверок (все такие попытки — событие + эскалация).
 - Хуки: git-style (pre-commit/pre-push) + lifecycle-хуки agent loop (PreToolUse/Stop как гейты).
 - **Self-changes платформы:** правки агентов в управляющих артефактах (infra/, политики, skills, AGENTS.md) идут PR в GitHub-репо платформы с зеркалом того же коридора (GitHub Actions: ruff/mypy/pytest); deploy-конфиг L0 — только через HITL gate №3.
@@ -205,7 +205,7 @@ docs/              архитектура, ADR, спеки
 | MCP-серверы | **FastMCP / официальный `mcp` SDK**, streamable HTTP | task-source, git, ci, deploy/observability, memory, llm; подключаются и к OpenCode-сессиям (`mcp.servers.*`), и к PydanticAI |
 | Control plane | **FastAPI + Postgres** (asyncpg/SQLAlchemy), CLI — **typer** | очередь вершин SKIP LOCKED, merge queue, backpressure, HITL-инбокс, event journal |
 | Память | Postgres + **pgvector**, retrieval — срезы под задачу | semantic (проект+org) — git-репозитории через PR; session logs — NDJSON |
-| Песочница | **Hardened Docker** (v0): non-root, egress-allowlist (LiteLLM/MCP/Gitea), clone-mode worktree, секреты по краткосрочным Vault-токенам | production-путь: k8s agent-sandbox CRD + gVisor/Kata + default-deny NetworkPolicy (см. research-deepdive §3) |
+| Песочница | **Под в k3s с первого дня** (решение владельца): Pod на вершину — initContainer клон/fetch из Gitea, securityContext non-root, NetworkPolicy default-deny + egress-allowlist (LiteLLM/MCP/Gitea), секреты — краткосрочные Vault-токены | те же манифесты работают в любом k8s — путь масштабирования; усиление изоляции — RuntimeClass gVisor/Kata и CRD agent-sandbox (warm pools) как флаги, не как переписывание |
 
 ## 8. Метрики и сдерживание verification debt
 
@@ -224,14 +224,14 @@ docs/              архитектура, ADR, спеки
 
 ## 10. Порядок реализации (инкременты, каждый — верифицируемый)
 
-1. **M1. Монорепо-каркас:** uv-workspace, пакеты + приложения, конфиги ruff/mypy/pytest; CI для самого репо — на GitHub (платформа канонична на GitHub, §6.1). Закрывает «каркас воркспейса» из AGENTS.md.
+1. **M1. Монорепо-каркас:** uv-workspace, пакеты + приложения, конфиги ruff/mypy/pytest; CI для самого репо — на GitHub (платформа канонична на GitHub, §6.1); **AGENTS.md v2** (методология — мандат, технологии — ссылки на решения) + **ADR-0001** (стек платформы), **ADR-0002** (Executor: OpenCode), **ADR-0003** (память). Закрывает «каркас воркспейса» из AGENTS.md.
 2. **M2. L0-бутстреп + бутстреппер** (разбит на верифицируемые подэтапы):
    - **M2a:** Vault + Postgres + Gitea (с runner и registry); критерий: PR-flow целевого репо с branch protection работает;
    - **M2b:** k3s + Argo CD + kube-prometheus-stack + Loki; критерий: demo-deploy в prod-namespace с метриками в Prometheus;
    - **M2c:** OpenProject + LiteLLM; критерии: webhook трекера доходит до тестового endpoint, модели отвечают через шлюз с логом;
    - **M2d:** `apps/bootstrap` — интерактивный вопросник, идемпотентное применение M2a–M2c, создание целевых репо с check-профилями и org-репозитория памяти, env-манифест, верификация здоровья.
 3. **M3. isv_core + control plane (agent_api):** доменные модели, очередь с lease, идентичности, бюджеты, merge queue с backpressure, HITL-инбокс, audit API; интеграционные тесты против L0.
-4. **M4. agent_runtime + первые MCP:** harness (PydanticAI + DBOS), session log (NDJSON), worktree-менеджмент, done_when, манифест прогона; MCP-серверы **task-source, git, llm**; один агент делает вершину E2E (задача → ветка → PR с evidence).
+4. **M4. agent_runtime + первые MCP:** интерфейс `Executor` + адаптер OpenCode (тонкий клиент по `/openapi.json`, pin версии образа), runtime песочницы — под в k3s (initContainer-клон, NetworkPolicy, Vault-токен), session log (NDJSON), pod/worktree-менеджмент, done_when, манифест прогона; PydanticAI+DBOS для лёгких ролей; MCP-серверы **task-source, git, llm**; один агент делает вершину E2E (задача → ветка → PR с evidence).
 5. **M5. Gates и review-контур:** коридор проверок с per-stack check-профилями, security-сканы, MCP-сервер **ci**, бот-ревью + обработка замечаний, HITL-гейты 1–3, политика авто-merge для whitelist-классов.
 6. **M6. Канареечный выкат:** Argo Rollouts для isv_product, синтетический трафик k6, маркер успеха в evidence и session log; MCP-серверы **deploy/observability**; write-back episodic-памяти — в M7 (в M6 памяти проектов ещё нет).
 7. **M7. context_engine + память:** индексация кода, project memory banks, retrieval, spec self-evals, promotion в org-память, reuse-каталог v1.
