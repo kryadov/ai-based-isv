@@ -46,3 +46,7 @@ htmlcov/
 !.env.example
 *.pem
 *.key
+
+# Superpowers scratch (sdd workspaces)
+.superpowers/
+input-docs/
