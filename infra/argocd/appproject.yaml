@@ -5,7 +5,7 @@ metadata:
   name: swarm-lab
   namespace: platform
 spec:
-  description: Swarm lab projects (target namespaces: prod, staging)
+  description: "Swarm lab projects (target namespaces: prod, staging)"
   sourceRepos:
     - https://github.com/kryadov/ai-based-isv
   destinations:
