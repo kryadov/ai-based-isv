@@ -1,0 +1,73 @@
+# act_runner (dind-вариант): один privileged-контейнер со встроенным docker-демоном.
+# Регистрация — через env GITEA_RUNNER_REGISTRATION_TOKEN (создаётся бутстреппером).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: act-runner-config
+  namespace: platform
+data:
+  config.yaml: |
+    log:
+      level: info
+    runner:
+      capacity: 2
+      labels:
+        - docker:docker://gitea/runner-images:ubuntu-latest
+    cache:
+      enabled: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: act-runner
+  namespace: platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: act-runner
+  template:
+    metadata:
+      labels:
+        app: act-runner
+    spec:
+      containers:
+        - name: act-runner
+          image: gitea/act_runner:0.6.1-dind
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+          workingDir: /data
+          env:
+            - name: GITEA_INSTANCE_URL
+              value: http://gitea-http.platform.svc.cluster.local:30080
+            - name: GITEA_RUNNER_REGISTRATION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: act-runner-registration
+                  key: token
+            - name: CONFIG_FILE
+              value: /config/config.yaml
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: config
+          configMap:
+            name: act-runner-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: act-runner-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: act-runner-data
+  namespace: platform
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
