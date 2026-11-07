@@ -14,7 +14,7 @@ section_vault() {
   helm upgrade --install vault hashicorp/vault \
     --namespace "$NS" --create-namespace \
     -f "$ROOT/vault/values.yaml" --wait --timeout 5m
-  kubectl -n "$NS" wait --for=condition=Ready pod -l app.kubernetes.io/name=vault --timeout=180s 2>/dev/null || true
+  kubectl -n "$NS" wait --for=condition=Ready pod -l app.kubernetes.io/name=vault --timeout=300s
   kubectl -n "$NS" exec vault-0 -- vault status -address=http://127.0.0.1:8200 | grep -E "Sealed|Initialized"
 }
 
