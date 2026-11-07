@@ -40,4 +40,4 @@ mypy_path = [
 
 [tool.pytest.ini_options]
 testpaths = ["packages", "apps"]
-addopts = "-q"
+addopts = "-q --import-mode=importlib"

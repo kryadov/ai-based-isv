@@ -1,0 +1,13 @@
+[project]
+name = "mcp_servers"
+version = "0.1.0"
+description = "MCP tool servers: task-source, git, ci, deploy/observability, memory, llm"
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_servers"]
