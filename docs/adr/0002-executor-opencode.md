@@ -1,6 +1,6 @@
 # ADR-0002: Executor — OpenCode harness
 
-Статус: Accepted · Дата: 2026-11-07 · Драйверы: спека §7.8, research-deepdive §2.2, решение владельца (fork №1: A + OpenCode)
+Статус: Accepted · Дата: 2026-11-07 · Драйверы: спека §7.8, внутренний ресёрч-док (локально: input-docs, вне репо) §2.2, решение владельца (fork №1: A + OpenCode)
 
 ## Контекст
 
