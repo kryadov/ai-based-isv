@@ -50,3 +50,5 @@ htmlcov/
 # Superpowers scratch (sdd workspaces)
 .superpowers/
 input-docs/
+infra/.bootstrap-admin-token
+infra/env.local.yaml

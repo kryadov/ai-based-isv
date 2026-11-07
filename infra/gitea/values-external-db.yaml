@@ -1,0 +1,9 @@
+# Внешняя БД: CNPG Cluster postgres-platform (apply поверх values.yaml).
+# Пароль передаётся бутстреппером через --set gitea.config.database.PASSWD (читается из secret postgres-platform-app).
+gitea:
+  config:
+    database:
+      DB_TYPE: postgres
+      HOST: postgres-platform-rw.platform.svc.cluster.local:5432
+      NAME: gitea
+      USER: gitea
