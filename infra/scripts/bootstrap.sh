@@ -90,11 +90,26 @@ section_runner() {
   echo "runner: registered ($n)"
 }
 
+section_argocd() {
+  helm repo add argo https://argoproj.github.io/argo-helm >/dev/null 2>&1 || true
+  helm repo update argo >/dev/null
+  helm upgrade --install argocd argo/argo-cd \
+    --version 10.15.0 \
+    --namespace "$NS" \
+    -f "$ROOT/argocd/values.yaml" --wait --timeout 10m
+  kubectl -n "$NS" wait --for=condition=Available deployment/argocd-server --timeout=300s
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:30081/api/version || true)"
+  [ "$code" = "200" ] || { echo "argocd: api not reachable ($code)"; exit 1; }
+  echo "argocd: ready (ui http://localhost:30081)"
+}
+
 case "${1:-all}" in
   vault)  section_vault ;;
   cnpg)   section_cnpg ;;
   gitea)  section_gitea ;;
   runner) section_runner ;;
-  all)    section_vault; section_cnpg; section_gitea; section_runner ;;
-  *) echo "usage: $0 [vault|cnpg|gitea|runner|all]"; exit 2 ;;
+  argocd) section_argocd ;;
+  all)    section_vault; section_cnpg; section_gitea; section_runner; section_argocd ;;
+  *) echo "usage: $0 [vault|cnpg|gitea|runner|argocd|all]"; exit 2 ;;
 esac
