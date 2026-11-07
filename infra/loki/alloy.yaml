@@ -2,6 +2,8 @@
 alloy:
   controller:
     type: daemonset
+  mounts:
+    varlog: true
   alloy:
     resources:
       requests:
