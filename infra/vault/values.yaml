@@ -1,0 +1,9 @@
+# Vault в lab-режиме: dev-сервер (эфемерный, бутстреппер пересоздаёт секреты).
+# Путь к постоянному бэкенду (raft/file) — M3, при появлении реальных секретов (ADR-0003 §последствия).
+server:
+  dev:
+    enabled: true
+  ui:
+    enabled: true
+injector:
+  enabled: false
