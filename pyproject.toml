@@ -1,0 +1,43 @@
+[project]
+name = "ai-based-isv"
+version = "0.1.0"
+description = "AI-native ISV: swarm agent development platform (org bootstrap + swarm orchestration + delivery)"
+requires-python = ">=3.12"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.9",
+    "mypy>=1.14",
+    "pytest>=8.3",
+    "httpx>=0.27",
+]
+
+[tool.uv.workspace]
+members = ["packages/*", "apps/*"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["packages", "apps"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+explicit_package_bases = true
+mypy_path = [
+    "packages/isv_core/src",
+    "packages/agent_runtime/src",
+    "packages/context_engine/src",
+    "packages/mcp_servers/src",
+    "packages/evals/src",
+    "apps/bootstrap/src",
+    "apps/agent_api/src",
+    "apps/isv_product/src",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["packages", "apps"]
+addopts = "-q"
