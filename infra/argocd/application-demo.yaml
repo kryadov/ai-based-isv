@@ -1,0 +1,21 @@
+# Application demo-prod: авто-синк манифестов infra/demo-app/prod → namespace prod.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: demo-prod
+  namespace: platform
+spec:
+  project: swarm-lab
+  source:
+    repoURL: https://github.com/kryadov/ai-based-isv
+    targetRevision: main
+    path: infra/demo-app/prod
+  destination:
+    namespace: prod
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
