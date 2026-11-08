@@ -37,17 +37,23 @@ uv run pytest               # expected: all tests green
 
 Python 3.12 is picked up automatically (`.python-version`).
 
-## 3. L0 Bootstrap (k3d + Vault + Postgres + Gitea + GitOps + observability)
+## 3. L0 Bootstrap (k3d + OpenBao + Postgres + Gitea + GitOps + observability)
+
+The primary path — the bootstrapper CLI:
 
 ```bash
-./infra/bootstrap.sh
+uv sync --all-packages
+uv run org-bootstrap check       # prerequisites
+uv run org-bootstrap init --force  # questionnaire → infra/env.local.yaml (lab defaults)
+uv run org-bootstrap apply       # idempotent provisioning of all L0 sections
+uv run org-bootstrap seed-demo   # demo repo isv-product in Gitea
 ```
 
-Idempotent: a repeated run does not destroy data. The script creates the `swarm-lab` k3d cluster and provisions Vault (dev-mode), Postgres (CNPG, pgvector image), Gitea (NodePort `30080`, SSH `30022`, external DB), act_runner, Argo CD, kube-prometheus-stack (Grafana `30082`) and Loki+Alloy; the Gitea admin token is stored in Vault.
+Idempotent: repeated runs do not destroy data. It creates the `swarm-lab` k3d cluster and provisions OpenBao (raft on PVC, auto-init/unseal), Postgres (CNPG, pgvector image), Gitea (NodePort `30080`, SSH `30022`, external DB), act_runner, Argo CD, kube-prometheus-stack (Grafana `30082`), Loki+Alloy; admin tokens/passwords are stored in OpenBao.
 
 If the git repository is private, Argo CD is wired with `gh auth token` (requires `gh auth login` or `GITHUB_TOKEN`); for a public repo it clones anonymously.
 
-Facts of the stand are recorded in `infra/env.yaml` (auto-generated — a VET artifact, do not edit by hand). Individual sections: `./infra/scripts/bootstrap.sh [vault|cnpg|gitea|runner|argocd|monitoring|loki|demo]`.
+Stand facts are recorded in `infra/env.yaml` (auto-generated — a VET artifact, do not edit by hand). Individual sections: `./infra/scripts/bootstrap.sh [vault|cnpg|gitea|runner|argocd|monitoring|loki|demo|openproject|litellm]` or `uv run org-bootstrap apply --section <name>`. Alternative without the CLI: `./infra/bootstrap.sh` (calls the same sections).
 
 ## 4. Service access
 

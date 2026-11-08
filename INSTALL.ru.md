@@ -43,9 +43,9 @@ Python 3.12 подхватится автоматически (`.python-version`
 ./infra/bootstrap.sh
 ```
 
-Идемпотентен: повторный прогон не разрушает данные. Скрипт создаёт k3d-кластер `swarm-lab` и разворачивает Vault (dev-mode), Postgres (CNPG, образ с pgvector), Gitea (NodePort `30080`, SSH `30022`, внешняя БД), act_runner, Argo CD, kube-prometheus-stack (Grafana `30082`) и Loki+Alloy; административный токен Gitea кладёт в Vault.
+Идемпотентен: повторный прогон не разрушает данные. Скрипт создаёт k3d-кластер `swarm-lab` и разворачивает **OpenBao** (raft на PVC, auto-init/unseal), Postgres (CNPG, pgvector), Gitea (NodePort `30080`, SSH `30022`, внешняя БД), act_runner, Argo CD, kube-prometheus-stack (Grafana `30082`), Loki+Alloy; административные токены/пароли кладёт в OpenBao.
 
-Если git-репозиторий приватный, Argo CD подключается через `gh auth token` (нужен `gh auth login` или `GITHUB_TOKEN`); для публичного репо клонирует анонимно.
+Если git-репозиторий приватный, Argo CD подключается через `gh auth token` (нужен `gh auth login` или `GITHUB_TOKEN`); для публичного репо клонирует анонимно. Основной путь — CLI (`org-bootstrap`); альтернатива — `./infra/bootstrap.sh`.
 
 Факты стенда фиксируются в `infra/env.yaml` (генерируется автоматически — артефакт VET, руками не редактировать). Секции можно гонять по отдельности: `./infra/scripts/bootstrap.sh [vault|cnpg|gitea|runner|argocd|monitoring|loki|demo]`.
 
@@ -55,7 +55,7 @@ Python 3.12 подхватится автоматически (`.python-version`
 |---|---|---|
 | Gitea Web/API | http://localhost:30080 | админ `swarm-admin` (пароль — в Vault) |
 | Gitea SSH | localhost:30022 | git over ssh |
-| Vault | port-forward 8200 | root token: `kubectl -n platform exec vault-0 -- vault print token` |
+| OpenBao UI/API | port-forward 8200 | unseal/init ключи: `infra/.vault-unseal-keys.json`; root token: `infra/.vault-root-token` |
 | Postgres | внутри кластера `postgres-platform-rw.platform:5432` | БД `gitea`, `openproject` (user `gitea`, secret `postgres-platform-app`) |
 | OpenProject UI | http://localhost:30083 | `op-admin` (пароль в Vault `secret/openproject/admin`) ⚠ password-login сломан в v17-slim — см. TODO |
 | LiteLLM API | http://localhost:30084/v1 | Bearer master key (Vault `secret/litellm/master`); модели: qwen-coder, qwen3 |
