@@ -1,17 +1,17 @@
 # TODO
 
-## Обратная связь по статусам задач в трекере (обязательно)
+## Tracker task-status feedback loop (mandatory)
 
-- [ ] Замкнуть цепочку обратной связи: платформа меняет статус задачи в трекере по ходу работы агентов.
-  - Задача взята агентом → статус **In Progress** (автоматически, через MCP task-source).
-  - Ключевые точки конвейера → комментарии к задаче: спека готова (ссылка), PR создан (ссылка), acceptance пройден, выкат произведён.
-  - Завершение → **Done** + ссылки на PR и evidence pack. Провал/блок → **Blocked** с причиной.
-  - Правило: агент никогда не оставляет задачу в исходном статусе — фидбек-петля замкнута в обе стороны (трекер → платформа → трекер).
-  - Реализация: обратные вызовы через MCP-сервер task-source (OpenProject/Jira-адаптер, спека §7.1), этап M3/M5.
+- [ ] Close the feedback loop: the platform must change the tracker task status as agents work.
+  - Task picked up by an agent → status **In Progress** (automatically, via the MCP task-source).
+  - Key pipeline milestones → task comments: spec ready (link), PR created (link), acceptance passed, rollout done.
+  - Completion → **Done** + links to PR and evidence pack. Failure/block → **Blocked** with a reason.
+  - Rule: an agent never leaves a task in its original status — the feedback loop is closed in both directions (tracker → platform → tracker).
+  - Implementation: callbacks via the MCP task-source server (OpenProject/Jira adapter, spec §7.1), milestone M3/M5.
 
-## Прочее
+## Other
 
-- [ ] **Мониторинг деградации метрик после rollout** (обязательно, M6): после каждого выката — автоматическое сравнение ключевых метрик (error-rate, latency p95/p99, saturation) с pre-rollout baseline; порог деградации → алерт + авто-rollback (Argo Rollouts AnalysisTemplates + синтетический трафик k6); запрет «тихой» деградации: rollout не считается успешным без положительного вердикта анализа метрик.
-- [ ] GUI-панель agent_api (сейчас CLI/API) — после стабилизации M3.
-- [ ] Vault: переход с dev-mode на raft/file backend — при появлении реальных секретов (M3).
-- [ ] Taint tracking для недоверенного контента — post-v0 (критерий: внешние источники контента за пределами трекера).
+- [ ] **Post-rollout metric regression monitoring** (mandatory, M6): after every rollout — automatic comparison of key metrics (error rate, latency p95/p99, saturation) against the pre-rollout baseline; degradation threshold → alert + automatic rollback (Argo Rollouts AnalysisTemplates + k6 synthetic traffic); no silent degradation: a rollout is not considered successful without a positive metrics-analysis verdict.
+- [ ] agent_api GUI panel (currently CLI/API) — after M3 stabilizes.
+- [ ] Vault: migrate from dev-mode to raft/file backend — when real secrets appear (M3).
+- [ ] Taint tracking for untrusted content — post-v0 (trigger: content sources beyond the tracker).

@@ -1,74 +1,76 @@
 # INSTALL
 
-Установка платформы и её инфраструктуры (L0). Всё разворачивается локально на ноутбуке (k3d = k3s в Docker); манифесты идентичны для любого k8s.
+Setup of the platform and its infrastructure (L0). Everything runs locally on a laptop (k3d = k3s in Docker); the manifests are identical for any k8s.
+
+> Русская версия: [INSTALL.ru.md](INSTALL.ru.md)
 
 ## 1. Prerequisites
 
-| Инструмент | Мин. версия | Установка |
+| Tool | Min version | Install |
 |---|---|---|
-| Docker | 28+ | Docker Desktop / OrbStack / colima (демон должен быть запущен) |
-| Homebrew | любая | [brew.sh](https://brew.sh) |
+| Docker | 28+ | Docker Desktop / OrbStack / colima (daemon must run) |
+| Homebrew | any | [brew.sh](https://brew.sh) |
 | k3d | 5.9+ | `brew install k3d` |
 | helm | 4.x | `brew install helm` |
 | kubectl | 1.37+ | `brew install kubectl` |
-| uv | любой свежий | `brew install uv` |
-| gh (опционально) | 2.x | `brew install gh` |
+| uv | any recent | `brew install uv` |
+| gh (optional) | 2.x | `brew install gh` |
 
-Проверка окружения:
+Environment check:
 
 ```bash
-docker info          # демон отвечает
+docker info          # daemon responds
 k3d version && helm version --short && kubectl version --client | head -1
 ```
 
-Ресурсы: ~12 GB RAM под весь L0-стенд, ~20 GB диска. Порты `30080`, `30022` должны быть свободны (Gitea HTTP/SSH).
+Resources: ~12 GB RAM for the full L0 stand, ~20 GB disk. Ports `30080`, `30022`, `30081`, `30082` must be free.
 
-## 2. Platform dev setup (сам монорепо)
+## 2. Platform dev setup (the monorepo itself)
 
 ```bash
 git clone https://github.com/kryadov/ai-based-isv && cd ai-based-isv
-uv sync --all-packages      # venv + все члены workspace
-uv run ruff check .         # ожидание: All checks passed!
-uv run mypy packages apps   # ожидание: no issues found
-uv run pytest               # ожидание: все тесты зелёные
+uv sync --all-packages      # venv + all workspace members
+uv run ruff check .         # expected: All checks passed!
+uv run mypy packages apps   # expected: no issues found
+uv run pytest               # expected: all tests green
 ```
 
-Python 3.12 подхватится автоматически (`.python-version`).
+Python 3.12 is picked up automatically (`.python-version`).
 
-## 3. L0 Bootstrap (k3d + Vault + Postgres + Gitea)
+## 3. L0 Bootstrap (k3d + Vault + Postgres + Gitea + GitOps + observability)
 
 ```bash
 ./infra/bootstrap.sh
 ```
 
-Идемпотентен: повторный прогон не разрушает данные. Скрипт создаёт k3d-кластер `swarm-lab`, разворачивает Vault (dev-mode), Postgres (CNPG, образ с pgvector), Gitea (NodePort `30080`, SSH `30022`, внешняя БД) и act_runner; административный токен Gitea кладёт в Vault (`secret/gitea/admin`).
+Idempotent: a repeated run does not destroy data. The script creates the `swarm-lab` k3d cluster and provisions Vault (dev-mode), Postgres (CNPG, pgvector image), Gitea (NodePort `30080`, SSH `30022`, external DB), act_runner, Argo CD, kube-prometheus-stack (Grafana `30082`) and Loki+Alloy; the Gitea admin token is stored in Vault.
 
-Факты стенда фиксируются в `infra/env.yaml` (генерируется автоматически — артефакт VET, руками не редактировать). Секции можно гонять по отдельности: `./infra/scripts/bootstrap.sh [vault|cnpg|gitea|runner]`.
+If the git repository is private, Argo CD is wired with `gh auth token` (requires `gh auth login` or `GITHUB_TOKEN`); for a public repo it clones anonymously.
 
-## 4. Доступ к сервисам
+Facts of the stand are recorded in `infra/env.yaml` (auto-generated — a VET artifact, do not edit by hand). Individual sections: `./infra/scripts/bootstrap.sh [vault|cnpg|gitea|runner|argocd|monitoring|loki|demo]`.
 
-| Сервис | Адрес | Доступ |
+## 4. Service access
+
+| Service | Address | Access |
 |---|---|---|
-| Gitea Web/API | http://localhost:30080 | админ `swarm-admin` (пароль — в Vault) |
+| Gitea Web/API | http://localhost:30080 | admin `swarm-admin` (password — in Vault) |
 | Gitea SSH | localhost:30022 | git over ssh |
 | Vault | port-forward 8200 | root token: `kubectl -n platform exec vault-0 -- vault print token` |
-| Postgres | внутри кластера `postgres-platform-rw.platform:5432` | БД `gitea`, user `gitea` (secret `postgres-platform-app`) |
-| Argo CD UI | http://localhost:30081 | `admin` / пароль из secret `argocd-initial-admin-secret` |
-| Grafana | http://localhost:30082 | `admin` / пароль в Vault `secret/grafana/admin` |
+| Postgres | in-cluster `postgres-platform-rw.platform:5432` | DB `gitea`, user `gitea` (secret `postgres-platform-app`) |
+| Argo CD UI | http://localhost:30081 | `admin` / password from secret `argocd-initial-admin-secret` |
+| Grafana | http://localhost:30082 | `admin` / password in Vault `secret/grafana/admin` |
 
-## 5. Acceptance-тесты L0
+## 5. L0 acceptance tests
 
 ```bash
-./infra/tests/m2a_pr_flow.sh      # PR-flow с branch protection (нужен работающий bootstrap)
-./infra/tests/m2b_deploy_flow.sh  # GitOps demo-deploy в prod + метрики + логи (нужен merge в main: Application следит за main)
+./infra/tests/m2a_pr_flow.sh      # PR-flow with branch protection (requires bootstrap)
+./infra/tests/m2b_deploy_flow.sh  # GitOps demo-deploy to prod + metrics + logs (requires the demo merged to main: the Application follows main)
 ```
-
-Примечание: m2b-тест выполняется после `./infra/scripts/bootstrap.sh demo` на состоянии main (Application demo-prod синкается из GitHub main).
 
 ## 6. Troubleshooting
 
-- **Порты 30080/30022 заняты** — освободить или поправить маппинги в `infra/k3d/config.yaml` и values Gitea.
-- **k3d-кластер в чужом состоянии** — `k3d cluster delete swarm-lab` и заново `./infra/bootstrap.sh` (данные лабораторные).
-- **Vault после перезапуска кластера** — dev-mode эфемерен: бутстреппер пересоздаёт секреты; путь к постоянному бэкенду (raft) — M3.
-- **Argo CD и приватный GitHub-репо** — если репо private, бутстреппер подключает токен `gh auth token` (нужен `gh auth login` или `GITHUB_TOKEN`); для public-репо клонирует анонимно.
-- **arm64** — все образы стенда multi-arch; при добавлении своего образа проверяйте наличие arm64-слоя.
+- **Ports 30080/30022/30081/30082 busy** — free them or adjust mappings in `infra/k3d/config.yaml` and Gitea/ArgoCD values.
+- **k3d cluster in a foreign state** — `k3d cluster delete swarm-lab` and re-run `./infra/bootstrap.sh` (lab data).
+- **Vault after a cluster restart** — dev-mode is ephemeral: the bootstrapper re-creates secrets; the persistent backend (raft) path is M3.
+- **Docker VM resources** — the full stand needs ≥6 CPU / 24 GB in the Docker VM (colima example: `colima start --cpu 6 --memory 24`).
+- **arm64** — all stand images are multi-arch; when adding your own image, verify an arm64 layer exists.

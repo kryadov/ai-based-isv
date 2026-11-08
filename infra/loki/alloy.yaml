@@ -1,53 +1,53 @@
-# Alloy daemonset: собирает логи всех подов → Loki (labels: namespace, pod).
+# Alloy daemonset: логи подов из /var/log/containers → Loki (labels: namespace, pod, container).
+controller:
+  type: daemonset
 alloy:
-  controller:
-    type: daemonset
   mounts:
     varlog: true
-  alloy:
-    resources:
-      requests:
-        cpu: 50m
-        memory: 128Mi
-      limits:
-        memory: 256Mi
-    configMap:
-      content: |
-        logging {
-          level = "info"
-        }
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+  configMap:
+    content: |
+      logging {
+        level = "info"
+      }
 
-        discovery.kubernetes "pods" {
-          role = "pod"
-        }
+      local.file_match "pods" {
+        path_targets = [
+          { "__path__" = "/var/log/containers/*.log" },
+        ]
+      }
 
-        discovery.relabel "pods" {
-          targets = discovery.kubernetes.pods.targets
-          rule {
-            source_labels = ["__meta_kubernetes_namespace"]
-            target_label  = "namespace"
-          }
-          rule {
-            source_labels = ["__meta_kubernetes_pod_name"]
-            target_label  = "pod"
-          }
-          rule {
-            source_labels = ["__meta_kubernetes_pod_container_name"]
-            target_label  = "container"
-          }
-          rule {
-            source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
-            target_label  = "app"
-          }
+      discovery.relabel "pods" {
+        targets = local.file_match.pods.targets
+        rule {
+          source_labels = ["__path__"]
+          regex         = "/var/log/containers/([^_]+)_([^_]+)_([^_]+)\\.log"
+          target_label  = "pod"
         }
+        rule {
+          source_labels = ["__path__"]
+          regex         = "/var/log/containers/[^_]+_([^_]+)_.*"
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__path__"]
+          regex         = "/var/log/containers/[^_]+_[^_]+_([^_]+)\\.log"
+          target_label  = "container"
+        }
+      }
 
-        loki.source.kubernetes "pods" {
-          targets    = discovery.relabel.pods.output
-          forward_to = [loki.write.default.receiver]
-        }
+      loki.source.file "pods" {
+        targets    = discovery.relabel.pods.output
+        forward_to = [loki.write.default.receiver]
+      }
 
-        loki.write "default" {
-          endpoint {
-            url = "http://loki.platform.svc.cluster.local:3100/loki/api/v1/push"
-          }
+      loki.write "default" {
+        endpoint {
+          url = "http://loki.platform.svc.cluster.local:3100/loki/api/v1/push"
         }
+      }

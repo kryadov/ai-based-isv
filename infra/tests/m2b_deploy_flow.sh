@@ -29,6 +29,14 @@ kubectl -n prod wait --for=condition=Ready pod -l app=podinfo --timeout=120s >/d
   || fail "podinfo pod не Running в prod"
 echo "prod: podinfo Running"
 
+# 2b) сгенерировать трафик (podinfo логирует запросы; для шагов 3 и 4 нужны свежие метрики и логи)
+kubectl -n prod port-forward svc/podinfo 19998:9898 >/tmp/m2b-pf-podinfo.log 2>&1 &
+PF_APP=$!
+sleep 3
+for i in 1 2 3 4 5; do curl -sf http://localhost:19998/healthz >/dev/null || fail "podinfo не отвечает на трафик"; done
+kill $PF_APP 2>/dev/null || true
+echo "prod: traffic generated (5 requests)"
+
 # 3) Prometheus: метрика podinfo_requests_total присутствует
 kubectl -n "$NS" port-forward svc/kube-prometheus-stack-prometheus 9090:9090 >/tmp/m2b-pf-prom.log 2>&1 &
 PF1=$!
@@ -50,7 +58,7 @@ PF2=$!
 sleep 4
 Q="$(python3 -c 'import urllib.parse;print(urllib.parse.quote("{namespace=\"prod\"}"))')"
 LOKI_JSON="$(mktemp)"
-curl -sf "http://localhost:3100/loki/api/v1/query_range?query=$Q&limit=5" > "$LOKI_JSON" \
+curl -sf "http://localhost:3100/loki/api/v1/query_range?query=$Q&limit=5&since=15m" > "$LOKI_JSON" \
   || fail "loki api недоступна"
 python3 - "$LOKI_JSON" <<'EOF' || fail "логи prod-namespace отсутствуют в Loki"
 import json, sys
