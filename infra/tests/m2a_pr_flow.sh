@@ -13,7 +13,7 @@ trap 'rm -rf "$WORK"' EXIT
 fail() { echo "M2a PR-flow: FAIL — $1"; exit 1; }
 
 # 1) токен админа из Vault
-TOKEN="$(kubectl -n "$NS" exec vault-0 -- env VAULT_ADDR=http://127.0.0.1:8200 vault kv get -field=token secret/gitea/admin)"
+TOKEN="$(kubectl -n "$NS" exec "$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=openbao -o jsonpath='{.items[0].metadata.name}')" -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$(cat infra/.vault-root-token)" bao kv get -field=token secret/gitea/admin)"
 [ -n "$TOKEN" ] || fail "нет админ-токена в Vault"
 AUTH="Authorization: token $TOKEN"
 code="$(curl -s -o /dev/null -w '%{http_code}' -H "$AUTH" "$GITEA/api/v1/user")"

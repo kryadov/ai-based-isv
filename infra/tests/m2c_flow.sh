@@ -7,7 +7,7 @@ NS=platform
 GITEA=http://localhost:30080
 OWNER=swarm-admin
 REPO=m2c-selftest
-TOKEN="$(kubectl -n "$NS" exec vault-0 -- env VAULT_ADDR=http://127.0.0.1:8200 vault kv get -field=token secret/gitea/admin)"
+TOKEN="$(kubectl -n "$NS" exec "$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=openbao -o jsonpath='{.items[0].metadata.name}')" -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$(cat infra/.vault-root-token)" bao kv get -field=token secret/gitea/admin)"
 [ -n "$TOKEN" ] || fail() { echo "M2c flow: FAIL — $1"; exit 1; }
 AUTH="Authorization: token $TOKEN"
 fail() { echo "M2c flow: FAIL — $1"; exit 1; }

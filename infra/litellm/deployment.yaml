@@ -59,6 +59,13 @@ spec:
                 secretKeyRef:
                   name: litellm-master
                   key: master-key
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-db-url
+                  key: url
+            - name: STORE_MODEL_IN_DB
+              value: "True"
             - name: LITELLM_CONFIG_PATH
               value: /etc/litellm/config.yaml
           args:
