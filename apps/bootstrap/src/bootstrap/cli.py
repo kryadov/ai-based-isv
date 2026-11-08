@@ -8,6 +8,7 @@ from pathlib import Path
 import typer
 
 from bootstrap import __version__
+from bootstrap.gitea import README_CONTENT, REPO_NAME, GiteaClient
 from bootstrap.prereq import check_all
 from bootstrap.profile import Profile, save
 
@@ -15,6 +16,31 @@ app = typer.Typer(help="AI-Organisation bootstrapper", no_args_is_help=True)
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 PROFILE_PATH = REPO_ROOT / "infra" / "env.local.yaml"
+
+
+def _gitea_token() -> str:
+    """Токен администратора Gitea из OpenBao (секрет gitea/admin, поле apitoken)."""
+    pod = subprocess.run(  # noqa: S603
+        ["bash", "-c", (
+            "kubectl -n platform get pod -l app.kubernetes.io/name=openbao "
+            "-o jsonpath='{.items[0].metadata.name}'"
+        )],
+        capture_output=True, text=True, cwd=REPO_ROOT, check=True,
+    ).stdout.strip()
+    out = subprocess.run(  # noqa: S603
+        ["bash", "-c", (
+            f"kubectl -n platform exec {pod} -- env BAO_ADDR=http://127.0.0.1:8200 "
+            "BAO_TOKEN=$(cat infra/.vault-root-token) bao kv get "
+            "-field=token secret/gitea/admin"
+        )],
+        capture_output=True, text=True, cwd=REPO_ROOT, check=True,
+    )
+    token = out.stdout.strip()
+    if not token:
+        typer.secho("Не удалось прочитать токен Gitea из OpenBao.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    return token
+
 SECTIONS = (
     "vault",
     "cnpg",
@@ -98,6 +124,17 @@ def apply(
         typer.secho(f"Секция {target}: ошибка (exit {result.returncode})", fg=typer.colors.RED)
         raise typer.Exit(code=result.returncode)
     typer.secho("Готово.", fg=typer.colors.GREEN)
+
+
+@app.command()
+def seed_demo() -> None:
+    """Засеять demo-репо isv-product в Gitea (идемпотентно)."""
+    token = _gitea_token()
+    client = GiteaClient(base_url="http://localhost:30080", token=token, owner="swarm-admin")
+    status = client.ensure_repo(REPO_NAME)
+    client.put_file(REPO_NAME, "README.md", README_CONTENT)
+    url = f"{client.base_url}/{client.owner}/{REPO_NAME}"
+    typer.secho(f"Demo-репо: {status} → {url}", fg=typer.colors.GREEN)
 
 
 if __name__ == "__main__":

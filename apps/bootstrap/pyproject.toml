@@ -16,4 +16,4 @@ build-backend = "hatchling.build"
 packages = ["src/bootstrap"]
 
 [project.scripts]
-org-bootstrap = "bootstrap.cli:main"
+org-bootstrap = "bootstrap.cli:app"
