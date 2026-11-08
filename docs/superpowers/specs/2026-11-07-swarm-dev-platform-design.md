@@ -233,11 +233,12 @@ docs/              архитектура, ADR, спеки
    - **M2d:** `apps/bootstrap` — интерактивный вопросник, идемпотентное применение M2a–M2c, создание целевых репо с check-профилями и org-репозитория памяти, env-манифест, верификация здоровья.
 3. **M3. isv_core + control plane (agent_api):** доменные модели, очередь с lease, идентичности, бюджеты, merge queue с backpressure, HITL-инбокс, audit API; интеграционные тесты против L0.
 4. **M4. agent_runtime + первые MCP:** интерфейс `Executor` + адаптер OpenCode (тонкий клиент по `/openapi.json`, pin версии образа), runtime песочницы — под в k3s (initContainer-клон, NetworkPolicy, Vault-токен), session log (NDJSON), pod/worktree-менеджмент, done_when, манифест прогона; PydanticAI+DBOS для лёгких ролей; MCP-серверы **task-source, git, llm**; один агент делает вершину E2E (задача → ветка → PR с evidence).
-5. **M5. Gates и review-контур:** коридор проверок с per-stack check-профилями, security-сканы, MCP-сервер **ci**, бот-ревью + обработка замечаний, HITL-гейты 1–3, политика авто-merge для whitelist-классов.
+5. **M5. Gates и review-контур:** коридор проверок с per-stack check-профилями, security-сканы, MCP-сервер **ci**, бот-ревью + обработка замечаний, HITL-гейты 1–3, политика авто-merge для whitelist-классов, **статусные колбэки в трекер** (фидбек-петля: In Progress/Done/Blocked + комментарии этапов — TODO).
 6. **M6. Канареечный выкат:** Argo Rollouts для isv_product, синтетический трафик k6, маркер успеха в evidence и session log; MCP-серверы **deploy/observability**; write-back episodic-памяти — в M7 (в M6 памяти проектов ещё нет).
 7. **M7. context_engine + память:** индексация кода, project memory banks, retrieval, spec self-evals, promotion в org-память, reuse-каталог v1.
 8. **M8. Swarm-режим:** граф вершин с параллельными исполнителями в worktrees, координатор/специалисты/judge, baseline-инвалидация; метрики и backpressure под нагрузкой.
 9. **M9. Догфуд-проект на внешнем стеке** (TS/React или Java мини-сервис) — проверка полиглотности: TaskSource, CI-адаптеры, агенты в чужом стеке.
+10. **M10. UI-панель организации + Automations** (после M5/M7/M8 — нужны HITL-инбокс, память, swarm): табы Inbox (дом) / Swarm / Pipeline / ⚡ Automations / Metrics / Memory; EN-база + RU-переключатель; auth людей (локальные → OIDC); **Automations** — рекуррентные/событийные workflow организации (vuln-scan, dep-updates, log-analysis, feedback-ingest): trigger+scope+role+budget, отчёты → Inbox и org-память, «создать fix-задачи» через HITL. Дизайн: аддендум `2026-11-08-ui-and-automations-addendum.md`; детальный план пишется при старте M10.
 
 ## 11. Что оставлено билдеру
 
