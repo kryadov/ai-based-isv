@@ -52,7 +52,10 @@ assert d["status"] == "success" and len(d["data"]["result"]) > 0, f"result={d['d
 EOF
 echo "prometheus: http_requests_total{job=podinfo} present"
 
-# 4) Loki: логи из namespace prod (ретраи — alloy батчит пуш в Loki)
+# 4) Loki: логи из namespace prod (детерминированно: рестарт podinfo даёт startup-строки,
+#    alloy инжестит их со свежими таймстампами)
+kubectl -n prod rollout restart deploy/podinfo >/dev/null
+kubectl -n prod rollout status deploy/podinfo --timeout=120s >/dev/null
 kubectl -n "$NS" port-forward svc/loki 3100:3100 >/tmp/m2b-pf-loki.log 2>&1 &
 PF2=$!
 sleep 3
@@ -61,7 +64,7 @@ LOKI_JSON="$(mktemp)"
 FOUND=0
 for i in 1 2 3 4 5; do
   sleep 3
-  if curl -sf "http://localhost:3100/loki/api/v1/query_range?query=$Q&limit=5&since=15m" > "$LOKI_JSON"; then
+  if curl -sf "http://localhost:3100/loki/api/v1/query_range?query=$Q&limit=5&since=10m" > "$LOKI_JSON"; then
     FOUND="$(python3 -c "
 import json,sys
 d = json.load(open('$LOKI_JSON'))
