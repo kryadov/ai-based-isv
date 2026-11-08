@@ -33,7 +33,7 @@ echo "prod: podinfo Running"
 kubectl -n prod port-forward svc/podinfo 19998:9898 >/tmp/m2b-pf-podinfo.log 2>&1 &
 PF_APP=$!
 sleep 3
-for i in 1 2 3 4 5; do curl -sf http://localhost:19998/healthz >/dev/null || fail "podinfo не отвечает на трафик"; done
+for i in 1 2 3 4 5; do curl -sf http://localhost:19998/ >/dev/null || fail "podinfo не отвечает на трафик"; done
 kill $PF_APP 2>/dev/null || true
 echo "prod: traffic generated (5 requests)"
 
@@ -52,20 +52,25 @@ assert d["status"] == "success" and len(d["data"]["result"]) > 0, f"result={d['d
 EOF
 echo "prometheus: http_requests_total{job=podinfo} present"
 
-# 4) Loki: логи из namespace prod
+# 4) Loki: логи из namespace prod (ретраи — alloy батчит пуш в Loki)
 kubectl -n "$NS" port-forward svc/loki 3100:3100 >/tmp/m2b-pf-loki.log 2>&1 &
 PF2=$!
-sleep 4
+sleep 3
 Q="$(python3 -c 'import urllib.parse;print(urllib.parse.quote("{namespace=\"prod\"}"))')"
 LOKI_JSON="$(mktemp)"
-curl -sf "http://localhost:3100/loki/api/v1/query_range?query=$Q&limit=5&since=15m" > "$LOKI_JSON" \
-  || fail "loki api недоступна"
-python3 - "$LOKI_JSON" <<'EOF' || fail "логи prod-namespace отсутствуют в Loki"
-import json, sys
-d = json.load(open(sys.argv[1]))
-assert d["status"] == "success" and len(d["data"]["result"]) > 0, "no streams"
-EOF
-echo "loki: prod logs present"
+FOUND=0
+for i in 1 2 3 4 5; do
+  sleep 3
+  if curl -sf "http://localhost:3100/loki/api/v1/query_range?query=$Q&limit=5&since=15m" > "$LOKI_JSON"; then
+    FOUND="$(python3 -c "
+import json,sys
+d = json.load(open('$LOKI_JSON'))
+print(len(d.get('data',{}).get('result',[])))")"
+    [ "$FOUND" -ge 1 ] && break
+  fi
+done
+[ "$FOUND" -ge 1 ] || fail "логи prod-namespace отсутствуют в Loki (5 попыток)"
+echo "loki: prod logs present ($FOUND streams)"
 
 kill $PF2 2>/dev/null || true
 echo "M2b deploy-flow: PASS"

@@ -1,9 +1,23 @@
-# Vault в lab-режиме: dev-сервер (эфемерный, бутстреппер пересоздаёт секреты).
-# Путь к постоянному бэкенду (raft/file) — M3, при появлении реальных секретов (ADR-0003 §последствия).
+# Vault — file-хранение на PVC (лаб): секреты переживают рестарты пода.
+# Запечатывание: bootstrap сохраняет unseal-ключи в infra/.vault-unseal-keys.json (gitignored)
+# и автоматически unseal'ит после рестартов. Путь к raft/KMS — M3.
 server:
-  dev:
+  standalone:
     enabled: true
-  ui:
+    config: |
+      ui = true
+      listener "tcp" {
+        address     = "0.0.0.0:8200"
+        tls_disable = 1
+      }
+      storage "raft" {
+        path = "/openbao/data/raft"
+      }
+  dataStorage:
     enabled: true
+    size: 1Gi
+  auditStorage:
+    enabled: false
+  ui: true
 injector:
   enabled: false
