@@ -56,7 +56,9 @@ Facts of the stand are recorded in `infra/env.yaml` (auto-generated — a VET ar
 | Gitea Web/API | http://localhost:30080 | admin `swarm-admin` (password — in Vault) |
 | Gitea SSH | localhost:30022 | git over ssh |
 | Vault | port-forward 8200 | root token: `kubectl -n platform exec vault-0 -- vault print token` |
-| Postgres | in-cluster `postgres-platform-rw.platform:5432` | DB `gitea`, user `gitea` (secret `postgres-platform-app`) |
+| Postgres | in-cluster `postgres-platform-rw.platform:5432` | DBs `gitea`, `openproject` (user `gitea`, secret `postgres-platform-app`) |
+| OpenProject UI | http://localhost:30083 | `op-admin` (password in Vault `secret/openproject/admin`) ⚠ password login broken in v17-slim — see TODO |
+| LiteLLM API | http://localhost:30084/v1 | Bearer master key (Vault `secret/litellm/master`); models: qwen-coder, qwen3 |
 | Argo CD UI | http://localhost:30081 | `admin` / password from secret `argocd-initial-admin-secret` |
 | Grafana | http://localhost:30082 | `admin` / password in Vault `secret/grafana/admin` |
 

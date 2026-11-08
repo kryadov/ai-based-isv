@@ -1,0 +1,10 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: openproject-db
+  namespace: platform
+spec:
+  name: openproject
+  owner: gitea
+  cluster:
+    name: postgres-platform

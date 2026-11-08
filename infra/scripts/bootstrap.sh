@@ -25,6 +25,8 @@ section_cnpg() {
     --namespace cnpg-system --create-namespace --wait --timeout 5m
   kubectl apply -f "$ROOT/postgres/cluster.yaml"
   kubectl -n "$NS" wait --for=condition=Ready cluster/postgres-platform --timeout=600s
+  # Дополнительные БД платформы (OpenProject и будущие)
+  kubectl apply -f "$ROOT/postgres/openproject-database.yaml"
   echo "cnpg: postgres-platform Ready (pgvector standard image)"
 }
 
@@ -175,6 +177,50 @@ section_demo() {
   echo "demo: podinfo Running in prod (argocd Synced)"
 }
 
+section_openproject() {
+  # Трекер задач. Пароль админа — из Vault → secret openproject-admin (используется при ПЕРВОЙ установке).
+  helm repo add openproject https://charts.openproject.org >/dev/null 2>&1 || true
+  helm repo update openproject >/dev/null
+  local pw
+  pw="$(vcli kv get -field=password secret/openproject/admin 2>/dev/null || true)"
+  [ -n "$pw" ] || { pw="$(openssl rand -hex 12)"; vcli kv put secret/openproject/admin username=op-admin "password=$pw" >/dev/null; }
+  kubectl -n "$NS" create secret generic openproject-admin \
+    --from-literal="password=$pw" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  helm upgrade --install openproject openproject/openproject \
+    --namespace "$NS" \
+    --values "$ROOT/openproject/values.yaml" --wait --timeout 20m
+  kubectl -n "$NS" wait --for=condition=Available deployment/openproject --timeout=600s 2>/dev/null || true
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:30083/api/v3/status || true)"
+  [ "$code" = "200" ] || { echo "openproject: api not reachable ($code)"; exit 1; }
+  echo "openproject: ready (ui http://localhost:30083)"
+}
+
+section_litellm() {
+  # Шлюз моделей. Master key → Vault + secret; конфиг — model_list над хостовой Ollama.
+  # Ollama на хосте: litellm-под резолвит хост через hostAliases (IP lima-хоста определяется динамически).
+  local mk hostip
+  mk="$(vcli kv get -field=master-key secret/litellm/master 2>/dev/null || true)"
+  [ -n "$mk" ] || { mk="sk-lab-$(openssl rand -hex 12)"; vcli kv put secret/litellm/master "master-key=$mk" >/dev/null; }
+  [ -n "$mk" ] || { echo "litellm: пустой master key — прерываю"; exit 1; }
+  hostip="$(docker run --rm alpine getent hosts host.lima.internal | awk '{print $1}')"
+  [ -n "$hostip" ] || { echo "litellm: не удалось определить IP хоста (host.lima.internal)"; exit 1; }
+  kubectl -n "$NS" create secret generic litellm-master \
+    --from-literal="master-key=$mk" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  kubectl apply -f "$ROOT/litellm/deployment.yaml"
+  kubectl -n "$NS" patch deploy litellm --type=strategic \
+    -p "{\"spec\":{\"template\":{\"spec\":{\"hostAliases\":[{\"ip\":\"$hostip\",\"hostnames\":[\"host.lima.internal\"]}]}}}}" >/dev/null
+  kubectl -n "$NS" wait --for=condition=Available deployment/litellm --timeout=600s
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $mk" -H 'Content-Type: application/json' \
+    -d '{"model":"qwen-coder","messages":[{"role":"user","content":"ping"}],"max_tokens":16}' \
+    http://localhost:30084/v1/chat/completions || true)"
+  [ "$code" = "200" ] || { echo "litellm: completion failed ($code)"; exit 1; }
+  echo "litellm: ready (api http://localhost:30084/v1)"
+}
+
 case "${1:-all}" in
   vault)  section_vault ;;
   cnpg)   section_cnpg ;;
@@ -184,6 +230,8 @@ case "${1:-all}" in
   monitoring) section_monitoring ;;
   loki)   section_loki ;;
   demo)   section_demo ;;
-  all)    section_vault; section_cnpg; section_gitea; section_runner; section_argocd; section_monitoring; section_loki; section_demo ;;
-  *) echo "usage: $0 [vault|cnpg|gitea|runner|argocd|monitoring|loki|demo|all]"; exit 2 ;;
+  openproject) section_openproject ;;
+  litellm) section_litellm ;;
+  all)    section_vault; section_cnpg; section_gitea; section_runner; section_argocd; section_monitoring; section_loki; section_demo; section_openproject; section_litellm ;;
+  *) echo "usage: $0 [vault|cnpg|gitea|runner|argocd|monitoring|loki|demo|openproject|litellm|all]"; exit 2 ;;
 esac

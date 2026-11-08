@@ -1,0 +1,50 @@
+# OpenProject (трекер задач) — спека §6. NodePort 30083, внешняя БД CNPG (Cluster postgres-platform).
+# Webhooks в OP — Enterprise-фича: TaskSource v0 = polling (см. infra/tests/m2c_flow.sh).
+extraEnvVars:
+  - name: OPENPROJECT_HOST__NAME
+    value: "localhost:30083"
+openproject:
+  https: false
+  admin_user:
+    # Пароль админа — из secret (генерится бутстреппером → Vault). Первичная установка только!
+    secret: openproject-admin
+    secretKeys:
+      password: password
+    name: "OpenProject Admin"
+    mail: "op-admin@lab.local"
+
+replicaCount: 1
+backgroundReplicaCount: 1
+
+persistence:
+  enabled: true
+  accessModes:
+    - "ReadWriteOnce"
+  size: 5Gi
+
+service:
+  type: NodePort
+  ports:
+    http:
+      port: 8080
+      nodePort: "30083"
+
+postgresql:
+  bundled: false
+  connection:
+    host: postgres-platform-rw.platform.svc.cluster.local
+    port: 5432
+  auth:
+    database: openproject
+    username: gitea
+    existingSecret: postgres-platform-app
+    secretKeys:
+      userPasswordKey: password
+      adminPasswordKey: password
+
+resources:
+  requests:
+    memory: 512Mi
+    cpu: 200m
+  limits:
+    memory: 2Gi

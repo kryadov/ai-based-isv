@@ -1,0 +1,95 @@
+# LiteLLM gateway — единая точка доступа агентов к моделям (спека §7.8).
+# Модель v0: локальная Ollama на хосте (host.lima.internal — colima/lima DNS; для Docker Desktop — host.docker.internal).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm-config
+  namespace: platform
+data:
+  config.yaml: |
+    model_list:
+      - model_name: qwen-coder
+        litellm_params:
+          model: openai/qwen2.5-coder:7b
+          api_base: http://host.lima.internal:11434/v1
+          api_key: ollama
+      - model_name: qwen3
+        litellm_params:
+          model: openai/qwen3:latest
+          api_base: http://host.lima.internal:11434/v1
+          api_key: ollama
+    general_settings:
+      master_key: os.environ/LITELLM_MASTER_KEY
+    litellm_settings:
+      drop_params: true
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: litellm-master
+  namespace: platform
+type: Opaque
+# значение мастер-ключа задаётся бутстреппером (section_litellm), не в git
+stringData: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm
+  namespace: platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: litellm
+  template:
+    metadata:
+      labels:
+        app: litellm
+    spec:
+      containers:
+        - name: litellm
+          image: ghcr.io/berriai/litellm:main-stable
+          ports:
+            - name: http
+              containerPort: 4000
+          env:
+            - name: LITELLM_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-master
+                  key: master-key
+            - name: LITELLM_CONFIG_PATH
+              value: /etc/litellm/config.yaml
+          args:
+            - "--config"
+            - "/etc/litellm/config.yaml"
+            - "--port"
+            - "4000"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/litellm
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 768Mi
+      volumes:
+        - name: config
+          configMap:
+            name: litellm-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: litellm
+  namespace: platform
+spec:
+  type: NodePort
+  selector:
+    app: litellm
+  ports:
+    - name: http
+      port: 4000
+      nodePort: 30084

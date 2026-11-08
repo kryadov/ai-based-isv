@@ -11,6 +11,7 @@
 
 ## Other
 
+- [ ] **OpenProject password/basic-auth login broken** (v17-slim): rails `check_password?` = true, но web login 422 и API basic 401. Расследовать (session store/memcached? Enterprise-флаги?) или перейти на OIDC-плагин; до тех пор трекер v0 — Gitea issues (TaskSource poller → M4 MCP task-source).
 - [ ] **Post-rollout metric regression monitoring** (mandatory, M6): after every rollout — automatic comparison of key metrics (error rate, latency p95/p99, saturation) against the pre-rollout baseline; degradation threshold → alert + automatic rollback (Argo Rollouts AnalysisTemplates + k6 synthetic traffic); no silent degradation: a rollout is not considered successful without a positive metrics-analysis verdict.
 - [ ] agent_api GUI panel (currently CLI/API) — after M3 stabilizes.
 - [ ] Vault: migrate from dev-mode to raft/file backend — when real secrets appear (M3).
