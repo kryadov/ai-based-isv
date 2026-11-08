@@ -50,7 +50,7 @@ H2="$(md5 -q /tmp/m2c-last-payload.json)"
 [ "$H1" = "$H2" ] || fail "payload изменился на дедуп-прогоне"
 
 # 5) LiteLLM: completion через шлюз
-MK="$(kubectl -n "$NS" exec vault-0 -- env VAULT_ADDR=http://127.0.0.1:8200 vault kv get -field=master-key secret/litellm/master)"
+MK="$(kubectl -n "$NS" exec "$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=openbao -o jsonpath='{.items[0].metadata.name}')" -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$(cat infra/.vault-root-token)" bao kv get -field=master-key secret/litellm/master)"
 LIT="$(mktemp)"
 curl -sf -m 120 -X POST http://localhost:30084/v1/chat/completions \
   -H "Authorization: Bearer $MK" -H 'Content-Type: application/json' \
