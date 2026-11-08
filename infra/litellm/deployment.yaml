@@ -23,15 +23,6 @@ data:
     litellm_settings:
       drop_params: true
 ---
-apiVersion: v1
-kind: Secret
-metadata:
-  name: litellm-master
-  namespace: platform
-type: Opaque
-# значение мастер-ключа задаётся бутстреппером (section_litellm), не в git
-stringData: {}
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
