@@ -38,9 +38,8 @@ Code gates: `uv run ruff check .` / `uv run mypy packages apps` / `uv run pytest
 
 - ✅ **M1** — monorepo skeleton (release **v0.1.0**)
 - ✅ **M2a/M2b/M2c/M2d** — L0 infrastructure + bootstrapper CLI (release **v0.2.0**)
-- 🔄 **M3 — control plane (CURRENT, in flight)**: `isv_core` domain + `agent_api` store/API — code merged to main (35 unit tests green; endpoints: runs/vertices+lease, identities, budgets, HITL inbox, audit, merge queue; plan `docs/superpowers/plans/2026-11-09-m3-control-plane.md`).
-  **In flight right now:** full L0 re-provision (fresh cluster; log `/tmp/bootstrap4.log`). **On completion run, in order:** `./infra/tests/m2a_pr_flow.sh` → m2b → m2c → m2d → `./infra/tests/m3_flow.sh` → then release **v0.3.0** via `./infra/scripts/release.sh v0.3.0` (convention: spec §13.8) and mark M3 done here.
-- ⏭️ Next: **M4** (agent_runtime: Executor/OpenCode in k3s sandbox, MCP task-source/git/llm), **M5** (gates + review), **M6** (canary), **M7** (memory), **M8** (swarm mode), **M9** (polyglot dogfood), **M10** (UI panel + Automations). M2d done implies onboarding/management per §13 (spec: project lifecycle §13.1.5, repositories per kind + tutorials — TODO).
+- ✅ **M3 — control plane (DONE)**: `isv_core` domain + `agent_api` (vertex queue with lease, identities, budgets, HITL inbox, audit journal, merge queue) — merged to main, **m3_flow PASS on live Postgres**, CI green, release **v0.3.0**. Plan: `docs/superpowers/plans/2026-11-09-m3-control-plane.md`.
+- ⏭️ **Next: M4** (agent_runtime: Executor/OpenCode in k3s sandbox, MCP task-source/git/llm) — plan at start; then M5 (gates+review), M6 (canary), M7 (memory), M8 (swarm), M9 (polyglot dogfood), M10 (UI panel + Automations).
 
 ## Releases / conventions
 
