@@ -3,7 +3,7 @@
 > Read this file FIRST. Then `ARCH.md` (how it works, diagrams), `AGENTS.md` (rules), `TODO.md` (backlog).
 > This file is updated at the end of EVERY increment. If your findings contradict it — verify, then update it.
 
-Last updated: 2026-11-09 (Task 6 — thin opencode serve client)
+Last updated: 2026-11-09 (evening — pre-compaction snapshot, M3 closed)
 
 ## What this project is
 
@@ -32,7 +32,7 @@ Verified acceptance flows (run them on the stand):
 ./infra/tests/m3_flow.sh           # control plane on live Postgres (NodePort, no port-forward)
 ```
 
-All five PASS as of this snapshot. Code gates: `uv run ruff check .` / `uv run mypy packages apps` / `uv run pytest` — green (85 passed, 1 skipped). M4 agent_runtime: thin `opencode serve` HTTP+SSE client implemented in `packages/agent_runtime/src/agent_runtime/opencode_client.py` with full `MockTransport` test coverage.
+All five PASS as of this snapshot. Code gates: `uv run ruff check .` / `uv run mypy packages apps` / `uv run pytest` — green (35 tests).
 
 ## Milestones
 
