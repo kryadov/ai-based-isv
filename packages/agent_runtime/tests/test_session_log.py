@@ -6,9 +6,13 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pytest
 from agent_runtime.session_log import SessionLog
 
 _FILE = "session.ndjson"
+
+# A writer killed mid-append: a record fragment with no terminating newline.
+_TORN = '{"ts": "2026-11-09T10:00:00+00:00", "seq": 2, "typ'
 
 
 def test_append_read_roundtrip(tmp_path: Path) -> None:
@@ -73,3 +77,57 @@ def test_read_all_on_missing_file_is_empty(tmp_path: Path) -> None:
 
     log.append("run_started", {})
     assert (tmp_path / _FILE).exists()
+
+
+def test_read_skips_torn_final_line(tmp_path: Path) -> None:
+    """Bytes after the last newline are an uncommitted partial write: skipped, not fatal."""
+    path = tmp_path / _FILE
+    log = SessionLog(path)
+    log.append("prompt", {"n": 1})
+    log.append("harness_event", {"n": 2})
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(_TORN)  # the writer died here
+
+    reopened = SessionLog(path)
+    records = reopened.read_all()
+    assert [record["seq"] for record in records] == [1, 2]
+    assert [record["type"] for record in records] == ["prompt", "harness_event"]
+    assert len(list(reopened.iter_type("harness_event"))) == 1
+
+
+def test_torn_tail_then_append_recovers(tmp_path: Path) -> None:
+    """A crash fragment must not swallow the next record or poison later reads."""
+    path = tmp_path / _FILE
+    log = SessionLog(path)
+    log.append("prompt", {"n": 1})
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(_TORN)  # partial record, seq 5 claimed — never committed
+
+    reopened = SessionLog(path)
+    reopened.append("prompt", {"n": 2})
+    reopened.append("result", {"n": 3})
+
+    records = reopened.read_all()
+    assert [record["seq"] for record in records] == [1, 2, 3]
+    assert [record["payload"]["n"] for record in records] == [1, 2, 3]
+    # nothing merged: every line is its own complete record, the fragment is dropped
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 3
+    for line in lines:
+        json.loads(line)
+
+
+def test_malformed_committed_line_still_raises(tmp_path: Path) -> None:
+    """A newline-terminated bad line is committed corruption: fail-closed, everywhere."""
+    path = tmp_path / _FILE
+    log = SessionLog(path)
+    log.append("prompt", {"n": 1})
+    log.append("harness_event", {"n": 2})
+    first, second = path.read_text(encoding="utf-8").splitlines()
+    path.write_text(f"{first}\ncorrupted****\n{second}\n", encoding="utf-8")
+
+    with pytest.raises(json.JSONDecodeError):
+        SessionLog(path).read_all()
+    # iter_type reads through the same iterator — fail-closed there too
+    with pytest.raises(json.JSONDecodeError):
+        list(SessionLog(path).iter_type("prompt"))
