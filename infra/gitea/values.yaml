@@ -1,11 +1,11 @@
 # Gitea: git+PR+CI+OCI-registry. NodePort 30080 (HTTP), 30022 (SSH).
-# БД: внешний CNPG Cluster postgres-platform (values-external-db.yaml); встроенные bitnami-субчарты отключены.
+# DB: external CNPG Cluster postgres-platform (values-external-db.yaml); built-in bitnami subcharts disabled.
 gitea:
   admin:
     username: swarm-admin
     email: swarm-admin@lab.local
     password: ""
-    # пароль генерируется в bootstrap (kubectl exec) и хранится в Vault
+    # password is generated in bootstrap (kubectl exec) and stored in Vault
   config:
     repository:
       ENABLE_PUSH_CREATE_USER: "true"

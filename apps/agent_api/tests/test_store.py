@@ -1,4 +1,4 @@
-"""Тесты store: lease-очередь, идемпотентность, HITL, бюджет, audit."""
+"""Store tests: lease queue, idempotency, HITL, budget, audit."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ async def test_double_claim_same_agent_does_not_take_running(session: AsyncSessi
     first = await store.claim_vertex(session, run_id, agent="worker-1")
     assert first is not None
     second = await store.claim_vertex(session, run_id, agent="worker-1")
-    assert second is None, "running-вершина не должна выдаваться повторно"
+    assert second is None, "running vertex must not be handed out twice"
 
 
 async def test_fail_vertex_requeues(session: AsyncSession) -> None:
@@ -49,7 +49,7 @@ async def test_complete_vertex_terminal(session: AsyncSession) -> None:
     assert await store.complete_vertex(session, claimed["id"], agent="w",
                                        result_data={"pr": 1})
     again = await store.claim_vertex(session, run_id, agent="w")
-    assert again is None, "done-вершина не выдаётся"
+    assert again is None, "done vertex is not handed out"
 
 
 async def test_heartbeat_only_by_lease_owner(session: AsyncSession) -> None:
@@ -64,7 +64,7 @@ async def test_expired_lease_is_reclaimable(session: AsyncSession) -> None:
     run_id = await _make_run_with_vertices(session)
     claimed = await store.claim_vertex(session, run_id, agent="w1", ttl_seconds=-1)
     assert claimed is not None
-    # lease_until в прошлом → другой воркер может забрать
+    # lease_until in the past → another worker can take it
     reclaimed = await store.claim_vertex(session, run_id, agent="w2")
     assert reclaimed is not None
 
@@ -86,7 +86,7 @@ async def test_budget_consume_and_limit(session: AsyncSession) -> None:
     await store.set_budget(session, "run-1", limit_tokens=100)
     assert await store.consume_budget(session, "run-1", 60)
     assert await store.consume_budget(session, "run-1", 30)
-    assert not await store.consume_budget(session, "run-1", 100), "превышение лимита"
+    assert not await store.consume_budget(session, "run-1", 100), "limit exceeded"
     assert await store.consume_budget(session, "run-1", 10)
 
 
@@ -95,7 +95,7 @@ async def test_hitl_decide_once(session: AsyncSession) -> None:
     status = await store.decide_hitl(session, rid, "approve", "kryadov")
     assert status == "approved"
     second = await store.decide_hitl(session, rid, "reject", "intruder")
-    assert second is None, "повторное решение по закрытому запросу недопустимо"
+    assert second is None, "re-deciding a closed request is not allowed"
 
 
 async def test_audit_append_and_list(session: AsyncSession) -> None:

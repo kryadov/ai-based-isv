@@ -1,4 +1,4 @@
-"""Настройки agent_api (env AGENT_API_DATABASE_URL)."""
+"""agent_api settings (env AGENT_API_DATABASE_URL)."""
 
 from __future__ import annotations
 

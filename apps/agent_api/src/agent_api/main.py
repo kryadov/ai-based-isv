@@ -1,4 +1,4 @@
-"""FastAPI control plane (спека §7.3): очередь, идентичности, бюджеты, HITL, audit."""
+"""FastAPI control plane (spec §7.3): queue, identities, budgets, HITL, audit."""
 
 from __future__ import annotations
 
@@ -28,7 +28,9 @@ def create_engine_session() -> tuple[AsyncEngine, async_sessionmaker[AsyncSessio
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    engine, factory = create_engine_session()
+    url = getattr(app.state, "override_database_url", None) or settings.database_url
+    engine = create_async_engine(url, echo=False)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     app.state.session_factory = factory

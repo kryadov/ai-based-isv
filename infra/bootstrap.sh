@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Верхнеуровневый идемпотентный бутстреп L0: k3d → все секции → env-манифест.
+# Top-level idempotent L0 bootstrap: k3d → all sections → env manifest.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 

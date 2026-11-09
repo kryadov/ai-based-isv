@@ -1,4 +1,4 @@
-"""Bootstrap CLI: вопросник, применение секций L0, засев demo-репо."""
+"""Bootstrap CLI: questionnaire, L0 section apply, demo-repo seeding."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ PROFILE_PATH = REPO_ROOT / "infra" / "env.local.yaml"
 
 
 def _gitea_token() -> str:
-    """Токен администратора Gitea из OpenBao (секрет gitea/admin, поле apitoken)."""
+    """Gitea admin token from OpenBao (secret gitea/admin, field apitoken)."""
     pod = subprocess.run(  # noqa: S603
         ["bash", "-c", (
             "kubectl -n platform get pod -l app.kubernetes.io/name=openbao "
@@ -37,7 +37,7 @@ def _gitea_token() -> str:
     )
     token = out.stdout.strip()
     if not token:
-        typer.secho("Не удалось прочитать токен Gitea из OpenBao.", fg=typer.colors.RED)
+        typer.secho("Failed to read the Gitea token from OpenBao.", fg=typer.colors.RED)
         raise typer.Exit(code=1)
     return token
 
@@ -57,13 +57,13 @@ SECTIONS = (
 
 @app.command()
 def version() -> None:
-    """Показать версию бутстреппера."""
+    """Show the bootstrapper version."""
     typer.echo(f"org-bootstrap {__version__}")
 
 
 @app.command()
 def check() -> None:
-    """Проверить prerequisites (docker, k3d, helm, kubectl, uv, gh, ollama)."""
+    """Check prerequisites (docker, k3d, helm, kubectl, uv, gh, ollama)."""
     results = check_all()
     ok = True
     for r in results:
@@ -71,26 +71,26 @@ def check() -> None:
         typer.echo(f"{mark:10s} {r.name:10s} {r.detail}")
         ok = ok and r.ok
     if not ok:
-        typer.secho("Часть инструментов отсутствует — установи и повтори.", fg=typer.colors.RED)
+        typer.secho("Some tools are missing — install them and retry.", fg=typer.colors.RED)
         raise typer.Exit(code=1)
-    typer.secho("Все prerequisites на месте.", fg=typer.colors.GREEN)
+    typer.secho("All prerequisites are in place.", fg=typer.colors.GREEN)
 
 
 @app.command()
 def init(
-    target: str = typer.Option("laptop-k3d", help="цель развёртывания"),
+    target: str = typer.Option("laptop-k3d", help="deployment target"),
     tracker: str = typer.Option(
-        "deploy-openproject", help="трекер: deploy-openproject | connect-existing"
+        "deploy-openproject", help="tracker: deploy-openproject | connect-existing"
     ),
-    tracker_url: str = typer.Option("", help="URL существующего трекера (connect-existing)"),
-    llm: str = typer.Option("host-ollama", help="модели: host-ollama | external-api"),
-    demo: bool = typer.Option(True, help="засеять demo-репо isv-product"),
-    force: bool = typer.Option(False, help="перезаписать существующий профиль"),
+    tracker_url: str = typer.Option("", help="URL of the existing tracker (connect-existing)"),
+    llm: str = typer.Option("host-ollama", help="models: host-ollama | external-api"),
+    demo: bool = typer.Option(True, help="seed the isv-product demo repo"),
+    force: bool = typer.Option(False, help="overwrite an existing profile"),
 ) -> None:
-    """Вопросник → профиль infra/env.local.yaml (без секретов)."""
+    """Questionnaire → profile infra/env.local.yaml (no secrets)."""
     if PROFILE_PATH.exists() and not force:
         typer.secho(
-            "Профиль уже существует — используй --force для перезаписи.",
+            "Profile already exists — use --force to overwrite.",
             fg=typer.colors.YELLOW,
         )
         raise typer.Exit(code=1)
@@ -102,39 +102,39 @@ def init(
         demo=demo,
     )
     save(profile, PROFILE_PATH)
-    typer.secho(f"Профиль сохранён: {PROFILE_PATH}", fg=typer.colors.GREEN)
-    typer.echo("Далее: org-bootstrap apply")
+    typer.secho(f"Profile saved: {PROFILE_PATH}", fg=typer.colors.GREEN)
+    typer.echo("Next: org-bootstrap apply")
 
 
 @app.command()
 def apply(
-    section: str = typer.Option(None, help="одна секция (vault|cnpg|gitea|...); по умолчанию все"),
+    section: str = typer.Option(None, help="single section (vault|cnpg|gitea|...); default: all"),
 ) -> None:
-    """Идемпотентно применить секции L0 (обёртка над infra/scripts/bootstrap.sh)."""
+    """Idempotently apply L0 sections (wrapper over infra/scripts/bootstrap.sh)."""
     script = REPO_ROOT / "infra" / "scripts" / "bootstrap.sh"
     if not script.exists():
-        typer.secho(f"Не найден {script}", fg=typer.colors.RED)
+        typer.secho(f"Not found: {script}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
     target = section or "all"
-    typer.secho(f"Применяю секцию(и): {target}", fg=typer.colors.CYAN)
+    typer.secho(f"Applying section(s): {target}", fg=typer.colors.CYAN)
     result = subprocess.run(  # noqa: S603
         ["bash", str(script), target], check=False
     )
     if result.returncode != 0:
-        typer.secho(f"Секция {target}: ошибка (exit {result.returncode})", fg=typer.colors.RED)
+        typer.secho(f"Section {target}: error (exit {result.returncode})", fg=typer.colors.RED)
         raise typer.Exit(code=result.returncode)
-    typer.secho("Готово.", fg=typer.colors.GREEN)
+    typer.secho("Done.", fg=typer.colors.GREEN)
 
 
 @app.command()
 def seed_demo() -> None:
-    """Засеять demo-репо isv-product в Gitea (идемпотентно)."""
+    """Seed the isv-product demo repo in Gitea (idempotent)."""
     token = _gitea_token()
     client = GiteaClient(base_url="http://localhost:30080", token=token, owner="swarm-admin")
     status = client.ensure_repo(REPO_NAME)
     client.put_file(REPO_NAME, "README.md", README_CONTENT)
     url = f"{client.base_url}/{client.owner}/{REPO_NAME}"
-    typer.secho(f"Demo-репо: {status} → {url}", fg=typer.colors.GREEN)
+    typer.secho(f"Demo repo: {status} → {url}", fg=typer.colors.GREEN)
 
 
 if __name__ == "__main__":

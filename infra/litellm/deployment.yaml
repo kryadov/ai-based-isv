@@ -1,5 +1,5 @@
-# LiteLLM gateway — единая точка доступа агентов к моделям (спека §7.8).
-# Модель v0: локальная Ollama на хосте (host.lima.internal — colima/lima DNS; для Docker Desktop — host.docker.internal).
+# LiteLLM gateway — single entry point for agent model access (spec §7.8).
+# Model v0: local Ollama on the host (host.lima.internal — colima/lima DNS; for Docker Desktop — host.docker.internal).
 apiVersion: v1
 kind: ConfigMap
 metadata:

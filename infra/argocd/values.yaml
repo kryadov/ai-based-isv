@@ -1,6 +1,6 @@
-# Argo CD (GitOps control plane) — спека §6. UI за NodePort без TLS (лаборатория).
+# Argo CD (GitOps control plane) — spec §6. UI behind NodePort without TLS (lab).
 configs:
-  # insecure = без TLS-редиректа (NodePort-лаборатория); chart v10 читает это из params
+  # insecure = no TLS redirect (NodePort lab); chart v10 reads this from params
   params:
     "server.insecure": true
 server:

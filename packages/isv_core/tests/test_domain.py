@@ -1,4 +1,4 @@
-"""Тесты доменных моделей isv_core."""
+"""isv_core domain model tests."""
 
 from datetime import datetime
 

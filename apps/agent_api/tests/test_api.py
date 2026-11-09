@@ -1,4 +1,4 @@
-"""API-тесты control plane (httpx AsyncClient поверх приложения)."""
+"""Control plane API tests (httpx AsyncClient over the app)."""
 
 from __future__ import annotations
 

@@ -57,8 +57,10 @@ section_cnpg() {
     --namespace cnpg-system --create-namespace --wait --timeout 5m
   kubectl apply -f "$ROOT/postgres/cluster.yaml"
   kubectl -n "$NS" wait --for=condition=Ready cluster/postgres-platform --timeout=600s
-  # Дополнительные БД платформы (OpenProject и будущие)
+  # Дополнительные БД платформы (OpenProject, LiteLLM, control plane)
   kubectl apply -f "$ROOT/postgres/openproject-database.yaml"
+  kubectl apply -f "$ROOT/postgres/litellm-database.yaml"
+  kubectl apply -f "$ROOT/postgres/swarm-database.yaml"
   echo "cnpg: postgres-platform Ready (pgvector standard image)"
 }
 

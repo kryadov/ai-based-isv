@@ -1,4 +1,4 @@
-# Application demo-prod: авто-синк манифестов infra/demo-app/prod → namespace prod.
+# Application demo-prod: auto-sync of infra/demo-app/prod manifests → namespace prod.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

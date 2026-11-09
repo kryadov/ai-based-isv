@@ -1,4 +1,4 @@
-# Alloy daemonset: логи подов из /var/log/containers → Loki (labels: namespace, pod, container).
+# Alloy daemonset: pod logs from /var/log/containers → Loki (labels: namespace, pod, container).
 controller:
   type: daemonset
 alloy:

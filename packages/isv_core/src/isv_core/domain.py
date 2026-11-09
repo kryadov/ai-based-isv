@@ -1,6 +1,6 @@
-"""Доменные модели и перечисления платформы (спека §7.3, §7.7).
+"""Domain models and enums of the platform (spec §7.3, §7.7).
 
-Чистые pydantic-модели без зависимостей от БД/FastAPI.
+Pure pydantic models with no DB/FastAPI dependencies.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ class HITLKind(StrEnum):
 
 
 class TaskVertex(BaseModel):
-    """Вершина задачи роя: единица исполнения с изоляцией путей и критерием завершения."""
+    """Swarm task vertex: unit of execution with path isolation and a done criterion."""
 
     id: int | None = None
     run_id: int
@@ -66,7 +66,7 @@ class TaskVertex(BaseModel):
 
 
 class Run(BaseModel):
-    """Прогон: заявка в трекере → полный конвейер до выката."""
+    """Run: tracker ticket → full pipeline through to release."""
 
     id: int | None = None
     project: str
@@ -77,7 +77,7 @@ class Run(BaseModel):
 
 
 class AgentIdentity(BaseModel):
-    """Идентичность агента (service identity): кто что может делать."""
+    """Agent identity (service identity): who can do what."""
 
     id: int | None = None
     name: str
@@ -86,7 +86,7 @@ class AgentIdentity(BaseModel):
 
 
 class BudgetRecord(BaseModel):
-    """Бюджет агента/рана: токены и деньги; списание только в пределах остатка."""
+    """Budget of an agent/run: tokens and money; spending only within the remainder."""
 
     id: int | None = None
     subject: str
@@ -95,7 +95,7 @@ class BudgetRecord(BaseModel):
 
 
 class HITLRequest(BaseModel):
-    """Запрос решения человека (спека §7.7): рой стоит, пока не решено."""
+    """Human decision request (spec §7.7): the swarm is paused until decided."""
 
     id: int | None = None
     kind: HITLKind
@@ -109,7 +109,7 @@ class HITLRequest(BaseModel):
 
 
 class AuditEvent(BaseModel):
-    """Событие audit-журнала (append-only): кто/что/над чем/итог."""
+    """Audit log event (append-only): who/what/against what/outcome."""
 
     id: int | None = None
     ts: datetime | None = None

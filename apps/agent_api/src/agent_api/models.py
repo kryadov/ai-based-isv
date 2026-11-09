@@ -1,4 +1,4 @@
-"""SQLAlchemy-модели control plane (спека §7.3, §7.7)."""
+"""SQLAlchemy models of the control plane (spec §7.3, §7.7)."""
 
 from __future__ import annotations
 

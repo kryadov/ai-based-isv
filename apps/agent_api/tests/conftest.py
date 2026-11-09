@@ -1,4 +1,4 @@
-"""Общий fixture: in-memory sqlite engine + сессия на тест."""
+"""Shared fixture: in-memory sqlite engine + session per test."""
 
 from __future__ import annotations
 

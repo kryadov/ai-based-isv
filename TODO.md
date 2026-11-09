@@ -1,5 +1,7 @@
 # TODO
 
+> Актуальное состояние и следующий шаг — в [STATE.md](STATE.md); этот файл — бэклог и обязательные петли.
+
 ## Tracker task-status feedback loop (mandatory)
 
 - [ ] Close the feedback loop: the platform must change the tracker task status as agents work.
@@ -11,7 +13,8 @@
 
 ## Other
 
-- [ ] **OpenProject password/basic-auth login broken** (v17-slim): rails `check_password?` = true, но web login 422 и API basic 401. Расследовать (session store/memcached? Enterprise-флаги?) или перейти на OIDC-плагин; до тех пор трекер v0 — Gitea issues (TaskSource poller → M4 MCP task-source).
+- [ ] Docs language sync: README/INSTALL/TODO are EN-base ✓ with `.ru.md` mirrors; the design docs (spec, milestone plans) are still Russian — translate them to EN with `.ru.md` mirrors as backlog.
+- [ ] OpenProject password/basic-auth login broken (v17-slim): rails `check_password?` = true, but web login 422 and API basic 401. Investigate (session store/memcached? Enterprise flags?) or add an OIDC plugin; until then the v0 tracker is Gitea Issues (TaskSource poller → M4 MCP task-source).
 - [x] ~~Vault dev-mode → постоянный backend~~ ✅ 2026-11-08: **OpenBao** (opensource-форк Vault, лицензия без BSL) на raft-хранении в PVC; бутстреппер auto-init/unseal (ключи в `infra/.vault-unseal-keys.json`, gitignored). Апгрейд-путь: raft из 3 узлов / KMS auto-unseal — при выходе за ноутбук.
 - [ ] **Post-rollout metric regression monitoring** (mandatory, M6): after every rollout — automatic comparison of key metrics (error rate, latency p95/p99, saturation) against the pre-rollout baseline; degradation threshold → alert + automatic rollback (Argo Rollouts AnalysisTemplates + k6 synthetic traffic); no silent degradation: a rollout is not considered successful without a positive metrics-analysis verdict.
 - [ ] agent_api GUI panel (currently CLI/API) — after M3 stabilizes. Includes the 📁 Projects tab + onboarding wizard (see spec §13).

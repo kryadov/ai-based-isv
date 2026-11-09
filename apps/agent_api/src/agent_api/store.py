@@ -1,7 +1,7 @@
-"""Store: операции control plane над таблицами (спека §7.3).
+"""Store: control plane operations over tables (spec §7.3).
 
-Все функции принимают AsyncSession; claim вершин — атомарный
-(status-фильтр в UPDATE + RETURNING; на Postgres добавляется SKIP LOCKED).
+All functions take an AsyncSession; vertex claim is atomic
+(status filter in UPDATE + RETURNING; SKIP LOCKED is added on Postgres).
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from agent_api.models import (
 
 
 def _now() -> datetime:
-    # SQLite хранит naive UTC — все сравнения lease в naive
+    # SQLite stores naive UTC — all lease comparisons are naive
     return datetime.now(UTC).replace(tzinfo=None)
 
 
@@ -61,7 +61,7 @@ async def _deps_satisfied(session: AsyncSession, run_id: int, deps: list[str]) -
 
 async def claim_vertex(session: AsyncSession, run_id: int, agent: str,
                        ttl_seconds: int = 300) -> dict[str, Any] | None:
-    """Атомарно взять queued-вершину с выполненными deps (или истёкшим lease)."""
+    """Atomically claim a queued vertex with satisfied deps (or expired lease)."""
     rows = await session.scalars(
         select(VertexRow).where(
             VertexRow.run_id == run_id,
@@ -73,9 +73,9 @@ async def claim_vertex(session: AsyncSession, run_id: int, agent: str,
     for r in rows:
         expired = r.lease_until is not None and r.lease_until < now
         if r.status == "queued":
-            pass  # кандидат
+            pass  # candidate
         elif r.status in ("leased", "running") and expired:
-            pass  # умерший воркер — вершина переиспользуема
+            pass  # dead worker — vertex is reusable
         else:
             continue
         if not await _deps_satisfied(session, run_id, list(r.deps_json or [])):
@@ -125,7 +125,7 @@ async def complete_vertex(session: AsyncSession, vertex_id: int, agent: str,
 
 
 async def fail_vertex(session: AsyncSession, vertex_id: int, agent: str) -> bool:
-    """Вернуть вершину в очередь (lease потерян / done_when не выполнен)."""
+    """Requeue the vertex (lease lost / done_when not satisfied)."""
     result = await session.execute(
         update(VertexRow)
         .where(VertexRow.id == vertex_id, VertexRow.leased_by == agent,
@@ -146,7 +146,7 @@ async def register_identity(session: AsyncSession, name: str, role: str,
 
 
 async def set_budget(session: AsyncSession, subject: str, limit_tokens: int) -> int:
-    """Создать/обновить лимит бюджета субъекта."""
+    """Create/update the subject's budget limit."""
     row = await session.scalar(select(BudgetRow).where(BudgetRow.subject == subject))
     if row is None:
         row = BudgetRow(subject=subject, limit_tokens=limit_tokens, spent_tokens=0)
@@ -162,7 +162,7 @@ async def set_budget(session: AsyncSession, subject: str, limit_tokens: int) -> 
 
 
 async def consume_budget(session: AsyncSession, subject: str, tokens: int) -> bool:
-    """Списать токены; False если бюджет не задан или лимит превышен (атомарно)."""
+    """Spend tokens; False if the budget is unset or the limit is exceeded (atomic)."""
     result = await session.execute(
         update(BudgetRow)
         .where(BudgetRow.subject == subject,
@@ -184,7 +184,7 @@ async def create_hitl(session: AsyncSession, kind: str, subject: str,
 
 async def decide_hitl(session: AsyncSession, request_id: int, action: str,
                       decided_by: str, note: str | None = None) -> str | None:
-    """Решение по pending-запросу; None если запрос не в pending."""
+    """Decide a pending request; None if the request is not pending."""
     result = await session.execute(
         update(HITLRow)
         .where(HITLRow.id == request_id, HITLRow.status == "pending")
