@@ -253,7 +253,7 @@ section_litellm() {
   hostip="$(docker run --rm alpine getent hosts host.lima.internal | awk '{print $1}')"
   [ -n "$hostip" ] || { echo "litellm: не удалось определить IP хоста (host.lima.internal)"; exit 1; }
   # БД для LiteLLM (ключи/teams хранятся там же)
-  kubectl apply -f "$ROOT/../infra/postgres/litellm-database.yaml" 2>/dev/null || kubectl apply -f "$ROOT/litellm-database.yaml"
+  kubectl apply -f "$ROOT/postgres/litellm-database.yaml"
   kubectl -n "$NS" wait --for=jsonpath='{.status.ready}'=true database/litellm-db --timeout=180s 2>/dev/null || true
   local dbpw dburl
   dbpw="$(kubectl -n "$NS" get secret postgres-platform-app -o jsonpath='{.data.password}' | base64 -d)"
@@ -269,10 +269,15 @@ section_litellm() {
     -p "{\"spec\":{\"template\":{\"spec\":{\"hostAliases\":[{\"ip\":\"$hostip\",\"hostnames\":[\"host.lima.internal\"]}]}}}}" >/dev/null
   kubectl -n "$NS" rollout restart deploy/litellm
   kubectl -n "$NS" wait --for=condition=Available deployment/litellm --timeout=600s
-  local code
-  code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $mk" -H 'Content-Type: application/json' \
-    -d '{"model":"qwen-coder","messages":[{"role":"user","content":"ping"}],"max_tokens":16}' \
-    http://localhost:30084/v1/chat/completions || true)"
+  local code i
+  code=""
+  for i in $(seq 1 12); do
+    code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $mk" -H 'Content-Type: application/json' \
+      -d '{"model":"qwen-coder","messages":[{"role":"user","content":"ping"}],"max_tokens":16}' \
+      http://localhost:30084/v1/chat/completions || true)"
+    [ "$code" = "200" ] && break
+    sleep 10
+  done
   [ "$code" = "200" ] || { echo "litellm: completion failed ($code)"; exit 1; }
   echo "litellm: ready (api http://localhost:30084/v1)"
 }

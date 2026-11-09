@@ -30,7 +30,8 @@ done
 # 3) интеграционный тест полного цикла против живого Postgres
 PGPW="$(kubectl -n "$NS" get secret postgres-platform-app -o jsonpath='{.data.password}' | base64 -d)"
 export M3_INTEGRATION_PG_URL="postgresql+asyncpg://gitea:${PGPW}@127.0.0.1:15432/swarm"
-uv run pytest apps/agent_api/tests/test_integration_pg.py -q 2>&1 | tail -1 | grep -q "passed" \
-  || fail "интеграционный тест на Postgres не прошёл"
+uv run pytest apps/agent_api/tests/test_integration_pg.py -v > /tmp/m3-pytest.log 2>&1 \
+  || { cat /tmp/m3-pytest.log | tail -5; fail "интеграционный тест упал"; }
+grep -q "1 passed" /tmp/m3-pytest.log || fail "pytest проскочил мимо прогона — см. /tmp/m3-pytest.log"
 
 echo "M3 flow: PASS (control plane on live Postgres)"
