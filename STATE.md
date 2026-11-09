@@ -39,7 +39,8 @@ All five PASS as of this snapshot. Code gates: `uv run ruff check .` / `uv run m
 - ✅ **M1** — monorepo skeleton (release **v0.1.0**)
 - ✅ **M2a/M2b/M2c/M2d** — L0 infrastructure + bootstrapper CLI (release **v0.2.0**)
 - ✅ **M3 — control plane (DONE)**: `isv_core` domain + `agent_api` (vertex queue with lease, identities, budgets, HITL inbox, audit journal, merge queue) — merged to main, **m3_flow PASS on live Postgres**, CI green, release **v0.3.0**. Plan: `docs/superpowers/plans/2026-11-09-m3-control-plane.md`.
-- ⏭️ **Next: M4** (agent_runtime: Executor/OpenCode in k3s sandbox, MCP task-source/git/llm) — write the plan at increment start (`docs/superpowers/plans/` convention). Then M5 (gates + review), M6 (canary), M7 (memory), M8 (swarm mode), M9 (polyglot dogfood), M10 (UI panel + Automations).
+- 🔄 **M4a in progress**: Executor adapter (T7), gitops (T8) and run-scoped vertex worker over agent_api (T9) implemented and tested; next is integration acceptance (T10).
+- ⏭️ **Next after M4**: M5 (gates + review), M6 (canary), M7 (memory), M8 (swarm mode), M9 (polyglot dogfood), M10 (UI panel + Automations).
 
 ## Releases / conventions
 
