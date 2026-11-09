@@ -5,18 +5,16 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 import pytest
-from httpx import ASGITransport, AsyncClient
-
 from agent_api.main import create_app
+from httpx2 import ASGITransport, AsyncClient
 
 
 @pytest.fixture
 async def client() -> AsyncIterator[AsyncClient]:
     app = create_app()
-    async with app.router.lifespan_context(app):
-        async with AsyncClient(transport=ASGITransport(app=app),
-                               base_url="http://test") as c:
-            yield c
+    async with app.router.lifespan_context(app), AsyncClient(transport=ASGITransport(app=app),
+                           base_url="http://test") as c:
+        yield c
 
 
 async def test_healthz(client: AsyncClient) -> None:
