@@ -1,0 +1,21 @@
+# Стабильный внешний доступ к Postgres с хоста (NodePort 15432).
+# CNPG rw-сервис ClusterIP по умолчанию; этот второй сервис — с тем же селектором,
+# но NodePort — для acceptance-тестов и агентов с хоста (спека §6, port map).
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-platform-nodeport
+  namespace: platform
+  labels:
+    app.kubernetes.io/name: postgres-platform-nodeport
+spec:
+  type: NodePort
+  selector:
+    cnpg.io/cluster: postgres-platform
+    cnpg.io/instanceRole: primary
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+      nodePort: 15432
+      protocol: TCP

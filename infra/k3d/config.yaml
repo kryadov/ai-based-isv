@@ -22,6 +22,9 @@ ports:
   - port: 30084:30084
     nodeFilters:
       - loadbalancer
+  - port: 15432:15432
+    nodeFilters:
+      - loadbalancer
 options:
   k3s:
     extraArgs:

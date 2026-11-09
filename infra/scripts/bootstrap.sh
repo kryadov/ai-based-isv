@@ -60,7 +60,7 @@ section_cnpg() {
   # Дополнительные БД платформы (OpenProject, LiteLLM, control plane)
   kubectl apply -f "$ROOT/postgres/openproject-database.yaml"
   kubectl apply -f "$ROOT/postgres/litellm-database.yaml"
-  kubectl apply -f "$ROOT/postgres/swarm-database.yaml"
+  kubectl apply -f "$ROOT/postgres/nodeport.yaml"
   echo "cnpg: postgres-platform Ready (pgvector standard image)"
 }
 
