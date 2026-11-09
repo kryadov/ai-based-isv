@@ -26,7 +26,7 @@
 1. **Пустой/битый done_when молча проходит** — недопустимо: вердикт обязан быть FAIL с причиной `unparseable_done_when`. Тест: Task 3.
 2. **Неизвестный тип чека treated as pass** — недопустимо: fail-closed. Тест: Task 3.
 3. **Дифф трогает путь вне paths_allow** (в т.ч. пустой allow-лист) → вершина FAIL до запуска done_when. Тесты: Task 3 (pathguard), Task 9 (интеграция в воркере).
-4. **Lease истёк (heartbeat 409)** — воркер обязан прекратить работу вершины, никогда не звать `complete`; вершина уходит в requeue через `fail`. Тест: Task 9.
+4. **Lease истёк (heartbeat 409)** — воркер бросает вершину (ни `complete`, ни `fail`); requeue делает control plane по истечении lease. Тест: Task 9.
 5. **SSE-стрим оборвался посреди прогона** — сессия не должна репортить DONE (статус RUNNING/FAILED), false-positive завершения исключён. Тест: Task 7.
 
 ---
@@ -170,7 +170,7 @@
 
 - [ ] **Step 1: Write the failing tests** (control plane — httpx `MockTransport` со stateful-заглушкой; executor — `FakeExecutor` из Task 2 с настраиваемым diff/result) — `test_happy_path_claims_executes_completes` (claim → вершина; complete вызван с `result` содержащим `branch`, `diff_files`, `verdict.passed=True`, `session_log_path`); `test_done_when_unparseable_fails_vertex` (вершина с `done_when="junk"` → `fail`, reason в audit-payload `fail`); `test_paths_violation_fails_vertex` (FakeExecutor меняет файл вне allow-листа → `fail`); `test_heartbeat_conflict_aborts_without_complete` (heartbeat 409 → ни `complete`, ни повторного `complete`; вершина брошена); `test_executor_exception_fails_vertex` (FakeExecutor кидает → `fail`); `test_empty_claim_sleeps` (claim → null, цикл жив).
 - [ ] **Step 2: Run to verify they fail** → FAIL.
-- [ ] **Step 3: Implement** — `worker_loop`: цикл claim → на вершину: `ensure_repo` → `OpencodeExecutor.start(request)` → задача heartbeat (каждые `lease_ttl/3`; 409 → `stop()` сессии, без complete) → `wait_done()` → `diff()` → `diff_files`/`filter_violations` → нарушения → `fail`; иначе `parse_done_when`/`validate_done_when(cwd=repo_dir)` → `passed` → `complete(result)` : `fail(reason)`; `push_diff` веткой `agent/vertex-{id}` перед complete, `result["branch"]`. Любое исключение на вершине → `fail` (requeue M3), цикл продолжает. `stop` → выход.
+- [ ] **Step 3: Implement** — `worker_loop`: цикл claim → на вершину: `ensure_repo` → `OpencodeExecutor.start(request)` → задача heartbeat (каждые `lease_ttl/3`, стартует ДО executor.start — холодный build длиннее TTL; 409 или транспортная ошибка → бросить вершину, без complete/fail) → `wait_done()` → `diff()` → `diff_files`/`filter_violations` → нарушения → `fail`; иначе `parse_done_when`/`validate_done_when(cwd=repo_dir)` → `passed` → `push_diff` веткой `agent/vertex-{id}` перед complete, `result["branch"]`. Любое исключение на вершине → `fail` (requeue M3), цикл продолжает. `stop` → выход. *Поправлено ruling'ами из исполнения (см. ledger/дизайн): валидация done_when — по дереву С применённым диффом (gitops `apply_diff` + `push_head`); executor получает `workspace=<clone>`, `evidence_root=<run workspace>`; heartbeat-транспортная ошибка = abandon; `session.stop()` в `finally:` на каждом пути; промпт — шаблон воркера из вершины; локальный max-attempts guard.*
 - [ ] **Step 4: Run to verify they pass** → PASS; `uv run pytest` весь воркспейс → PASS.
 - [ ] **Step 5: Commit** — `... -m "feat(agent_runtime): run-scoped vertex worker over agent_api"`
 
