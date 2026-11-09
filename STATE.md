@@ -37,7 +37,7 @@ Code quality gates: `uv run ruff check .` / `uv run mypy packages apps` / `uv ru
 
 - ✅ **M1** — monorepo skeleton (uv workspace, 5 packages + 3 apps, AGENTS.md v2, ADR-0001..0003)
 - ✅ **M2a/M2b/M2c/M2d** — L0 infrastructure + bootstrapper CLI (all acceptance PASS, merged)
-- 🔄 **M3 — control plane (CURRENT)**: `isv_core` domain models + `agent_api` (vertex queue with lease, identities, budgets, HITL inbox, audit journal, merge queue). Plan: `docs/superpowers/plans/2026-11-09-m3-control-plane.md`. In progress on branch `m3-control-plane` (isv_core domain + store + FastAPI endpoints + tests landed; remaining: live-Postgres integration acceptance, merge into main).
+- 🔄 **M3 — control plane (CURRENT)**: `isv_core` domain models + `agent_api` (vertex queue with lease, identities, budgets, HITL inbox, audit journal, merge queue). **Code merged to main** (unit-tested: 35 tests, trio green; plan: `docs/superpowers/plans/2026-11-09-m3-control-plane.md`). Remaining: live-Postgres acceptance (`infra/tests/m3_flow.sh` against CNPG `swarm` DB) — then M3 done.
 - ⏭️ Next: **M4** (agent_runtime: Executor/OpenCode in k3s sandbox, MCP task-source/git/llm), **M5** (gates + review), **M6** (canary), **M7** (memory), **M8** (swarm mode), **M9** (polyglot dogfood), **M10** (UI panel + Automations).
 
 ## Open decisions (owner)
