@@ -43,6 +43,11 @@ class SessionLog:
         self._path = path
         self._seq = self._last_seq()
 
+    @property
+    def path(self) -> Path:
+        """Path to the log file (the same instance must remain the sole writer)."""
+        return self._path
+
     def append(self, type_: str, payload: dict[str, Any]) -> None:
         """Append one ``{ts, seq, type, payload}`` record and return once it is on disk."""
         self._discard_uncommitted_tail()

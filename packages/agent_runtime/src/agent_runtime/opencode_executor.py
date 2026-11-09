@@ -42,8 +42,9 @@ class DockerServe:
     tiny derived image (``opencode-git:<tag>``) once and uses it for the session.
     The host port is mapped to the fixed container port ``4096``.
 
-    ``runner`` is injected by tests to capture the docker argv without calling
-    the real Docker CLI.
+    ``runner`` is the single command-execution seam: tests inject a callable that
+    returns a :class:`subprocess.CompletedProcess`; the default uses the real
+    ``subprocess`` runner. This keeps the password-scraping path testable.
     """
 
     def __init__(
@@ -53,42 +54,44 @@ class DockerServe:
         repo_dir: Path,
         port: int,
         env: dict[str, str],
-        runner: Callable[[list[str]], None] | None = None,
+        runner: Callable[[list[str]], subprocess.CompletedProcess[str]] | None = None,
     ) -> None:
         self._image = image
         self._repo_dir = repo_dir
         self._port = port
         self._env = env
-        self._runner = runner
+        self._runner = runner if runner is not None else _subprocess_runner
         self._container_id: str | None = None
         self._derived_image = _derived_image_tag(image)
 
     def start(self) -> str:
         """Start the container and return a ``base_url`` for the HTTP client.
 
-        When using the real Docker CLI, the password printed in the container
-        logs is scraped and embedded as HTTP Basic credentials.
+        The password printed in the container logs is scraped and embedded as
+        HTTP Basic credentials.
         """
-        if self._runner is None:
-            self._build_image()
-            self._container_id = self._run_container()
-            password = self._scrape_password()
-            credentials = f"opencode:{password}@" if password else ""
-            return f"http://{credentials}127.0.0.1:{self._port}"
+        build_result = self._runner(self._build_argv())
+        if build_result.returncode != 0:
+            raise RuntimeError(
+                f"docker build failed for {self._derived_image}: {build_result.stderr}"
+            )
 
-        self._runner(self._build_argv())
-        self._runner(self._run_argv())
-        return f"http://127.0.0.1:{self._port}"
+        run_result = self._runner(self._run_argv())
+        if run_result.returncode != 0:
+            raise RuntimeError(f"docker run failed: {run_result.stderr}")
+
+        self._container_id = run_result.stdout.strip()
+        password = self._scrape_password()
+        credentials = f"opencode:{password}@" if password else ""
+        return f"http://{credentials}127.0.0.1:{self._port}"
 
     def stop(self) -> None:
         """Stop the running container, if any."""
-        if self._container_id is None:
+        container_id = self._container_id
+        if container_id is None:
             return
-        subprocess.run(
-            ["docker", "stop", self._container_id],
-            check=False,
-            capture_output=True,
-        )
+        self._runner(["docker", "stop", container_id])
+        self._container_id = None
 
     def _build_argv(self) -> list[str]:
         return ["docker", "build", "-t", self._derived_image, "-"]
@@ -116,38 +119,15 @@ class DockerServe:
             "--print-logs",
         ]
 
-    def _build_image(self) -> None:
-        subprocess.run(
-            self._build_argv(),
-            input=_dockerfile(self._image),
-            text=True,
-            check=True,
-            capture_output=True,
-        )
-
-    def _run_container(self) -> str:
-        result = subprocess.run(
-            self._run_argv(),
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return result.stdout.strip()
-
     def _scrape_password(self) -> str:
         if self._container_id is None:
             return ""
         for _ in range(60):
-            result = subprocess.run(
-                ["docker", "logs", self._container_id],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            output = result.stdout + result.stderr
-            for line in output.splitlines():
-                if "server password" in line:
-                    return line.split("server password", 1)[1].strip()
+            result = self._runner(["docker", "logs", self._container_id])
+            output = (result.stdout or "") + (result.stderr or "")
+            password = _password_from_logs(output)
+            if password:
+                return password
             time.sleep(0.5)
         return ""
 
@@ -164,7 +144,8 @@ class OpencodeExecutor:
         model: str,
         llm_endpoint: str,
         port: int = OPENCODE_PORT,
-        transport: Any | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
+        docker_runner: Callable[[list[str]], subprocess.CompletedProcess[str]] | None = None,
     ) -> None:
         self._base_url = base_url
         self._workspace = workspace
@@ -173,6 +154,7 @@ class OpencodeExecutor:
         self._llm_endpoint = llm_endpoint
         self._port = port
         self._transport = transport
+        self._docker_runner = docker_runner
         self._serve: DockerServe | None = None
 
     def build_prompt(self, request: ExecutionRequest) -> str:
@@ -191,7 +173,7 @@ class OpencodeExecutor:
         """Begin execution: log, manifest, harness session, prompt."""
         evidence_dir = _evidence_dir(self._workspace, request)
         evidence_dir.mkdir(parents=True, exist_ok=True)
-        session_log_path = evidence_dir / "session.ndjson"
+        session_log_path = evidence_dir / "session_log.ndjson"
         manifest_path = evidence_dir / "manifest.json"
 
         session_log = SessionLog(session_log_path)
@@ -221,14 +203,25 @@ class OpencodeExecutor:
                 repo_dir=self._workspace,
                 port=self._port,
                 env={"LITELLM_API_KEY": os.environ.get("LITELLM_API_KEY", "")},
+                runner=self._docker_runner,
             )
             base_url = await asyncio.to_thread(self._serve.start)
 
-        http = httpx.AsyncClient(base_url=base_url, transport=self._transport)
+        http = httpx.AsyncClient(
+            base_url=base_url,
+            transport=self._transport,
+            timeout=httpx.Timeout(600.0),
+        )
         client = OpencodeClient(http)
-        session_id = await client.create_session()
-        stream = await client.events(session_id)
-        await client.send_prompt(session_id, prompt_text)
+        try:
+            session_id = await client.create_session()
+            stream = await client.events(session_id)
+            await client.send_prompt(session_id, prompt_text)
+        except Exception:
+            await http.aclose()
+            if self._serve is not None:
+                await asyncio.to_thread(self._serve.stop)
+            raise
 
         return OpencodeSession(
             client=client,
@@ -306,6 +299,7 @@ class OpencodeSession:
         self._queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
         self._done_event = asyncio.Event()
         self._finalized = False
+        self._released = False
         self._pump_task = asyncio.create_task(self._pump())
 
     async def _pump(self) -> None:
@@ -325,9 +319,13 @@ class OpencodeSession:
             if self._status == ExecutionStatus.RUNNING:
                 self._status = ExecutionStatus.STOPPED
             raise
-        except Exception:
+        except Exception as exc:
             if self._status == ExecutionStatus.RUNNING:
                 self._status = ExecutionStatus.FAILED
+            self._session_log.append(
+                "harness_error",
+                {"message": str(exc), "type": type(exc).__name__},
+            )
         finally:
             if self._stream is not None:
                 await self._stream.aclose()
@@ -375,12 +373,14 @@ class OpencodeSession:
         return self._status
 
     async def stop(self) -> None:
-        if self._status != ExecutionStatus.RUNNING:
+        if self._status == ExecutionStatus.RUNNING:
+            self._status = ExecutionStatus.STOPPED
+            self._pump_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._pump_task
+        if self._released:
             return
-        self._status = ExecutionStatus.STOPPED
-        self._pump_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._pump_task
+        self._released = True
         if self._stream is not None:
             await self._stream.aclose()
         if not self._finalized:
@@ -394,23 +394,46 @@ class OpencodeSession:
     def result(self) -> ExecutionResult | None:
         return self._result
 
+    @property
+    def session_log(self) -> SessionLog:
+        """The single :class:`SessionLog` instance for this run."""
+        return self._session_log
+
     async def _finalize_done(self) -> None:
-        self._diff = await self._client.diff(self._session_id)
-        tokens = await self._fetch_tokens()
-        diff_stat = _diff_stat(self._diff)
-        self._result = ExecutionResult(
-            diff=self._diff,
-            diff_files=diff_files(self._diff),
-            session_log_path=self._session_log._path,
-            manifest_path=self._manifest_path,
+        error_message: str | None = None
+        try:
+            self._diff = await self._client.diff(self._session_id)
+            tokens = await self._fetch_tokens()
+            diff_files_list = diff_files(self._diff)
+            diff_stat = _diff_stat(self._diff)
+            self._result = ExecutionResult(
+                diff=self._diff,
+                diff_files=diff_files_list,
+                session_log_path=self._session_log.path,
+                manifest_path=self._manifest_path,
+                tokens_used=tokens,
+            )
+        except Exception as exc:
+            error_message = str(exc)
+            self._status = ExecutionStatus.FAILED
+            self._session_log.append(
+                "harness_error",
+                {"message": error_message, "type": type(exc).__name__},
+            )
+            self._result = None
+            tokens = await self._fetch_tokens()
+            diff_stat = None
+
+        self._update_manifest(
+            diff_stat=diff_stat,
             tokens_used=tokens,
+            error=error_message,
         )
-        self._update_manifest(diff_stat=diff_stat, tokens_used=tokens)
         self._finalized = True
 
     async def _finalize_non_done(self) -> None:
         tokens = await self._fetch_tokens()
-        self._update_manifest(diff_stat=None, tokens_used=tokens)
+        self._update_manifest(diff_stat=None, tokens_used=tokens, error=None)
         self._finalized = True
 
     async def _fetch_tokens(self) -> int | None:
@@ -428,6 +451,7 @@ class OpencodeSession:
         *,
         diff_stat: str | None,
         tokens_used: int | None,
+        error: str | None,
     ) -> None:
         if not self._manifest_path.exists():
             return
@@ -437,6 +461,8 @@ class OpencodeSession:
         manifest["ts_end"] = datetime.now(UTC).isoformat()
         manifest["diff_stat"] = diff_stat
         manifest["tokens_used"] = tokens_used
+        if error is not None:
+            manifest["error"] = error
         write_manifest(self._manifest_path, manifest)
 
 
@@ -457,6 +483,17 @@ def _derived_image_tag(image: str) -> str:
         if "/" not in candidate:
             tag = candidate
     return f"opencode-git:{tag}"
+
+
+def _subprocess_runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(argv, capture_output=True, text=True, check=False)
+
+
+def _password_from_logs(logs: str) -> str:
+    for line in logs.splitlines():
+        if "server password" in line:
+            return line.split("server password", 1)[1].strip()
+    return ""
 
 
 def _dockerfile(base_image: str) -> str:
@@ -491,10 +528,7 @@ def _sum_tokens(tokens: dict[str, Any]) -> int | None:
 
 
 def _diff_stat(diff: str) -> str | None:
-    try:
-        files = diff_files(diff)
-    except Exception:
-        return None
+    files = diff_files(diff)
     if not files:
         return "0 files changed"
     additions = sum(

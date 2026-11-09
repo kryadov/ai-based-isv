@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
+import pytest
 from agent_runtime.executor import ExecutionRequest, ExecutionStatus
-from agent_runtime.opencode_executor import DockerServe, OpencodeExecutor
+from agent_runtime.opencode_executor import DockerServe, OpencodeExecutor, OpencodeSession
 from agent_runtime.settings import OPENCODE_IMAGE
 
 _OPENCODE_PORT = 4096
@@ -94,8 +96,11 @@ def test_docker_serve_builds_expected_argv(tmp_path: Path) -> None:
     repo_dir.mkdir()
     commands: list[list[str]] = []
 
-    def runner(argv: list[str]) -> None:
+    def runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
         commands.append(argv)
+        if argv[0] == "docker" and "run" in argv:
+            return subprocess.CompletedProcess(argv, returncode=0, stdout="cid123\n")
+        return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
 
     serve = DockerServe(
         image=OPENCODE_IMAGE,
@@ -167,7 +172,7 @@ async def test_start_returns_session_and_streams_events(tmp_path: Path) -> None:
     status = await session.wait_done()
     assert status == ExecutionStatus.DONE
 
-    log_path = evidence / "session.ndjson"
+    log_path = evidence / "session_log.ndjson"
     log = json.loads(log_path.read_text(encoding="utf-8").splitlines()[0])
     assert log["type"] == "prompt"
     records = map(json.loads, log_path.read_text(encoding="utf-8").splitlines())
@@ -232,7 +237,7 @@ async def test_diff_and_result_after_done(tmp_path: Path) -> None:
     assert result is not None
     assert "diff --git a/README.md b/README.md" in result.diff
     assert result.diff_files == ["README.md"]
-    assert result.session_log_path == _evidence_dir(tmp_path, request) / "session.ndjson"
+    assert result.session_log_path == _evidence_dir(tmp_path, request) / "session_log.ndjson"
     assert result.manifest_path == _evidence_dir(tmp_path, request) / "manifest.json"
     assert result.tokens_used == 13
 
@@ -323,3 +328,145 @@ async def test_stop_stops(tmp_path: Path) -> None:
     assert await session.status() == ExecutionStatus.STOPPED
     assert await session.wait_done() == ExecutionStatus.STOPPED
     assert stream.closed
+
+
+def test_scrape_password_extracts_token_from_noise() -> None:
+    logs = (
+        "bootstrap line\n"
+        "server password abc-xyz-123\n"
+        "another line\n"
+    )
+
+    def runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(argv, returncode=0, stdout=logs)
+
+    serve = DockerServe(
+        image=OPENCODE_IMAGE,
+        repo_dir=Path("/tmp/repo"),
+        port=4096,
+        env={},
+        runner=runner,
+    )
+    serve._container_id = "cid"
+    assert serve._scrape_password() == "abc-xyz-123"
+
+
+def test_start_embeds_password_in_base_url() -> None:
+    commands: list[list[str]] = []
+
+    def runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        commands.append(argv)
+        if argv[0] == "docker" and "run" in argv:
+            return subprocess.CompletedProcess(argv, returncode=0, stdout="cid\n")
+        if argv[0] == "docker" and "logs" in argv:
+            return subprocess.CompletedProcess(
+                argv, returncode=0, stdout="server password secret-token\n"
+            )
+        return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+    serve = DockerServe(
+        image=OPENCODE_IMAGE,
+        repo_dir=Path("/tmp/repo"),
+        port=4096,
+        env={},
+        runner=runner,
+    )
+    base_url = serve.start()
+
+    assert base_url == "http://opencode:secret-token@127.0.0.1:4096"
+
+
+async def test_done_path_releases_resources(tmp_path: Path) -> None:
+    events = [
+        {
+            "id": "evt_1",
+            "type": "session.execution.succeeded",
+            "data": {"sessionID": "ses_test"},
+        }
+    ]
+    transport = httpx.MockTransport(
+        _handler(events=events, diff_items=[], status_tokens=None)
+    )
+
+    stop_calls: list[None] = []
+
+    class SpyExecutor(OpencodeExecutor):
+        async def _stop_serve(self) -> None:
+            stop_calls.append(None)
+
+    executor = SpyExecutor(
+        base_url="http://localhost:8080",
+        workspace=tmp_path,
+        model="qwen-coder",
+        llm_endpoint="http://litellm.swarm-lab.svc:30084/v1",
+        transport=transport,
+    )
+    session = cast(OpencodeSession, await executor.start(_request()))
+    assert await session.wait_done() == ExecutionStatus.DONE
+    await session.stop()
+
+    assert len(stop_calls) == 1
+    assert session._http.is_closed
+
+
+async def test_start_failure_after_container_start_stops_container(tmp_path: Path) -> None:
+    commands: list[list[str]] = []
+
+    def docker_runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        commands.append(argv)
+        if argv[0] == "docker" and "run" in argv:
+            return subprocess.CompletedProcess(argv, returncode=0, stdout="cid\n")
+        if argv[0] == "docker" and "logs" in argv:
+            return subprocess.CompletedProcess(argv, returncode=0, stdout="server password x\n")
+        return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/session" and request.method == "POST":
+            return httpx.Response(500, text="boom")
+        return httpx.Response(404)
+
+    executor = OpencodeExecutor(
+        base_url=None,
+        workspace=tmp_path,
+        model="qwen-coder",
+        llm_endpoint="http://litellm.swarm-lab.svc:30084/v1",
+        transport=httpx.MockTransport(handler),
+        docker_runner=docker_runner,
+    )
+    with pytest.raises(Exception):  # noqa: B017
+        await executor.start(_request())
+
+    stop_cmd = next((c for c in commands if c[0] == "docker" and "stop" in c), None)
+    assert stop_cmd is not None
+    assert "cid" in stop_cmd
+
+
+async def test_unparseable_diff_after_done_becomes_failed(tmp_path: Path) -> None:
+    events = [
+        {
+            "id": "evt_1",
+            "type": "session.execution.succeeded",
+            "data": {"sessionID": "ses_test"},
+        }
+    ]
+    # A non-empty diff that contains no file headers is unparseable.
+    diff_items = [{"file": "README.md", "patch": "not a real diff", "status": "modified"}]
+    transport = httpx.MockTransport(
+        _handler(events=events, diff_items=diff_items, status_tokens=None)
+    )
+    executor = OpencodeExecutor(
+        base_url="http://localhost:8080",
+        workspace=tmp_path,
+        model="qwen-coder",
+        llm_endpoint="http://litellm.swarm-lab.svc:30084/v1",
+        transport=transport,
+    )
+    session = await executor.start(_request())
+
+    assert await session.wait_done() == ExecutionStatus.FAILED
+    assert session.result is None
+
+    log_path = _evidence_dir(tmp_path, _request()) / "session_log.ndjson"
+    records = map(json.loads, log_path.read_text(encoding="utf-8").splitlines())
+    errors = [r for r in records if r["type"] == "harness_error"]
+    assert len(errors) == 1
