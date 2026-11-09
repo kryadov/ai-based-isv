@@ -179,6 +179,21 @@ def ensure_repo(
     return repo_dir
 
 
+def clone_local(source: Path, dest: Path) -> Path:
+    """Create an independent local copy of ``source`` at ``dest`` using ``git clone --local``.
+
+    The destination directory must not already exist; the caller is responsible for
+    removing a stale copy if needed. Returns the destination path.
+    """
+    env = _git_env(None)
+    if dest.exists():
+        raise GitOperationError(
+            f"clone destination {dest} already exists; remove it before re-cloning"
+        )
+    _run(["clone", "--local", str(source), dest.name], dest.parent, env)
+    return dest
+
+
 def apply_diff(
     repo_dir: Path,
     diff: str,

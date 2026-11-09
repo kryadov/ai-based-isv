@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any, cast
 
@@ -24,7 +25,7 @@ from agent_runtime.done_when import (
     validate_done_when,
 )
 from agent_runtime.executor import ExecutionRequest, ExecutionSession, ExecutionStatus, Executor
-from agent_runtime.gitops import apply_diff, ensure_repo, push_head
+from agent_runtime.gitops import apply_diff, clone_local, ensure_repo, push_head
 from agent_runtime.manifest import write_manifest
 from agent_runtime.opencode_executor import OpencodeExecutor
 from agent_runtime.pathguard import DiffUnparseable, diff_files, filter_violations
@@ -105,12 +106,15 @@ def _run_workspace(settings: WorkerSettings) -> Path:
     return settings.workspace_dir / f"run-{settings.run_id}"
 
 
-def _repo_dir_name(repo_url: str) -> str:
-    """Derive a stable local directory name from a remote URL or path."""
-    tail = repo_url.rstrip("/").rsplit("/", 1)[-1]
-    tail = tail.rsplit(":", 1)[-1]
-    name = tail[: -len(".git")] if tail.endswith(".git") else tail
-    return name or "repo"
+def _sandbox_dir(settings: WorkerSettings) -> Path:
+    return _run_workspace(settings) / "sandbox"
+
+
+def _reset_sandbox(repo_dir: Path, sandbox_dir: Path) -> Path:
+    """Replace ``sandbox_dir`` with a fresh local clone of ``repo_dir``."""
+    if sandbox_dir.exists():
+        shutil.rmtree(sandbox_dir)
+    return clone_local(repo_dir, sandbox_dir)
 
 
 def build_vertex_prompt(vertex: dict[str, Any]) -> str:
@@ -161,6 +165,11 @@ def _merge_manifest(manifest_path: Path, verdict: dict[str, Any]) -> None:
     write_manifest(manifest_path, manifest)
 
 
+async def _sleep_or_stop(stop: asyncio.Event, timeout: float) -> None:
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(stop.wait(), timeout=timeout)
+
+
 async def _heartbeat_loop(
     client: ControlPlaneClient,
     vertex_id: int,
@@ -172,11 +181,9 @@ async def _heartbeat_loop(
     interval = lease_ttl / 3
     try:
         while True:
-            try:
-                await asyncio.wait_for(stop.wait(), timeout=interval)
+            await _sleep_or_stop(stop, interval)
+            if stop.is_set():
                 return
-            except TimeoutError:
-                pass
             try:
                 ok = await client.heartbeat(vertex_id)
             except Exception:
@@ -227,6 +234,12 @@ async def _process_vertex(
             token=_git_token(settings.git_token),
         )
 
+        # The sandbox works on a disposable copy; the pristine clone is kept clean
+        # for validation and push.
+        sandbox_dir = await asyncio.to_thread(
+            _reset_sandbox, repo_dir, _sandbox_dir(settings)
+        )
+
         request = ExecutionRequest(
             run_id=settings.run_id,
             vertex_id=vertex_id,
@@ -239,6 +252,10 @@ async def _process_vertex(
             work_branch=f"agent/vertex-{vertex_id}",
         )
 
+        # The real executor is constructed with workspace=<sandbox_dir>; tests with
+        # a FakeExecutor ignore the filesystem, so the sandbox copy is still created
+        # and is validated by integration tests.
+        _ = sandbox_dir
         session = await executor.start(request)
 
         wait_task = asyncio.create_task(session.wait_done())
@@ -271,28 +288,7 @@ async def _process_vertex(
 
         diff = await session.diff()
 
-        try:
-            await asyncio.to_thread(
-                apply_diff,
-                repo_dir,
-                diff,
-                token=_git_token(settings.git_token),
-            )
-        except Exception as exc:
-            reason = (
-                "empty_diff"
-                if "empty diff" in str(exc).lower()
-                else f"apply_diff_failed: {exc}"
-            )
-            await client.fail(vertex_id, reason=reason)
-            await client.audit(
-                action="fail",
-                target=f"vertex:{vertex_id}",
-                outcome="error",
-                payload={"reason": reason},
-            )
-            return
-
+        # Fail fast on malformed diffs before touching the pristine clone.
         try:
             changed = diff_files(diff)
         except DiffUnparseable as exc:
@@ -309,6 +305,29 @@ async def _process_vertex(
         violations = filter_violations(changed, request.paths_allow)
         if violations:
             reason = f"paths_violation: {violations}"
+            await client.fail(vertex_id, reason=reason)
+            await client.audit(
+                action="fail",
+                target=f"vertex:{vertex_id}",
+                outcome="error",
+                payload={"reason": reason},
+            )
+            return
+
+        # Apply the agent's diff onto the pristine clone, then validate and push.
+        try:
+            await asyncio.to_thread(
+                apply_diff,
+                repo_dir,
+                diff,
+                token=_git_token(settings.git_token),
+            )
+        except Exception as exc:
+            reason = (
+                "empty_diff"
+                if "empty diff" in str(exc).lower()
+                else f"apply_diff_failed: {exc}"
+            )
             await client.fail(vertex_id, reason=reason)
             await client.audit(
                 action="fail",
@@ -378,10 +397,10 @@ async def _process_vertex(
     finally:
         if heartbeat_task is not None:
             heartbeat_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            with contextlib.suppress(Exception, asyncio.CancelledError):
                 await heartbeat_task
         if session is not None:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(Exception, asyncio.CancelledError):
                 await asyncio.shield(session.stop())
 
 
@@ -411,19 +430,11 @@ async def worker_loop(
                     outcome="error",
                     payload={"reason": reason},
                 )
-                with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(
-                        stop_event.wait(),
-                        timeout=settings.poll_interval_seconds,
-                    )
+                await _sleep_or_stop(stop_event, settings.poll_interval_seconds)
                 continue
 
             if vertex is None:
-                with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(
-                        stop_event.wait(),
-                        timeout=settings.poll_interval_seconds,
-                    )
+                await _sleep_or_stop(stop_event, settings.poll_interval_seconds)
                 continue
 
             vertex_id: int = vertex["id"]
@@ -440,6 +451,7 @@ async def worker_loop(
                         payload={"reason": "max_attempts_exceeded"},
                     )
                     blacklisted.add(vertex_id)
+                await _sleep_or_stop(stop_event, settings.poll_interval_seconds)
                 continue
 
             await _process_vertex(settings, executor, client, vertex, stop_event)
@@ -461,10 +473,11 @@ def main() -> None:
         settings.base_branch,
         token=_git_token(settings.git_token),
     )
+    sandbox_dir = _reset_sandbox(repo_dir, _sandbox_dir(settings))
 
     executor = OpencodeExecutor(
         base_url=settings.opencode_base_url,
-        workspace=repo_dir,
+        workspace=sandbox_dir,
         evidence_root=run_ws,
         model=settings.model,
         llm_endpoint=settings.litellm_base_url,

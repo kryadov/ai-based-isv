@@ -27,6 +27,7 @@ from agent_runtime.gitops import (
     GitOperationError,
     _reject_credentialed_url,
     apply_diff,
+    clone_local,
     ensure_repo,
     push_diff,
     push_head,
@@ -329,6 +330,32 @@ def test_push_head_rejects_nothing_staged(tmp_path: Path) -> None:
         push_head(repo_dir, "agent/vertex-empty", message="no changes")
 
     assert _git(["rev-parse", "HEAD"], repo_dir).strip() == base_sha
+
+
+def test_clone_local_creates_independent_copy(tmp_path: Path) -> None:
+    remote_url, base_sha = _bare_remote_with_main(tmp_path)
+    repo_dir = ensure_repo(tmp_path / "ws", remote_url, "main")
+
+    copy_dir = tmp_path / "copy"
+    clone_local(repo_dir, copy_dir)
+
+    assert (copy_dir / ".git").is_dir()
+    assert (copy_dir / "README.txt").read_text(encoding="utf-8") == "one\ntwo\n"
+    assert _git(["rev-parse", "HEAD"], copy_dir).strip() == base_sha
+
+    # Independence: further edits to the source do not affect the copy.
+    (repo_dir / "README.txt").write_text("one\ntwo\nthree\n", encoding="utf-8")
+    assert (copy_dir / "README.txt").read_text(encoding="utf-8") == "one\ntwo\n"
+
+
+def test_clone_local_refuses_existing_destination(tmp_path: Path) -> None:
+    remote_url, _ = _bare_remote_with_main(tmp_path)
+    repo_dir = ensure_repo(tmp_path / "ws", remote_url, "main")
+    existing = tmp_path / "existing"
+    existing.mkdir()
+
+    with pytest.raises(GitOperationError):
+        clone_local(repo_dir, existing)
 
 
 def test_credentialed_repo_url_is_rejected(tmp_path: Path) -> None:

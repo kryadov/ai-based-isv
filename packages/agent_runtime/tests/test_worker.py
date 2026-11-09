@@ -297,6 +297,32 @@ async def test_happy_path_claims_executes_completes(tmp_path: Path) -> None:
     assert "Done when:" in request.prompt
     assert "Do not push or commit" in request.prompt
 
+    # The sandbox copy was created and is isolated from the pristine clone.
+    run_ws = tmp_path / "workspace" / "run-42"
+    assert (run_ws / "sandbox" / ".git").is_dir()
+
+    # The pristine clone received the pushed work branch.
+    repo_dir = run_ws / "origin"  # ensure_repo strips the .git suffix
+    assert repo_dir.is_dir()
+    base_sha = subprocess.run(
+        ["git", "rev-parse", "origin/main"],
+        cwd=str(repo_dir),
+        capture_output=True,
+        text=True,
+        check=True,
+        env=_GIT_ENV,
+    ).stdout.strip()
+    branch_sha = subprocess.run(
+        ["git", "rev-parse", "agent/vertex-1"],
+        cwd=str(repo_dir),
+        capture_output=True,
+        text=True,
+        check=True,
+        env=_GIT_ENV,
+    ).stdout.strip()
+    assert branch_sha != base_sha
+    assert (repo_dir / "greeting.py").exists()
+
 
 async def test_done_when_unparseable_fails_vertex(tmp_path: Path) -> None:
     bare = _init_bare_repo(tmp_path)
@@ -369,6 +395,33 @@ async def test_paths_violation_fails_vertex(tmp_path: Path) -> None:
     assert vertex_id == 3
     assert "paths_violation" in body["reason"]
     assert "secrets.env" in body["reason"]
+    assert len(plane.complete_calls) == 0
+
+
+async def test_diff_unparseable_fails_vertex(tmp_path: Path) -> None:
+    bare = _init_bare_repo(tmp_path)
+    executor = FakeExecutor(diff="bogus\n+line\n", diff_files=[])
+    vertex = {
+        "id": 7,
+        "name": "garbage-diff",
+        "done_when": json.dumps({"checks": [{"type": "files_exist", "paths": ["README.md"]}]}),
+        "paths_allow": ["*.md"],
+    }
+    plane = FakeControlPlane(vertices=[vertex])
+    settings = _settings(tmp_path, str(bare))
+    stop = asyncio.Event()
+
+    transport = httpx.MockTransport(plane.handler)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
+        task = asyncio.create_task(worker_loop(settings, executor, http=http, stop=stop))
+        await asyncio.wait_for(plane.fail_called.wait(), timeout=2.0)
+        stop.set()
+        await asyncio.wait_for(task, timeout=2.0)
+
+    assert len(plane.fail_calls) == 1
+    vertex_id, body = plane.fail_calls[0]
+    assert vertex_id == 7
+    assert "diff_unparseable" in body["reason"]
     assert len(plane.complete_calls) == 0
 
 
