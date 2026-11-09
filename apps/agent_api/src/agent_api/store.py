@@ -25,7 +25,8 @@ from agent_api.models import (
 
 
 def _now() -> datetime:
-    return datetime.now(UTC)
+    # SQLite хранит naive UTC — все сравнения lease в naive
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 async def create_run(session: AsyncSession, project: str, task_ref: str,
@@ -62,16 +63,18 @@ async def claim_vertex(session: AsyncSession, run_id: int, agent: str,
     rows = await session.scalars(
         select(VertexRow).where(
             VertexRow.run_id == run_id,
-            VertexRow.status.in_(["queued", "running"]),
+            VertexRow.status.in_(["queued", "leased", "running"]),
         )
     )
     now = _now()
     candidate: VertexRow | None = None
     for r in rows:
         expired = r.lease_until is not None and r.lease_until < now
-        if r.status == "leased" and not expired:
-            continue
-        if r.status == "running":
+        if r.status == "queued":
+            pass  # кандидат
+        elif r.status in ("leased", "running") and expired:
+            pass  # умерший воркер — вершина переиспользуема
+        else:
             continue
         if not await _deps_satisfied(session, run_id, list(r.deps_json or [])):
             continue
@@ -139,13 +142,38 @@ async def register_identity(session: AsyncSession, name: str, role: str,
     return row.id
 
 
-async def consume_budget(session: AsyncSession, subject: str, tokens: int) -> bool:
-    """Списать токены; False если лимит превышен (атомарно)."""
+async def set_budget(session: AsyncSession, subject: str, limit_tokens: int) -> int:
+    """Создать/обновить бюджет (лимит) субъекта."""
     row = await session.scalar(select(BudgetRow).where(BudgetRow.subject == subject))
     if row is None:
-        session.add(BudgetRow(subject=subject, limit_tokens=max(tokens, 0) * 10 or 1000,
-                              spent_tokens=0))
+        row = BudgetRow(subject=subject, limit_tokens=limit_tokens, spent_tokens=0)
+        session.add(row)
         await session.flush()
+        return row.id
+    await session.execute(
+        update(BudgetRow).where(BudgetRow.subject == subject)
+        .values(limit_tokens=limit_tokens)
+    )
+    return row.id
+
+
+async def set_budget(session: AsyncSession, subject: str, limit_tokens: int) -> int:
+    """Создать/обновить лимит бюджета субъекта."""
+    row = await session.scalar(select(BudgetRow).where(BudgetRow.subject == subject))
+    if row is None:
+        row = BudgetRow(subject=subject, limit_tokens=limit_tokens, spent_tokens=0)
+        session.add(row)
+        await session.flush()
+        return row.id
+    await session.execute(
+        update(BudgetRow).where(BudgetRow.subject == subject)
+        .values(limit_tokens=limit_tokens)
+    )
+    return row.id
+
+
+async def consume_budget(session: AsyncSession, subject: str, tokens: int) -> bool:
+    """Списать токены; False если бюджет не задан или лимит превышен (атомарно)."""
     result = await session.execute(
         update(BudgetRow)
         .where(BudgetRow.subject == subject,
@@ -170,7 +198,8 @@ async def decide_hitl(session: AsyncSession, request_id: int, action: str,
     result = await session.execute(
         update(HITLRow)
         .where(HITLRow.id == request_id, HITLRow.status == "pending")
-        .values(status=action, decided_by=decided_by, decision_note=note,
+        .values(status={"approve": "approved", "reject": "rejected"}[action],
+                decided_by=decided_by, decision_note=note,
                 decided_at=_now())
         .returning(HITLRow.status)
     )
