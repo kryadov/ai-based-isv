@@ -179,6 +179,60 @@ def ensure_repo(
     return repo_dir
 
 
+def apply_diff(
+    repo_dir: Path,
+    diff: str,
+    *,
+    token: str | None = None,
+) -> None:
+    """Apply ``diff`` to the index of a clean clone.
+
+    Raises :class:`GitOperationError` if the diff is empty, the working tree is not
+    clean, or any hunk does not apply. ``git apply --index`` is atomic: on failure the
+    clone is left exactly as it was found.
+    """
+    env = _git_env(token)
+
+    if not diff.strip():
+        raise GitOperationError("refusing to apply an empty diff: nothing to commit")
+    if not _clean_worktree(repo_dir, env):
+        raise GitOperationError(
+            f"working tree at {repo_dir} is not clean; refusing to apply a diff onto local changes"
+        )
+
+    _run(["apply", "--index", "--whitespace=nowarn", "-"], repo_dir, env, stdin=diff)
+
+
+def push_head(
+    repo_dir: Path,
+    work_branch: str,
+    *,
+    message: str,
+    token: str | None = None,
+) -> str:
+    """Commit staged changes on a fresh work branch and push it; return the new sha.
+
+    Raises :class:`GitOperationError` if there is no staged change, the resulting sha is
+    unusable, or the push is refused.
+    """
+    env = _git_env(token)
+
+    base_sha = _run(["rev-parse", "HEAD"], repo_dir, env).stdout.strip()
+
+    _run(["checkout", "-B", work_branch], repo_dir, env)
+    _run(["-c", "commit.gpgsign=false", "commit", "-m", message], repo_dir, env)
+
+    sha = _run(["rev-parse", "HEAD"], repo_dir, env).stdout.strip()
+    if not _SHA_RE.match(sha):
+        raise GitOperationError(f"git returned an unusable commit sha: {sha!r}")
+    if sha == base_sha:
+        raise GitOperationError("commit sha is unchanged from the base; nothing to push")
+
+    refspec = _PUSH_REFSPEC_FMT.format(branch=work_branch)
+    _run(["push", "--force-with-lease", "origin", refspec], repo_dir, env)
+    return sha
+
+
 def push_diff(
     repo_dir: Path,
     diff: str,
@@ -189,37 +243,8 @@ def push_diff(
 ) -> str:
     """Apply ``diff`` on a fresh work branch, commit it, push the branch; return the sha.
 
-    Fails loudly (raises :class:`GitOperationError`) unless the base clone is clean, the
-    diff is non-empty, and every hunk applies — with no side effects in those cases (no
-    commit, no branch move, no partial working-tree edit). ``diff`` is the unified diff
-    the sandbox produced (joined per-file ``git diff`` patches); deletions and new files
-    are carried by ``git apply --index``.
+    This is a convenience composition of :func:`apply_diff` followed by
+    :func:`push_head`; see those functions for failure semantics.
     """
-    env = _git_env(token)
-
-    if not diff.strip():
-        raise GitOperationError("refusing to push an empty diff: nothing to commit")
-    if not _clean_worktree(repo_dir, env):
-        raise GitOperationError(
-            f"working tree at {repo_dir} is not clean; refusing to apply a diff onto local changes"
-        )
-
-    base_sha = _run(["rev-parse", "HEAD"], repo_dir, env).stdout.strip()
-
-    # Apply straight into the index FIRST: git apply is atomic, so a conflicting or
-    # malformed patch aborts here with no branch created and no partial write. Only once
-    # every hunk lands do we move onto the work branch (staged changes carry over) and
-    # commit — this order keeps a failed push_diff free of side effects on the base clone.
-    _run(["apply", "--index", "--whitespace=nowarn", "-"], repo_dir, env, stdin=diff)
-    _run(["checkout", "-B", work_branch], repo_dir, env)
-    _run(["-c", "commit.gpgsign=false", "commit", "-m", message], repo_dir, env)
-
-    sha = _run(["rev-parse", "HEAD"], repo_dir, env).stdout.strip()
-    if not _SHA_RE.match(sha):
-        raise GitOperationError(f"git returned an unusable commit sha: {sha!r}")
-    if sha == base_sha:
-        raise GitOperationError("commit sha is unchanged from the base; the diff applied nothing")
-
-    refspec = _PUSH_REFSPEC_FMT.format(branch=work_branch)
-    _run(["push", "--force-with-lease", "origin", refspec], repo_dir, env)
-    return sha
+    apply_diff(repo_dir, diff, token=token)
+    return push_head(repo_dir, work_branch, message=message, token=token)

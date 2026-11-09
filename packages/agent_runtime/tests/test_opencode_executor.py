@@ -481,3 +481,38 @@ async def test_unparseable_diff_after_done_becomes_failed(tmp_path: Path) -> Non
     records = map(json.loads, log_path.read_text(encoding="utf-8").splitlines())
     errors = [r for r in records if r["type"] == "harness_error"]
     assert len(errors) == 1
+
+
+async def test_evidence_root_separates_artifacts_from_workspace(tmp_path: Path) -> None:
+    workspace = tmp_path / "repo_mount"
+    evidence_root = tmp_path / "evidence"
+    events = [
+        {
+            "id": "evt_1",
+            "type": "session.execution.succeeded",
+            "data": {"sessionID": "ses_test"},
+        }
+    ]
+    transport = httpx.MockTransport(
+        _handler(events=events, diff_items=[], status_tokens=None)
+    )
+    executor = OpencodeExecutor(
+        base_url="http://localhost:8080",
+        workspace=workspace,
+        evidence_root=evidence_root,
+        model="qwen-coder",
+        llm_endpoint="http://litellm.swarm-lab.svc:30084/v1",
+        transport=transport,
+    )
+    request = _request()
+    session = await executor.start(request)
+    assert await session.wait_done() == ExecutionStatus.DONE
+
+    result = session.result
+    assert result is not None
+    expected_evidence = _evidence_dir(evidence_root, request)
+    assert result.session_log_path == expected_evidence / "session_log.ndjson"
+    assert result.manifest_path == expected_evidence / "manifest.json"
+    assert expected_evidence.is_dir()
+    # workspace itself is not polluted with evidence
+    assert not (workspace / ".agent_runtime").exists()

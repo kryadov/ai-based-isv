@@ -17,9 +17,14 @@ from typing import Any, cast
 
 import httpx
 
-from agent_runtime.done_when import DoneWhenUnparseable, parse_done_when, validate_done_when
-from agent_runtime.executor import ExecutionRequest, ExecutionSession, ExecutionStatus
-from agent_runtime.gitops import ensure_repo, push_diff
+from agent_runtime.done_when import (
+    DoneWhenUnparseable,
+    DoneWhenVerdict,
+    parse_done_when,
+    validate_done_when,
+)
+from agent_runtime.executor import ExecutionRequest, ExecutionSession, ExecutionStatus, Executor
+from agent_runtime.gitops import apply_diff, ensure_repo, push_head
 from agent_runtime.manifest import write_manifest
 from agent_runtime.opencode_executor import OpencodeExecutor
 from agent_runtime.pathguard import DiffUnparseable, diff_files, filter_violations
@@ -100,10 +105,32 @@ def _run_workspace(settings: WorkerSettings) -> Path:
     return settings.workspace_dir / f"run-{settings.run_id}"
 
 
+def _repo_dir_name(repo_url: str) -> str:
+    """Derive a stable local directory name from a remote URL or path."""
+    tail = repo_url.rstrip("/").rsplit("/", 1)[-1]
+    tail = tail.rsplit(":", 1)[-1]
+    name = tail[: -len(".git")] if tail.endswith(".git") else tail
+    return name or "repo"
+
+
+def build_vertex_prompt(vertex: dict[str, Any]) -> str:
+    """Assemble the prompt the sandbox receives from the vertex metadata."""
+    name = vertex.get("name") or "unnamed"
+    allowed = ", ".join(vertex.get("paths_allow", [])) or "(none)"
+    done_when = vertex.get("done_when", "")
+    return (
+        f"Task: {name}\n"
+        f"Allowed paths: {allowed}\n"
+        f"Done when: {done_when}\n\n"
+        "Work in the current repository directory. Make the requested changes; "
+        "the worker will collect them from the session diff. Do not push or commit."
+    )
+
+
 def _build_result(
     session: ExecutionSession,
     changed: list[str],
-    verdict: Any,
+    verdict: DoneWhenVerdict,
     branch: str,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
@@ -150,27 +177,29 @@ async def _heartbeat_loop(
                 return
             except TimeoutError:
                 pass
-            if not await client.heartbeat(vertex_id):
+            try:
+                ok = await client.heartbeat(vertex_id)
+            except Exception:
+                # Transport-level failure: treat as lease lost and abandon the vertex.
+                ok = False
+            if not ok:
                 lease_lost.set()
                 return
     except asyncio.CancelledError:
-        raise
-    except Exception:
-        # A transport-level heartbeat failure is treated as lease lost so the
-        # worker abandons the vertex instead of racing the control plane.
-        lease_lost.set()
         raise
 
 
 async def _process_vertex(
     settings: WorkerSettings,
-    executor: Any,
+    executor: Executor,
     client: ControlPlaneClient,
     vertex: dict[str, Any],
     stop: asyncio.Event,
 ) -> None:
     vertex_id: int = vertex["id"]
     session: ExecutionSession | None = None
+    heartbeat_task: asyncio.Task[None] | None = None
+
     try:
         await client.audit(
             action="claim",
@@ -178,26 +207,7 @@ async def _process_vertex(
             payload={"name": vertex.get("name"), "run_id": settings.run_id},
         )
 
-        repo_dir = ensure_repo(
-            _run_workspace(settings),
-            settings.repo_url,
-            settings.base_branch,
-            token=_git_token(settings.git_token),
-        )
-
-        request = ExecutionRequest(
-            run_id=settings.run_id,
-            vertex_id=vertex_id,
-            name=vertex["name"],
-            prompt=vertex.get("prompt", ""),
-            paths_allow=list(vertex.get("paths_allow", [])),
-            done_when=vertex.get("done_when", ""),
-            repo_url=settings.repo_url,
-            base_branch=settings.base_branch,
-            work_branch=f"agent/vertex-{vertex_id}",
-        )
-
-        session = await executor.start(request)
+        # Start heartbeating before any potentially long-running setup work.
         lease_lost = asyncio.Event()
         heartbeat_task = asyncio.create_task(
             _heartbeat_loop(
@@ -209,111 +219,150 @@ async def _process_vertex(
             )
         )
 
+        repo_dir = await asyncio.to_thread(
+            ensure_repo,
+            _run_workspace(settings),
+            settings.repo_url,
+            settings.base_branch,
+            token=_git_token(settings.git_token),
+        )
+
+        request = ExecutionRequest(
+            run_id=settings.run_id,
+            vertex_id=vertex_id,
+            name=vertex["name"],
+            prompt=build_vertex_prompt(vertex),
+            paths_allow=list(vertex.get("paths_allow", [])),
+            done_when=vertex.get("done_when", ""),
+            repo_url=settings.repo_url,
+            base_branch=settings.base_branch,
+            work_branch=f"agent/vertex-{vertex_id}",
+        )
+
+        session = await executor.start(request)
+
+        wait_task = asyncio.create_task(session.wait_done())
+        lease_wait = asyncio.create_task(lease_lost.wait())
+        done, pending = await asyncio.wait(
+            {wait_task, lease_wait},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        if lease_lost.is_set():
+            # Lease lost: do NOT complete or fail. The control plane will
+            # requeue via lease expiry.
+            return
+
+        status = wait_task.result()
+        if status != ExecutionStatus.DONE:
+            reason = f"session_status:{status.value}"
+            await client.fail(vertex_id, reason=reason)
+            await client.audit(
+                action="fail",
+                target=f"vertex:{vertex_id}",
+                outcome="error",
+                payload={"reason": reason},
+            )
+            return
+
+        diff = await session.diff()
+
         try:
-            wait_task = asyncio.create_task(session.wait_done())
-            lease_wait = asyncio.create_task(lease_lost.wait())
-            done, pending = await asyncio.wait(
-                {wait_task, lease_wait},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for task in pending:
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
-
-            if lease_lost.is_set():
-                # Lease lost: do NOT complete or fail. The control plane will
-                # requeue via lease expiry.
-                return
-
-            status = wait_task.result()
-            if status != ExecutionStatus.DONE:
-                reason = f"session_status:{status.value}"
-                await client.fail(vertex_id, reason=reason)
-                await client.audit(
-                    action="fail",
-                    target=f"vertex:{vertex_id}",
-                    outcome="error",
-                    payload={"reason": reason},
-                )
-                return
-
-            diff = await session.diff()
-            try:
-                changed = diff_files(diff)
-            except DiffUnparseable as exc:
-                reason = f"diff_unparseable: {exc}"
-                await client.fail(vertex_id, reason=reason)
-                await client.audit(
-                    action="fail",
-                    target=f"vertex:{vertex_id}",
-                    outcome="error",
-                    payload={"reason": reason},
-                )
-                return
-
-            violations = filter_violations(changed, request.paths_allow)
-            if violations:
-                reason = f"paths_violation: {violations}"
-                await client.fail(vertex_id, reason=reason)
-                await client.audit(
-                    action="fail",
-                    target=f"vertex:{vertex_id}",
-                    outcome="error",
-                    payload={"reason": reason},
-                )
-                return
-
-            try:
-                spec = parse_done_when(request.done_when)
-            except DoneWhenUnparseable:
-                reason = "unparseable_done_when"
-                await client.fail(vertex_id, reason=reason)
-                await client.audit(
-                    action="fail",
-                    target=f"vertex:{vertex_id}",
-                    outcome="error",
-                    payload={"reason": reason},
-                )
-                return
-
-            verdict = validate_done_when(spec, cwd=repo_dir)
-            session.session_log.append(
-                "done_when_check", {"verdict": verdict.model_dump()}
-            )
-            if not verdict.passed:
-                await client.fail(vertex_id, reason=verdict.reason or "done_when_failed")
-                await client.audit(
-                    action="fail",
-                    target=f"vertex:{vertex_id}",
-                    outcome="error",
-                    payload={"reason": verdict.reason},
-                )
-                return
-
-            branch = request.work_branch
             await asyncio.to_thread(
-                push_diff,
+                apply_diff,
                 repo_dir,
                 diff,
-                branch,
-                message=f"agent: {request.name}",
                 token=_git_token(settings.git_token),
             )
-
-            result = _build_result(session, changed, verdict, branch)
-            session.session_log.append("result", result)
-            await client.complete(vertex_id, result)
-            await client.audit(
-                action="complete",
-                target=f"vertex:{vertex_id}",
-                outcome="ok",
-                payload=result,
+        except Exception as exc:
+            reason = (
+                "empty_diff"
+                if "empty diff" in str(exc).lower()
+                else f"apply_diff_failed: {exc}"
             )
-        finally:
-            heartbeat_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await heartbeat_task
+            await client.fail(vertex_id, reason=reason)
+            await client.audit(
+                action="fail",
+                target=f"vertex:{vertex_id}",
+                outcome="error",
+                payload={"reason": reason},
+            )
+            return
+
+        try:
+            changed = diff_files(diff)
+        except DiffUnparseable as exc:
+            reason = f"diff_unparseable: {exc}"
+            await client.fail(vertex_id, reason=reason)
+            await client.audit(
+                action="fail",
+                target=f"vertex:{vertex_id}",
+                outcome="error",
+                payload={"reason": reason},
+            )
+            return
+
+        violations = filter_violations(changed, request.paths_allow)
+        if violations:
+            reason = f"paths_violation: {violations}"
+            await client.fail(vertex_id, reason=reason)
+            await client.audit(
+                action="fail",
+                target=f"vertex:{vertex_id}",
+                outcome="error",
+                payload={"reason": reason},
+            )
+            return
+
+        try:
+            spec = parse_done_when(request.done_when)
+        except DoneWhenUnparseable:
+            reason = "unparseable_done_when"
+            await client.fail(vertex_id, reason=reason)
+            await client.audit(
+                action="fail",
+                target=f"vertex:{vertex_id}",
+                outcome="error",
+                payload={"reason": reason},
+            )
+            return
+
+        verdict = validate_done_when(spec, cwd=repo_dir)
+        session.session_log.append(
+            "done_when_check", {"verdict": verdict.model_dump()}
+        )
+        if not verdict.passed:
+            await client.fail(vertex_id, reason=verdict.reason or "done_when_failed")
+            await client.audit(
+                action="fail",
+                target=f"vertex:{vertex_id}",
+                outcome="error",
+                payload={"reason": verdict.reason},
+            )
+            return
+
+        branch = request.work_branch
+        await asyncio.to_thread(
+            push_head,
+            repo_dir,
+            branch,
+            message=f"agent: {request.name}",
+            token=_git_token(settings.git_token),
+        )
+
+        result = _build_result(session, changed, verdict, branch)
+        session.session_log.append("result", result)
+        await client.complete(vertex_id, result)
+        await client.audit(
+            action="complete",
+            target=f"vertex:{vertex_id}",
+            outcome="ok",
+            payload=result,
+        )
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -327,13 +376,18 @@ async def _process_vertex(
             payload={"reason": reason},
         )
     finally:
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat_task
         if session is not None:
-            await session.stop()
+            with contextlib.suppress(Exception):
+                await asyncio.shield(session.stop())
 
 
 async def worker_loop(
     settings: WorkerSettings,
-    executor: Any,
+    executor: Executor,
     *,
     http: httpx.AsyncClient | None = None,
     stop: asyncio.Event | None = None,
@@ -343,10 +397,27 @@ async def worker_loop(
     own_http = http is None
     http = http or httpx.AsyncClient(base_url=settings.api_url)
     client = ControlPlaneClient(http, settings)
+    blacklisted: set[int] = set()
 
     try:
         while not stop_event.is_set():
-            vertex = await client.claim()
+            try:
+                vertex = await client.claim()
+            except Exception as exc:
+                reason = f"{type(exc).__name__}: {exc}"
+                await client.audit(
+                    action="claim_error",
+                    target=f"run:{settings.run_id}",
+                    outcome="error",
+                    payload={"reason": reason},
+                )
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(
+                        stop_event.wait(),
+                        timeout=settings.poll_interval_seconds,
+                    )
+                continue
+
             if vertex is None:
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(
@@ -354,6 +425,23 @@ async def worker_loop(
                         timeout=settings.poll_interval_seconds,
                     )
                 continue
+
+            vertex_id: int = vertex["id"]
+            attempts = int(vertex.get("attempts", 0))
+            if attempts >= 3 or vertex_id in blacklisted:
+                if vertex_id not in blacklisted:
+                    await client.fail(
+                        vertex_id, reason="max_attempts_exceeded"
+                    )
+                    await client.audit(
+                        action="fail",
+                        target=f"vertex:{vertex_id}",
+                        outcome="error",
+                        payload={"reason": "max_attempts_exceeded"},
+                    )
+                    blacklisted.add(vertex_id)
+                continue
+
             await _process_vertex(settings, executor, client, vertex, stop_event)
     finally:
         if own_http:
@@ -362,13 +450,22 @@ async def worker_loop(
 
 def main() -> None:
     """Entry point for ``python -m agent_runtime.worker``."""
-    settings = WorkerSettings()  # type: ignore[call-arg]
+    settings = WorkerSettings()
     if settings.litellm_api_key:
         os.environ["LITELLM_API_KEY"] = settings.litellm_api_key
 
+    run_ws = _run_workspace(settings)
+    repo_dir = ensure_repo(
+        run_ws,
+        settings.repo_url,
+        settings.base_branch,
+        token=_git_token(settings.git_token),
+    )
+
     executor = OpencodeExecutor(
         base_url=settings.opencode_base_url,
-        workspace=settings.workspace_dir,
+        workspace=repo_dir,
+        evidence_root=run_ws,
         model=settings.model,
         llm_endpoint=settings.litellm_base_url,
         port=settings.opencode_port,

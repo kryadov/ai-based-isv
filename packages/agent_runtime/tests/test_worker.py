@@ -21,7 +21,7 @@ from agent_runtime.executor import (
 )
 from agent_runtime.session_log import SessionLog
 from agent_runtime.settings import WorkerSettings
-from agent_runtime.worker import worker_loop
+from agent_runtime.worker import build_vertex_prompt, worker_loop
 
 _GIT_ENV = {
     **os.environ,
@@ -167,9 +167,11 @@ class FakeControlPlane:
         self,
         vertices: list[dict[str, Any]] | None = None,
         heartbeat_409_after: int = 0,
+        claim_errors: int = 0,
     ) -> None:
         self.vertices = list(vertices or [])
         self.heartbeat_409_after = heartbeat_409_after
+        self.claim_errors = claim_errors
         self.claim_index = 0
         self.claim_calls = 0
         self.heartbeat_count = 0
@@ -190,6 +192,9 @@ class FakeControlPlane:
 
         if path == "/vertices/claim" and method == "POST":
             self.claim_calls += 1
+            if self.claim_errors > 0:
+                self.claim_errors -= 1
+                return httpx.Response(500, json={"detail": "control plane outage"})
             if self.claim_index < len(self.vertices):
                 vertex = self.vertices[self.claim_index]
                 self.claim_index += 1
@@ -241,25 +246,26 @@ def _settings(tmp_path: Path, repo_url: str) -> WorkerSettings:
 
 async def test_happy_path_claims_executes_completes(tmp_path: Path) -> None:
     bare = _init_bare_repo(tmp_path)
+    # The diff creates a new file; done_when checks that file exists AFTER apply.
     diff = (
-        "diff --git a/README.md b/README.md\n"
-        "--- a/README.md\n"
-        "+++ b/README.md\n"
-        "@@ -1 +1,2 @@\n"
-        " # base\n"
-        "+hello\n"
+        "diff --git a/greeting.py b/greeting.py\n"
+        "new file mode 100644\n"
+        "index 0000000..d8649da\n"
+        "--- /dev/null\n"
+        "+++ b/greeting.py\n"
+        "@@ -0,0 +1 @@\n"
+        "+print('hello')\n"
     )
     executor = FakeExecutor(
         diff=diff,
-        diff_files=["README.md"],
+        diff_files=["greeting.py"],
         tokens_used=42,
     )
     vertex = {
         "id": 1,
         "name": "greet",
-        "done_when": json.dumps({"checks": [{"type": "files_exist", "paths": ["README.md"]}]}),
-        "paths_allow": ["README.md"],
-        "prompt": "Say hello",
+        "done_when": json.dumps({"checks": [{"type": "files_exist", "paths": ["greeting.py"]}]}),
+        "paths_allow": ["*.py"],
     }
     plane = FakeControlPlane(vertices=[vertex])
     settings = _settings(tmp_path, str(bare))
@@ -277,7 +283,7 @@ async def test_happy_path_claims_executes_completes(tmp_path: Path) -> None:
     assert vertex_id == 1
     assert result["agent"] == "test-worker"
     assert result["result"]["branch"] == "agent/vertex-1"
-    assert result["result"]["diff_files"] == ["README.md"]
+    assert result["result"]["diff_files"] == ["greeting.py"]
     assert result["result"]["verdict"]["passed"] is True
     assert result["result"]["session_log_path"]
     assert result["result"]["manifest_path"]
@@ -287,17 +293,28 @@ async def test_happy_path_claims_executes_completes(tmp_path: Path) -> None:
     request = executor.calls[0]
     assert request.vertex_id == 1
     assert request.work_branch == "agent/vertex-1"
+    assert "Task: greet" in request.prompt
+    assert "Done when:" in request.prompt
+    assert "Do not push or commit" in request.prompt
 
 
 async def test_done_when_unparseable_fails_vertex(tmp_path: Path) -> None:
     bare = _init_bare_repo(tmp_path)
-    executor = FakeExecutor(diff="", diff_files=[])
+    # Use a valid, applyable diff so we reach the done_when check.
+    diff = (
+        "diff --git a/README.md b/README.md\n"
+        "--- a/README.md\n"
+        "+++ b/README.md\n"
+        "@@ -1 +1,2 @@\n"
+        " # base\n"
+        "+junk\n"
+    )
+    executor = FakeExecutor(diff=diff, diff_files=["README.md"])
     vertex = {
         "id": 2,
         "name": "broken",
         "done_when": "junk",
         "paths_allow": ["*.md"],
-        "prompt": "do something",
     }
     plane = FakeControlPlane(vertices=[vertex])
     settings = _settings(tmp_path, str(bare))
@@ -319,9 +336,12 @@ async def test_done_when_unparseable_fails_vertex(tmp_path: Path) -> None:
 
 async def test_paths_violation_fails_vertex(tmp_path: Path) -> None:
     bare = _init_bare_repo(tmp_path)
+    # Valid new-file diff; the path is outside the allowed scope.
     diff = (
         "diff --git a/secrets.env b/secrets.env\n"
-        "--- a/secrets.env\n"
+        "new file mode 100644\n"
+        "index 0000000..e69de29\n"
+        "--- /dev/null\n"
         "+++ b/secrets.env\n"
         "@@ -0,0 +1 @@\n"
         "+leak\n"
@@ -332,7 +352,6 @@ async def test_paths_violation_fails_vertex(tmp_path: Path) -> None:
         "name": "leaker",
         "done_when": json.dumps({"checks": [{"type": "files_exist", "paths": ["README.md"]}]}),
         "paths_allow": ["src/**"],
-        "prompt": "do something",
     }
     plane = FakeControlPlane(vertices=[vertex])
     settings = _settings(tmp_path, str(bare))
@@ -361,7 +380,6 @@ async def test_heartbeat_conflict_aborts_without_complete(tmp_path: Path) -> Non
         "name": "abandoned",
         "done_when": json.dumps({"checks": [{"type": "files_exist", "paths": ["README.md"]}]}),
         "paths_allow": ["*.md"],
-        "prompt": "do something",
     }
     plane = FakeControlPlane(vertices=[vertex], heartbeat_409_after=1)
     settings = _settings(tmp_path, str(bare))
@@ -396,7 +414,6 @@ async def test_executor_exception_fails_vertex(tmp_path: Path) -> None:
         "name": "exploder",
         "done_when": json.dumps({"checks": [{"type": "files_exist", "paths": ["README.md"]}]}),
         "paths_allow": ["*.md"],
-        "prompt": "do something",
     }
     plane = FakeControlPlane(vertices=[vertex])
     settings = _settings(tmp_path, str(bare))
@@ -416,15 +433,14 @@ async def test_executor_exception_fails_vertex(tmp_path: Path) -> None:
     assert len(plane.complete_calls) == 0
 
 
-async def test_diff_unparseable_fails_vertex(tmp_path: Path) -> None:
+async def test_empty_diff_fails_vertex_and_counts_attempts(tmp_path: Path) -> None:
     bare = _init_bare_repo(tmp_path)
-    executor = FakeExecutor(diff="bogus\n+line\n", diff_files=[])
+    executor = FakeExecutor(diff="", diff_files=[])
     vertex = {
-        "id": 7,
-        "name": "garbage-diff",
+        "id": 6,
+        "name": "no-changes",
         "done_when": json.dumps({"checks": [{"type": "files_exist", "paths": ["README.md"]}]}),
         "paths_allow": ["*.md"],
-        "prompt": "do something",
     }
     plane = FakeControlPlane(vertices=[vertex])
     settings = _settings(tmp_path, str(bare))
@@ -439,9 +455,58 @@ async def test_diff_unparseable_fails_vertex(tmp_path: Path) -> None:
 
     assert len(plane.fail_calls) == 1
     vertex_id, body = plane.fail_calls[0]
-    assert vertex_id == 7
-    assert "diff_unparseable" in body["reason"]
+    assert vertex_id == 6
+    assert body["reason"] == "empty_diff"
     assert len(plane.complete_calls) == 0
+
+
+async def test_max_attempts_guard_blacklists_vertex(tmp_path: Path) -> None:
+    bare = _init_bare_repo(tmp_path)
+    executor = FakeExecutor(diff="", diff_files=[])
+    vertex = {
+        "id": 8,
+        "name": "tired",
+        "done_when": json.dumps({"checks": [{"type": "files_exist", "paths": ["README.md"]}]}),
+        "paths_allow": ["*.md"],
+        "attempts": 3,
+    }
+    # The vertex is returned twice; the worker must fail it once and ignore it forever.
+    plane = FakeControlPlane(vertices=[vertex, vertex])
+    settings = _settings(tmp_path, str(bare))
+    stop = asyncio.Event()
+
+    transport = httpx.MockTransport(plane.handler)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
+        task = asyncio.create_task(worker_loop(settings, executor, http=http, stop=stop))
+        await asyncio.wait_for(plane.fail_called.wait(), timeout=2.0)
+        await asyncio.sleep(0.15)
+        stop.set()
+        await asyncio.wait_for(task, timeout=2.0)
+
+    assert len(plane.fail_calls) == 1
+    vertex_id, body = plane.fail_calls[0]
+    assert vertex_id == 8
+    assert body["reason"] == "max_attempts_exceeded"
+    assert plane.claim_calls >= 2
+
+
+async def test_claim_error_is_resilient(tmp_path: Path) -> None:
+    bare = _init_bare_repo(tmp_path)
+    executor = FakeExecutor()
+    plane = FakeControlPlane(vertices=[], claim_errors=2)
+    settings = _settings(tmp_path, str(bare))
+    stop = asyncio.Event()
+
+    transport = httpx.MockTransport(plane.handler)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
+        task = asyncio.create_task(worker_loop(settings, executor, http=http, stop=stop))
+        await asyncio.sleep(0.15)
+        assert plane.claim_calls >= 2
+        assert len(plane.complete_calls) == 0
+        assert len(plane.fail_calls) == 0
+        assert any(call.get("action") == "claim_error" for call in plane.audit_calls)
+        stop.set()
+        await asyncio.wait_for(task, timeout=2.0)
 
 
 async def test_empty_claim_sleeps(tmp_path: Path) -> None:
@@ -463,3 +528,16 @@ async def test_empty_claim_sleeps(tmp_path: Path) -> None:
 
     assert len(plane.complete_calls) == 0
     assert len(plane.fail_calls) == 0
+
+
+async def test_build_vertex_prompt_uses_name_scope_and_done_when() -> None:
+    vertex = {
+        "name": "add-feature",
+        "paths_allow": ["src/**", "tests/**"],
+        "done_when": json.dumps({"checks": [{"type": "cmd", "run": "pytest"}]}),
+    }
+    prompt = build_vertex_prompt(vertex)
+    assert "Task: add-feature" in prompt
+    assert "Allowed paths: src/**, tests/**" in prompt
+    assert '"checks"' in prompt
+    assert "Do not push or commit" in prompt

@@ -26,8 +26,10 @@ from agent_runtime.gitops import (
     AGENT_RUNTIME_NAME,
     GitOperationError,
     _reject_credentialed_url,
+    apply_diff,
     ensure_repo,
     push_diff,
+    push_head,
 )
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -272,6 +274,61 @@ def test_token_never_leaks_into_exception_text(tmp_path: Path) -> None:
     assert secret not in str(exc_info.value)
     # and it never reached the on-disk remote either
     assert secret not in (repo_dir / ".git" / "config").read_text(encoding="utf-8")
+
+
+def test_apply_diff_stages_changes_without_commit_or_branch(tmp_path: Path) -> None:
+    remote_url, base_sha = _bare_remote_with_main(tmp_path)
+    repo_dir = ensure_repo(tmp_path / "ws", remote_url, "main")
+
+    (repo_dir / "README.txt").write_text("one\ntwo\nthree\n", encoding="utf-8")
+    diff = _git(["diff", "--", "README.txt"], repo_dir)
+    _git(["checkout", "--", "README.txt"], repo_dir)
+    assert not _git(["status", "--porcelain"], repo_dir).strip()
+
+    apply_diff(repo_dir, diff)
+
+    # changes are staged, no commit/branch yet
+    status = _git(["status", "--porcelain"], repo_dir).strip()
+    assert status.startswith("M  README.txt")
+    assert _git(["rev-parse", "HEAD"], repo_dir).strip() == base_sha
+    assert "agent/vertex-apply" not in _git(["branch", "--list"], repo_dir)
+
+
+def test_push_head_commits_and_pushes_staged_changes(tmp_path: Path) -> None:
+    remote_url, base_sha = _bare_remote_with_main(tmp_path)
+    repo_dir = ensure_repo(tmp_path / "ws", remote_url, "main")
+
+    (repo_dir / "README.txt").write_text("one\ntwo\nthree\n", encoding="utf-8")
+    _git(["add", "README.txt"], repo_dir)
+
+    sha = push_head(repo_dir, "agent/vertex-head", message="Add three")
+
+    assert _SHA_RE.match(sha)
+    assert sha == _git(["rev-parse", "HEAD"], repo_dir).strip()
+    assert _git(["rev-parse", "HEAD^"], repo_dir).strip() == base_sha
+
+    branch_dir = _clone_branch(remote_url, "agent/vertex-head", tmp_path / "check")
+    assert (branch_dir / "README.txt").read_text(encoding="utf-8") == "one\ntwo\nthree\n"
+
+
+def test_apply_diff_rejects_empty_diff(tmp_path: Path) -> None:
+    remote_url, base_sha = _bare_remote_with_main(tmp_path)
+    repo_dir = ensure_repo(tmp_path / "ws", remote_url, "main")
+
+    with pytest.raises(GitOperationError):
+        apply_diff(repo_dir, "")
+
+    assert _git(["rev-parse", "HEAD"], repo_dir).strip() == base_sha
+
+
+def test_push_head_rejects_nothing_staged(tmp_path: Path) -> None:
+    remote_url, base_sha = _bare_remote_with_main(tmp_path)
+    repo_dir = ensure_repo(tmp_path / "ws", remote_url, "main")
+
+    with pytest.raises(GitOperationError):
+        push_head(repo_dir, "agent/vertex-empty", message="no changes")
+
+    assert _git(["rev-parse", "HEAD"], repo_dir).strip() == base_sha
 
 
 def test_credentialed_repo_url_is_rejected(tmp_path: Path) -> None:

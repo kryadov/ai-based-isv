@@ -152,6 +152,7 @@ class OpencodeExecutor:
         port: int = OPENCODE_PORT,
         transport: httpx.AsyncBaseTransport | None = None,
         docker_runner: _DockerRunner | None = None,
+        evidence_root: Path | None = None,
     ) -> None:
         self._base_url = base_url
         self._workspace = workspace
@@ -161,6 +162,7 @@ class OpencodeExecutor:
         self._port = port
         self._transport = transport
         self._docker_runner = docker_runner
+        self._evidence_root = evidence_root or workspace
         self._serve: DockerServe | None = None
 
     def build_prompt(self, request: ExecutionRequest) -> str:
@@ -177,7 +179,7 @@ class OpencodeExecutor:
 
     async def start(self, request: ExecutionRequest) -> ExecutionSession:
         """Begin execution: log, manifest, harness session, prompt."""
-        evidence_dir = _evidence_dir(self._workspace, request)
+        evidence_dir = _evidence_dir(self._evidence_root, request)
         evidence_dir.mkdir(parents=True, exist_ok=True)
         session_log_path = evidence_dir / "session_log.ndjson"
         manifest_path = evidence_dir / "manifest.json"
