@@ -55,3 +55,4 @@ infra/env.local.yaml
 infra/.vault-unseal-keys.json
 infra/.vault-unseal-keys.json
 infra/.vault-root-token
+agent-api.db
