@@ -131,3 +131,32 @@ def test_malformed_committed_line_still_raises(tmp_path: Path) -> None:
     # iter_type reads through the same iterator — fail-closed there too
     with pytest.raises(json.JSONDecodeError):
         list(SessionLog(path).iter_type("prompt"))
+
+
+def test_read_survives_tail_torn_inside_multibyte_char(tmp_path: Path) -> None:
+    """A crash mid multi-byte character must not raise before the torn-tail guard:
+    uncommitted bytes are never decoded, reads stop at the last committed newline."""
+    path = tmp_path / _FILE
+    log = SessionLog(path)
+    log.append("prompt", {"text": "café ☕"})
+    fragment = '{"ts": "2026-11-09T10:00:00+00:00", "seq": 2, "payload": {"x": "caf' + "é"
+    with path.open("ab") as handle:
+        handle.write(fragment.encode("utf-8")[:-1])  # ends on 0xc3 — inside the 'é'
+
+    reopened = SessionLog(path)  # construction must not raise UnicodeDecodeError
+    records = reopened.read_all()
+    assert len(records) == 1
+    assert records[0]["payload"] == {"text": "café ☕"}  # committed multi-byte decodes fine
+
+    reopened.append("harness_event", {"n": 2})  # the recovery path stays reachable
+    assert [record["seq"] for record in reopened.read_all()] == [1, 2]
+
+
+def test_invalid_utf8_in_committed_line_still_raises(tmp_path: Path) -> None:
+    """Strict decode is kept for committed records: invalid bytes are corruption,
+    not a torn tail — they must raise, never be silently replaced."""
+    path = tmp_path / _FILE
+    path.write_bytes(b'{"seq": 1}\n\x80\x81 broken bytes\n{"seq": 2}\n')
+
+    with pytest.raises(UnicodeDecodeError):
+        SessionLog(path)

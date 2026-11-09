@@ -8,10 +8,11 @@ written, so bytes after the last newline belong to an unfinished write.
 Crash policy (pinned by tests):
 
 * a torn tail (a final line without a trailing newline) is uncommitted — ``read_all``
-  and ``iter_type`` stop before it without raising, a reopened log numbers its next
-  record from the last committed ``seq``, and ``append`` truncates those bytes before
-  writing, so a crash fragment can neither merge with (and destroy) the next record
-  nor linger as corruption in the committed prefix;
+  and ``iter_type`` stop before it without raising even when the crash cut a record
+  mid multi-byte character (uncommitted bytes are never decoded), a reopened log
+  numbers its next record from the last committed ``seq``, and ``append`` truncates
+  those bytes before writing, so a crash fragment can neither merge with (and
+  destroy) the next record nor linger as corruption in the committed prefix;
 * a malformed *committed* line (newline-terminated, or mid-file) is a hard error —
   the log is evidence, silently dropping or repairing corruption in committed
   records would hide it.
@@ -67,9 +68,12 @@ class SessionLog:
     def _records(self) -> Iterator[dict[str, Any]]:
         if not self._path.exists():
             return
-        with self._path.open(encoding="utf-8") as handle:
+        # Binary framing: the uncommitted tail is never decoded, so a crash that cut
+        # a record mid multi-byte character cannot raise before the torn-tail guard;
+        # committed lines are decoded strictly — invalid bytes there are corruption.
+        with self._path.open("rb") as handle:
             for line in handle:
-                if not line.endswith("\n"):
+                if not line.endswith(b"\n"):
                     # Torn tail: bytes of a write that crashed before committing.
                     return
                 if line.strip():
@@ -84,13 +88,15 @@ class SessionLog:
         only on the first append after a crash.
         """
         try:
-            with self._path.open("rb") as handle:
-                handle.seek(-1, io.SEEK_END)
-                torn = handle.read(1) != b"\n"
-        except OSError:
-            return  # missing or empty file — nothing to recover
-        if not torn:
+            size = self._path.stat().st_size
+        except FileNotFoundError:
             return
+        if size == 0:
+            return
+        with self._path.open("rb") as handle:
+            handle.seek(-1, io.SEEK_END)
+            if handle.read(1) == b"\n":
+                return
         with self._path.open("rb+") as handle:
             data = handle.read()
             handle.seek(data.rfind(b"\n") + 1)
