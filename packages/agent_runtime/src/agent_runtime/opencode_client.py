@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager
 from typing import Any
 
 import httpx
@@ -16,6 +17,79 @@ import httpx
 
 class OpencodeError(RuntimeError):
     """Non-2xx response or unrecoverable protocol error from opencode serve."""
+
+
+_SSE_READ_TIMEOUT_SECONDS = 600.0
+
+
+class _EventStream:
+    """Eagerly-opened async iterator over the global opencode SSE stream.
+
+    The stream is opened when ``_open()`` is awaited, before the caller posts
+    a prompt. This prevents missing terminal events on the non-replaying
+    global ``/api/event`` endpoint.
+    """
+
+    def __init__(self, http: httpx.AsyncClient, session_id: str) -> None:
+        self._http = http
+        self._session_id = session_id
+        self._stream: AbstractAsyncContextManager[httpx.Response] | None = None
+        self._response: httpx.Response | None = None
+        self._line_iterator: AsyncIterator[str] | None = None
+        self._buffer: list[str] = []
+
+    async def _open(self) -> None:
+        self._stream = self._http.stream(
+            "GET",
+            "/api/event",
+            headers={"Accept": "text/event-stream"},
+            timeout=httpx.Timeout(
+                _SSE_READ_TIMEOUT_SECONDS, read=_SSE_READ_TIMEOUT_SECONDS
+            ),
+        )
+        self._response = await self._stream.__aenter__()
+        await _raise_for_status(self._response)
+        self._line_iterator = self._response.aiter_lines().__aiter__()
+
+    def __aiter__(self) -> AsyncIterator[dict[str, Any]]:
+        return self
+
+    async def __anext__(self) -> dict[str, Any]:
+        if self._line_iterator is None:
+            raise OpencodeError("Event stream was not opened")
+
+        while True:
+            try:
+                line = await self._line_iterator.__anext__()
+            except StopAsyncIteration:
+                await self._close()
+                raise
+            except BaseException:
+                await self._close()
+                raise
+
+            if line.startswith(":"):
+                continue
+            if not line:
+                if self._buffer:
+                    payload = "\n".join(self._buffer)
+                    self._buffer = []
+                    try:
+                        event: dict[str, Any] = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    if event.get("data", {}).get("sessionID") == self._session_id:
+                        return event
+                continue
+            if line.startswith("data:"):
+                self._buffer.append(line[len("data:") :].lstrip(" "))
+
+    async def _close(self) -> None:
+        if self._stream is not None:
+            await self._stream.__aexit__(None, None, None)
+            self._stream = None
+            self._response = None
+            self._line_iterator = None
 
 
 class OpencodeClient:
@@ -28,16 +102,25 @@ class OpencodeClient:
     def __init__(self, http: httpx.AsyncClient) -> None:
         self._http = http
 
-    async def create_session(self) -> str:
-        """Create a new session and return its identifier."""
-        response = await self._http.post(
-            "/api/session",
-            json={
-                "model": {"id": "qwen-coder", "providerID": "litellm"},
-                "location": {"directory": "/workspace"},
-            },
-        )
-        self._raise_for_status(response)
+    async def create_session(
+        self,
+        *,
+        model: dict[str, str] | None = None,
+        directory: str | None = None,
+    ) -> str:
+        """Create a new session and return its identifier.
+
+        By default the request body is empty, so the server uses the model and
+        workspace configured in its ``opencode.jsonc``. Pass ``model`` and/or
+        ``directory`` only when you need to override those defaults.
+        """
+        body: dict[str, Any] = {}
+        if model is not None:
+            body["model"] = model
+        if directory is not None:
+            body["location"] = {"directory": directory}
+        response = await self._http.post("/api/session", json=body or None)
+        await _raise_for_status(response)
         payload = response.json()
         return str(payload["data"]["id"])
 
@@ -47,36 +130,27 @@ class OpencodeClient:
             f"/api/session/{session_id}/prompt",
             json={"text": text},
         )
-        self._raise_for_status(response)
+        await _raise_for_status(response)
 
     async def events(self, session_id: str) -> AsyncIterator[dict[str, Any]]:
-        """Yield SSE events belonging to ``session_id``.
+        """Return an async iterator over SSE events belonging to ``session_id``.
 
-        The ``/api/event`` stream is global, so the client filters by
-        ``data.sessionID``. Unknown event types are passed through; malformed
-        lines/comments are tolerated.
+        The ``/api/event`` stream is global and does not replay events. The
+        stream is opened *before* this coroutine returns, so callers must
+        await this method before calling ``send_prompt``:
+
+            events = await client.events(session_id)
+            await client.send_prompt(session_id, text)
+            async for event in events:
+                ...
+
+        Unknown event types are passed through; malformed lines and ``:``
+        comments are tolerated. The read timeout is set to 600 seconds to
+        survive long idle periods between events.
         """
-        async with self._http.stream(
-            "GET", "/api/event", headers={"Accept": "text/event-stream"}
-        ) as response:
-            self._raise_for_status(response)
-            buffer: list[str] = []
-            async for line in response.aiter_lines():
-                if line.startswith(":"):
-                    continue
-                if not line:
-                    if buffer:
-                        data = "\n".join(buffer)
-                        buffer = []
-                        try:
-                            event: dict[str, Any] = json.loads(data)
-                        except json.JSONDecodeError:
-                            continue
-                        if event.get("data", {}).get("sessionID") == session_id:
-                            yield event
-                    continue
-                if line.startswith("data:"):
-                    buffer.append(line[len("data:") :].lstrip(" "))
+        stream = _EventStream(self._http, session_id)
+        await stream._open()
+        return stream
 
     async def diff(self, session_id: str) -> str:
         """Return the unified diff text for ``session_id``.
@@ -87,7 +161,7 @@ class OpencodeClient:
         empty string.
         """
         response = await self._http.get(f"/api/session/{session_id}/diff")
-        self._raise_for_status(response)
+        await _raise_for_status(response)
         payload = response.json()
         patches = [
             str(item["patch"])
@@ -96,6 +170,13 @@ class OpencodeClient:
         ]
         return "\n".join(patches)
 
-    def _raise_for_status(self, response: httpx.Response) -> None:
-        if response.status_code >= 400:
-            raise OpencodeError(response.text)
+
+async def _raise_for_status(response: httpx.Response) -> None:
+    """Raise ``OpencodeError`` for non-2xx responses.
+
+    Works for both regular and streaming responses: streaming responses are
+    read into memory before the error message is built.
+    """
+    if response.status_code >= 400:
+        await response.aread()
+        raise OpencodeError(response.text)

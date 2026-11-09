@@ -127,12 +127,20 @@ async def test_create_session_returns_id(client: OpencodeClient) -> None:
     assert session_id == "ses_test"
 
 
+async def test_create_session_with_overrides(client: OpencodeClient) -> None:
+    session_id = await client.create_session(
+        model={"id": "custom-model", "providerID": "custom-provider"},
+        directory="/custom/workspace",
+    )
+    assert session_id == "ses_test"
+
+
 async def test_send_prompt_posts_message(client: OpencodeClient) -> None:
     await client.send_prompt("ses_test", "hello")
 
 
 async def test_events_parses_sse_stream(client: OpencodeClient) -> None:
-    events = [event async for event in client.events("ses_test")]
+    events = [event async for event in (await client.events("ses_test"))]
 
     assert len(events) == 2
     assert [event["type"] for event in events] == [
@@ -156,3 +164,42 @@ async def test_http_error_raises_opencode_error(client: OpencodeClient) -> None:
         await client.send_prompt("ses_bad", "hello")
 
     assert "InvalidRequestError" in str(exc_info.value)
+
+
+async def test_streaming_http_error_raises_opencode_error() -> None:
+    """Regression: non-2xx on the SSE endpoint must raise OpencodeError.
+
+    MockTransport pre-populates response content, so it does not reproduce the
+    ``httpx.ResponseNotRead`` behaviour that occurs on a real streaming
+    response. This transport returns a response with an unread stream body.
+    """
+
+    class _UnreadStream(httpx.AsyncByteStream):
+        def __init__(self, content: bytes) -> None:
+            self._content = content
+
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield self._content
+
+        async def aclose(self) -> None:
+            pass
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/event" and request.method == "GET":
+            return httpx.Response(
+                401,
+                stream=_UnreadStream(b'{"error":"unauthorized"}'),
+                headers={"content-type": "application/json"},
+            )
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(
+        base_url="http://localhost:8080", transport=transport
+    ) as http:
+        client = OpencodeClient(http)
+        with pytest.raises(OpencodeError) as exc_info:
+            async for _event in (await client.events("ses_test")):
+                pass
+
+    assert "unauthorized" in str(exc_info.value)
