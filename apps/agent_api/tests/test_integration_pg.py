@@ -7,11 +7,11 @@ Runs only if M3_INTEGRATION_PG_URL is set (opt-in), e.g.:
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
 
 import pytest
-from httpx2 import ASGITransport, AsyncClient
-
 from agent_api.main import create_app
+from httpx2 import ASGITransport, AsyncClient
 
 PG_URL = os.environ.get("M3_INTEGRATION_PG_URL", "")
 
@@ -24,10 +24,9 @@ async def client() -> AsyncIterator[AsyncClient]:
 
     app = create_app()
     app.state.override_database_url = PG_URL  # read in lifespan
-    async with app.router.lifespan_context(app):
-        async with AsyncClient(transport=ASGITransport(app=app),
-                               base_url="http://test") as c:
-            yield c
+    async with app.router.lifespan_context(app), AsyncClient(transport=ASGITransport(app=app),
+                           base_url="http://test") as c:
+        yield c
     with contextlib.suppress(Exception):
         pass
 
