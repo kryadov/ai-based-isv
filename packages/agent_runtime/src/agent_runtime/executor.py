@@ -11,9 +11,12 @@ from collections.abc import AsyncIterator
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from agent_runtime.session_log import SessionLog
 
 
 class ExecutionStatus(StrEnum):
@@ -71,6 +74,9 @@ class ExecutionSession(Protocol):
 
     @property
     def result(self) -> ExecutionResult | None: ...
+
+    @property
+    def session_log(self) -> SessionLog: ...
 
 
 @runtime_checkable

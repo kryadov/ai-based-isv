@@ -14,6 +14,7 @@ from agent_runtime.executor import (
     ExecutionStatus,
     Executor,
 )
+from agent_runtime.session_log import SessionLog
 
 _FIXED_TS = datetime(2026, 11, 9, 12, 0, 0, tzinfo=UTC)
 _FIXED_EVENT = ExecutionEvent(ts=_FIXED_TS, type="session.text.delta", payload={"delta": "hi"})
@@ -32,6 +33,7 @@ class FakeSession:
 
     def __init__(self) -> None:
         self.stopped = False
+        self._session_log = SessionLog(_FIXED_RESULT.session_log_path)
 
     async def events(self) -> AsyncIterator[ExecutionEvent]:
         yield _FIXED_EVENT
@@ -51,6 +53,10 @@ class FakeSession:
     @property
     def result(self) -> ExecutionResult | None:
         return _FIXED_RESULT
+
+    @property
+    def session_log(self) -> SessionLog:
+        return self._session_log
 
 
 class FakeExecutor:
