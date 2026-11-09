@@ -13,6 +13,7 @@
 
 ## Other
 
+- [ ] **Per-kind scaffolds + tutorials** (spec §13.1.5): bootstrapper repo templates per project kind (product/service/tool/assistant — code scaffold, CI, evals+prompt VET for assistants) + step-by-step tutorials `docs/tutorials/onboard-<kind>.md`. Templates: M4+ (when the executor builds), tutorials right after.
 - [ ] Docs language sync: README/INSTALL/TODO are EN-base ✓ with `.ru.md` mirrors; the design docs (spec, milestone plans) are still Russian — translate them to EN with `.ru.md` mirrors as backlog.
 - [ ] OpenProject password/basic-auth login broken (v17-slim): rails `check_password?` = true, but web login 422 and API basic 401. Investigate (session store/memcached? Enterprise flags?) or add an OIDC plugin; until then the v0 tracker is Gitea Issues (TaskSource poller → M4 MCP task-source).
 - [x] ~~Vault dev-mode → постоянный backend~~ ✅ 2026-11-08: **OpenBao** (opensource-форк Vault, лицензия без BSL) на raft-хранении в PVC; бутстреппер auto-init/unseal (ключи в `infra/.vault-unseal-keys.json`, gitignored). Апгрейд-путь: raft из 3 узлов / KMS auto-unseal — при выходе за ноутбук.

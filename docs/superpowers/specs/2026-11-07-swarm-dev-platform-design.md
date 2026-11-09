@@ -266,6 +266,7 @@ docs/              архитектура, ADR, спеки
    - Argo CD AppProject destinations (prod/staging);
    - регистрация в **реестре проектов** (v0: файл `infra/projects.yaml` — тип, владелец, уровень зрелости, статус; M10: Projects tab).
 4. **Первый инкремент**: seed-задачи в трекер (каркас, CI, hello-endpoint, тесты) → полный конвейер (§7.2) → первый релиз в prod (канарейка для продуктов/сервисов) → маркер «проект жив» в реестре.
+5. **Per-kind шаблоны и обучающие поставки**: бутстреппер создаёт репо не из пустого автосначала, а из шаблона типа (product/service/tool/assistant) — каркас кода, CI, tests, (для assistant) eval-сьют и prompt-файлы в VET. К каждому типу — **demo + tutorial** (`docs/tutorials/onboard-product.md`, `onboard-service.md`, `onboard-tool.md`, `onboard-assistant.md`): пошаговое заведение собственными руками, различия профилей, примеры. Поставка: шаблоны — M4+ (когда executor реально строит), tutorials — сразу после per-kind шаблонов (док-задача, приоритет: первая для нового человека).
 
 ### 13.2 Разработка
 

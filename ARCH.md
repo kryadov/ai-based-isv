@@ -11,7 +11,7 @@ and humans holding the approval gates.
 
 ```mermaid
 flowchart LR
-    TRK[Tracker: task created] --> API[Control plane\nagent_api]
+    TRK["Tracker: task created] --> API[Control plane\nagent_api"]
     API --> SPEC[Planning agent\nspec stages + self-eval]
     SPEC -->|HITL gate 1: approve plan| HUMAN((Human))
     HUMAN --> SW[Swarm execution:\nexecutor agents in sandboxes]
@@ -22,7 +22,7 @@ flowchart LR
     HUMAN --> CD[Argo Rollouts\nCanary 5-25-50-100%]
     CD -->|analysis OK| PROD((Production))
     CD -->|degradation| RB[Auto rollback]
-    MEM[(Org memory:\nlessons, reuse, constitution)] -.-> SPEC
+    MEM[("Org memory:\nlessons, reuse, constitution")] -.-> SPEC
     MEM -.-> SW
     SW -->|write-back| MEM
 ```
@@ -35,22 +35,22 @@ Everything provisions from scratch with `uv run org-bootstrap apply` (idempotent
 flowchart TB
     subgraph k3d["k3d cluster swarm-lab (k3s v1.35)"]
         subgraph platform["namespace: platform"]
-            OB[OpenBao\nraft on PVC\nauto-init/unseal] 
-            PG[Postgres 17 + pgvector\nCNPG operator\ndbs: gitea, openproject, litellm, swarm]
-            GT[Gitea\ngit + PR + issues + OCI registry\nNodePort 30080]
-            RUN[act_runner\ndind, PVC identity]
-            AR[Argo CD\nNodePort 30081]
-            KS[kube-prometheus-stack\nGrafana 30082 / Prometheus]
-            LK[Loki + Alloy\ndaemonset: pod logs]
-            OP[OpenProject\ntracker UI 30083\nauth broken — see TODO]
-            LL[LiteLLM gateway\n30084 → host Ollama]
+            OB["OpenBao\nraft on PVC\nauto-init/unseal"]
+            PG["Postgres 17 + pgvector\nCNPG operator\ndbs: gitea, openproject, litellm, swarm"]
+            GT["Gitea\ngit + PR + issues + OCI registry\nNodePort 30080"]
+            RUN["act_runner\ndind, PVC identity"]
+            AR["Argo CD\nNodePort 30081"]
+            KS["kube-prometheus-stack\nGrafana 30082 / Prometheus"]
+            LK["Loki + Alloy\ndaemonset: pod logs"]
+            OP["OpenProject\ntracker UI 30083\nauth broken — see TODO"]
+            LL["LiteLLM gateway\n30084 → host Ollama"]
         end
         subgraph prod["namespace: prod"]
-            PODINFO[podinfo demo\nGitOps-synced, debug logs]
+            PODINFO["podinfo demo\nGitOps-synced, debug logs"]
         end
-        AG[agent workers\n(M3+: claim vertices)]
+        AG["agent workers\n(M3+: claim vertices)"]
     end
-    OLL[(Host Ollama\nqwen2.5-coder:7b\ncolima VM 6CPU/24GB)]
+    OLL["(Host Ollama\nqwen2.5-coder:7b\ncolima VM 6CPU/24GB)"]
     LL -->|hostAliases 192.168.5.2| OLL
     GH["GitHub (public)\ncanonical repo of this platform + CI"] -.-> AR
     TRK(("Tracker\n(task in)")) -.-> API
@@ -102,19 +102,43 @@ not generation. Merge queue + backpressure throttle the swarm to integration spe
 - Vertex contract: `{id, deps, paths_allow, paths_avoid, done_when, deliverable}`.
   `done_when` is validated by code, not by an LLM refusing to fail.
 
+### 4a. Agent roles catalog
+
+Implemented via the `identities` registry (M3): a role maps to `allowed_sections`
+(gitea, ci, memory, litellm, deploy...) and to which stage of the pipeline the agent is
+admitted. Humans hold separate accounts with HITL rights only.
+
+| Role | Type | Responsibility | Pipeline stage | Tools/access |
+|---|---|---|---|---|
+| **planner** | specialist | task intake → spec stages, ask-questions, reuse lookup, seed tasks | before coding | tracker, memory |
+| **architect** | specialist | review spec/design, invariants, reuse proposals, drift checks | spec + review | git read, memory |
+| **developer** | executor | implement one vertex (code + local tests), respond to bot-review findings | execution (open-code harness) | git, gitea, ci, litellm |
+| **tester** | specialist/executor | write/maintain tests, flaky hunter, coverage gaps, release-candidate acceptance runs | execution + release | git, ci, evals |
+| **reviewer (bot)** | light agent | first-pass code review on PRs, dedup findings, severity labels | gates | gitea, ci read |
+| **security** | specialist | SAST/dependency/secret scanning review, threat modeling, safe-harness audit | gates + automations | ci read, scanners |
+| **judge** | light agent | completion judgment: `done_when` evidence check, session-log sanity — code validates, judge double-checks | per vertex + run | memory read |
+| **support** | executor | support tickets, post-mortem drafts, regression reproductions | support loop | tracker, git, observability |
+| **maintenance (janitor)** | executor | sweeps: dead code, orphaned tests, docs/OpenAPI drift, memory hygiene | automations | git, ci |
+| **release** | executor | distribution builds: dist/archive, Docker images, checksums+SBOM (external projects, §13.5) | release channel | gitea registry, ci |
+
+Automations reuse these roles with triggers (vuln-scan → security; dep-updates →
+developer; log-analysis → support; feedback-ingest → planner). Humans: owner (HITL
+decisions, memory promotion), champion (per-project config review), on-call (canary
+alerts).
+
 ## 5. Memory (spec §7.4, ADR-0003)
 
 ```mermaid
 flowchart TB
     subgraph project["Project memory"]
-        W[working: current task state]
-        E[episodic: what was tried/failed]
-        S1[semantic: in-repo AGENTS.md/.specs]
+        W["working: current task state"]
+        E["episodic: what was tried/failed"]
+        S1["semantic: in-repo AGENTS.md/.specs"]
     end
     subgraph org["Org memory (git repo, PR-flow)"]
-        CON[constitution: invariants, policies]
-        RC[reuse catalog: components + versions]
-        LE[lessons: distilled from incidents/episodes]
+        CON["constitution: invariants, policies"]
+        RC["reuse catalog: components + versions"]
+        LE["lessons: distilled from incidents/episodes"]
     end
     E -->|consolidation + HITL promotion PR| LE
     LE -.->|retrieval slice at task start| W
