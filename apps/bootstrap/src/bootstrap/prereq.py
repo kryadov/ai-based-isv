@@ -1,7 +1,7 @@
 """Prerequisites detection for the organization bootstrapper.
 
-Проверяет наличие инструментов L0-стенда и возвращает структурированный
-отчёт (ok/missing + путь/версия). Никаких side-effect'ов.
+Checks the presence of L0-stand tools and returns a structured
+report (ok/missing + path/version). No side effects.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ CHECKS: Final[tuple[str, ...]] = ("docker", "k3d", "helm", "kubectl", "uv", "gh"
 
 @dataclass(frozen=True)
 class CheckResult:
-    """Результат проверки одного инструмента."""
+    """Result of a single tool check."""
 
     name: str
     found: bool
@@ -42,7 +42,7 @@ def _version_of(binary: str) -> str | None:
 
 
 def check_all(tools: tuple[str, ...] = CHECKS) -> tuple[CheckResult, ...]:
-    """Проверить все инструменты; вернуть результаты в порядке `tools`."""
+    """Check all tools; return results in `tools` order."""
     results: list[CheckResult] = []
     for name in tools:
         version = _version_of(name)

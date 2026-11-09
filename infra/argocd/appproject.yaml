@@ -1,4 +1,4 @@
-# AppProject — граница окружений (спека §7.2.6): источники и destinations white-list.
+# AppProject — environment boundary (spec §7.2.6): sources and destinations white-list.
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:

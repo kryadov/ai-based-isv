@@ -1,4 +1,4 @@
-"""Gitea API-клиент для засева demo-репо (stdlib urllib; токен из OpenBao)."""
+"""Gitea API client for demo-repo seeding (stdlib urllib; token from OpenBao)."""
 
 from __future__ import annotations
 
@@ -10,13 +10,13 @@ import urllib.request
 REPO_NAME = "isv-product"
 README_CONTENT = """# isv-product
 
-Demo-проект организации (засеян бутстреппером).
-Реальный код появляется по задачам из трекера через конвейер платформы.
+Organization demo project (seeded by the bootstrapper).
+Real code appears via tracker tasks through the platform pipeline.
 """
 
 
 class GiteaClient:
-    """Минимальный клиент Gitea API v1 (только нужное бутстрепперу)."""
+    """Minimal Gitea API v1 client (only what the bootstrapper needs)."""
 
     def __init__(self, base_url: str, token: str, owner: str) -> None:
         self.base_url = base_url.rstrip("/")
@@ -55,7 +55,7 @@ class GiteaClient:
         return code == 200
 
     def create_repo(self, repo: str, private: bool = True) -> bool:
-        """Создать репо с auto-init; True если создан, False если уже существует."""
+        """Create a repo with auto-init; True if created, False if it already exists."""
         code, _ = self._request(
             "POST",
             "/user/repos",
@@ -65,16 +65,16 @@ class GiteaClient:
             return True
         if code == 409:  # already exists
             return False
-        raise RuntimeError(f"gitea: создание репо {repo} → HTTP {code}")
+        raise RuntimeError(f"gitea: repo create {repo} → HTTP {code}")
 
     def ensure_repo(self, repo: str = REPO_NAME) -> str:
-        """Гарантировать наличие репо; вернуть статус 'created' | 'exists'."""
+        """Ensure the repo exists; return status 'created' | 'exists'."""
         if self.repo_exists(repo):
             return "exists"
         return "created" if self.create_repo(repo) else "exists"
 
     def put_file(self, repo: str, path: str, content: str) -> None:
-        """Создать/обновить файл в репо (contents API, base64)."""
+        """Create/update a file in the repo (contents API, base64)."""
         b64 = base64.b64encode(content.encode()).decode()
         sha = ""
         code, body = self._request("GET", f"/repos/{self.owner}/{repo}/contents/{path}")

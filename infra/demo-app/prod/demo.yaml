@@ -1,5 +1,5 @@
-# Demo-приложение для приёмки GitOps+метрик (M2b): podinfo с /metrics.
-# Деплоится Argo CD (Application infra/argocd/application-demo.yaml) в namespace prod.
+# Demo app for GitOps+metrics acceptance (M2b): podinfo with /metrics.
+# Deployed by Argo CD (Application infra/argocd/application-demo.yaml) into namespace prod.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

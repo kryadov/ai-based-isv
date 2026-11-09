@@ -1,5 +1,5 @@
-# Внешняя БД: CNPG Cluster postgres-platform (apply поверх values.yaml).
-# Пароль передаётся бутстреппером через --set gitea.config.database.PASSWD (читается из secret postgres-platform-app).
+# External DB: CNPG Cluster postgres-platform (apply on top of values.yaml).
+# The password is passed by the bootstrapper via --set gitea.config.database.PASSWD (read from secret postgres-platform-app).
 gitea:
   config:
     database:

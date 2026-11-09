@@ -1,33 +1,63 @@
 # AI-Native ISV — Swarm-платформа агентской разработки
 
-Внутренняя платформа агентской разработки: **вход** — задача в трекере, **выход** — изменение в production (тесты всех уровней, security, code review, канареечный выкат). Сворм-оркестрация агентов (координаторы → специалисты → исполнители в изолированных песочницах), память проекта и организации.
+Организация, в которой **рои AI-агентов разрабатывают, внедряют и поддерживают ПО**.
+Цель организации — полный жизненный цикл проектов — продуктов, внутренних сервисов,
+тулов и ассистентов: **заведение → разработка → внедрение → поддержка** (спека §13).
+
+Конкретно это значит:
+
+- **Вход — задача в трекере.** Выход — изменение в production: тесты всех уровней,
+  security-сканы, code review, канареечный выкат.
+- **Сворм-исполнение**: координатор планирует граф задач; специалисты (архитектура,
+  security, тесты) ревьюят; исполнители реализуют вершины в изолированных k3s-песочницах.
+  На участок кода — один писатель; ограничение масштаба — пропускная способность
+  проверки, а не генерации.
+- **Gates везде**: CI без обходных путей, бот-ревью + human review, evidence pack
+  к каждому merge, детерминированный канареечный анализ.
+- **Память организации**: уроки, reuse-каталог и «конституция» общие для несвязанных
+  проектов; project memory — у каждого репо.
+- **Automations (регулярные workflow)**: сканы уязвимостей, обновления зависимостей,
+  анализ логов, обработка фидбека кастомеров — тот же swarm-движок, триггеры
+  расписание/событие, результаты — в inbox человека на решение.
 
 > English version: [README.md](README.md)
 
-## Документация
+## Текущее состояние
 
-| Файл | Что это |
-|---|---|
-| [INSTALL.ru.md](INSTALL.ru.md) | Установка: prerequisites, dev setup, L0 bootstrap |
-| [AGENTS.md](AGENTS.md) | Правила работы агентов (Superpowers — мандат) |
-| [docs/superpowers/specs/2026-11-07-swarm-dev-platform-design.md](docs/superpowers/specs/2026-11-07-swarm-dev-platform-design.md) | Полный дизайн платформы |
-| [docs/adr/](docs/adr/) | Архитектурные решения (стек, Executor, память) |
-| [docs/superpowers/plans/](docs/superpowers/plans/) | Планы инкрементов (M1, M2a, …) |
-| [TODO.ru.md](TODO.ru.md) | Дорожная карта / обратные связи |
+**Фундамент L0 жив и проверен на одном ноутбуке** (k3d/k3s): OpenBao,
+Postgres+pgvector, Gitea (+act_runner, трекер v0 через Issues), OpenProject,
+Argo CD, Prometheus/Grafana, Loki+Alloy, LiteLLM-шлюз над Ollama — разворачивается
+с нуля одной идемпотентной командой, четыре end-to-end acceptance-флоу PASS.
+Авторитетный статус и следующие майлстоуны — [STATE.md](STATE.md).
 
 ## Слои
 
-- **L0** — инфраструктура организации как код (`infra/`): Gitea, OpenProject, Vault, Postgres, Argo CD, LiteLLM, наблюдаемость (Prometheus/Grafana/Loki). Разворачивается `infra/bootstrap.sh` на чистой машине.
-- **L1** — платформа (`packages/`, `apps/agent_api`): swarm-оркестратор, память, quality gates, evidence pack.
-- **L2** — сквозная доставка (`apps/isv_product` — demo-проект).
+| Слой | Что | Где |
+|---|---|---|
+| **L0** | инфраструктура организации как код: Gitea, OpenProject, OpenBao, Postgres, Argo CD, LiteLLM, наблюдаемость | `infra/` + `apps/bootstrap` |
+| **L1** | платформа агентов: swarm control plane, память, quality gates, evidence pack | `packages/`, `apps/agent_api` |
+| **L2** | сквозная доставка: задача из трекера → prod | конвейер, целевые проекты |
 
-## Быстрые команды
+## Как запустить (dev)
 
 ```bash
-uv sync --all-packages      # установка окружения
-uv run ruff check .         # линт
-uv run mypy packages apps   # строгая типизация
-uv run pytest               # тесты
+git clone https://github.com/kryadov/ai-based-isv && cd ai-based-isv
+uv sync --all-packages
+uv run ruff check . && uv run mypy packages apps && uv run pytest
 ```
 
-Статус инкрементов: M1 ✓ (каркас) · M2a ✓ (L0-ядро: k3d + Vault + Postgres + Gitea) · M2b ✓ (Argo CD + Prometheus/Grafana + Loki, demo через GitOps в prod) · далее: M2c (OpenProject + LiteLLM), M2d (вопросник бутстреппера).
+Acceptance-флоу L0-стенда: `./infra/tests/m2a_pr_flow.sh`,
+`./infra/tests/m2b_deploy_flow.sh`, `./infra/tests/m2c_flow.sh`,
+`./infra/tests/m2d_flow.sh` (детали в [INSTALL.ru.md](INSTALL.ru.md)).
+
+## Карта проекта
+
+| Файл | Назначение |
+|---|---|
+| [STATE.md](STATE.md) | **ground truth: состояние, майлстоуны, следующий шаг** — читать первым в каждой сессии |
+| [AGENTS.md](AGENTS.md) | правила для агентов (мандат Superpowers, стандарты) |
+| [INSTALL.ru.md](INSTALL.ru.md) | установка: prerequisites, dev-окружение, L0 bootstrap |
+| [TODO.ru.md](TODO.ru.md) | бэклог и обязательные петли |
+| docs/superpowers/specs/ | полный дизайн платформы + аддендумы |
+| docs/adr/ | архитектурные решения (стек, Executor, память) |
+| docs/superpowers/plans/ | планы реализации по инкрементам |

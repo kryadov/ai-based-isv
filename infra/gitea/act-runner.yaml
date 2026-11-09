@@ -1,5 +1,5 @@
-# act_runner (dind-вариант): один privileged-контейнер со встроенным docker-демоном.
-# Регистрация — через env GITEA_RUNNER_REGISTRATION_TOKEN (создаётся бутстреппером).
+# act_runner (dind variant): a single privileged container with a built-in docker daemon.
+# Registration — via env GITEA_RUNNER_REGISTRATION_TOKEN (created by the bootstrapper).
 apiVersion: v1
 kind: ConfigMap
 metadata:
