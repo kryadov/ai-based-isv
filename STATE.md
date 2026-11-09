@@ -1,6 +1,6 @@
 # STATE — ground truth for every agent session
 
-> Read this file FIRST. Then `AGENTS.md` (rules), `TODO.md` (backlog).
+> Read this file FIRST. Then `ARCH.md` (how it works, diagrams), `AGENTS.md` (rules), `TODO.md` (backlog).
 > This file is updated at the end of EVERY increment. If your findings contradict it — verify, then update it.
 
 Last updated: 2026-11-09

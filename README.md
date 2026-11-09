@@ -56,6 +56,7 @@ Acceptance flows for the L0 stand: `./infra/tests/m2a_pr_flow.sh`,
 | File | Purpose |
 |---|---|
 | [STATE.md](STATE.md) | **ground truth: current state, milestones, next steps** — read first in every session |
+| [ARCH.md](ARCH.md) | architecture with diagrams: topology, pipeline, swarm, memory, control plane |
 | [AGENTS.md](AGENTS.md) | agent rules (Superpowers mandate, standards) |
 | [INSTALL.md](INSTALL.md) | setup: prerequisites, dev env, L0 bootstrap |
 | [TODO.md](TODO.md) | backlog and feedback loops |

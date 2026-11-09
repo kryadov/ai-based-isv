@@ -11,6 +11,7 @@ from bootstrap import __version__
 from bootstrap.gitea import README_CONTENT, REPO_NAME, GiteaClient
 from bootstrap.prereq import check_all
 from bootstrap.profile import Profile, save
+from bootstrap.registry import ProjectRecord, offboard_project, register_or_update
 
 app = typer.Typer(help="AI-Organisation bootstrapper", no_args_is_help=True)
 
@@ -135,6 +136,48 @@ def seed_demo() -> None:
     client.put_file(REPO_NAME, "README.md", README_CONTENT)
     url = f"{client.base_url}/{client.owner}/{REPO_NAME}"
     typer.secho(f"Demo repo: {status} → {url}", fg=typer.colors.GREEN)
+
+
+@app.command()
+def onboard(
+    project: str = typer.Option(..., help="имя проекта (repo slug)"),
+    kind: str = typer.Option("service", help="тип: product | service | tool | assistant"),
+    owner: str = typer.Option("swarm-admin", help="владелец проекта"),
+    reason: str = typer.Option("new project", help="зачем создается"),
+) -> None:
+    """Заведение нового проекта (спека §13.1): Gitea repo + запись в реестр."""
+    if kind not in {"product", "service", "tool", "assistant"}:
+        typer.secho("kind must be: product | service | tool | assistant", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    token = _gitea_token()
+    client = GiteaClient(base_url="http://localhost:30080", token=token, owner=owner)
+    status = client.ensure_repo(project)
+    register_or_update(ProjectRecord(name=project, kind=kind, owner=owner, reason=reason))
+    typer.secho(f"Project {project}: repo {status}, registered in infra/projects.yaml",
+                fg=typer.colors.GREEN)
+
+
+@app.command()
+def offboard(
+    project: str = typer.Option(..., help="имя проекта из реестра"),
+    reason: str = typer.Option("not needed anymore", help="причина архивации"),
+) -> None:
+    """Вывод проекта из эксплуатации (спека §13.6): Gitea archived + реестр."""
+    token = _gitea_token()
+    client = GiteaClient(base_url="http://localhost:30080", token=token, owner="swarm-admin")
+    import json as _json
+    import urllib.request as _req
+    req = _req.Request(
+        f"{client.base_url}/api/v1/repos/{client.owner}/{project}",
+        data=_json.dumps({"archived": True}).encode(),
+        method="PATCH",
+        headers={"Authorization": f"token {token}", "Content-Type": "application/json"},
+    )
+    with _req.urlopen(req) as r:
+        assert r.status == 200, f"gitea archive failed: {r.status}"
+    rec = offboard_project(project, reason=reason)
+    typer.secho(f"Project {project}: archived in Gitea + registry ({rec.status_date})",
+                fg=typer.colors.GREEN)
 
 
 if __name__ == "__main__":

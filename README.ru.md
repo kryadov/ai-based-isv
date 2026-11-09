@@ -55,6 +55,7 @@ Acceptance-флоу L0-стенда: `./infra/tests/m2a_pr_flow.sh`,
 | Файл | Назначение |
 |---|---|
 | [STATE.md](STATE.md) | **ground truth: состояние, майлстоуны, следующий шаг** — читать первым в каждой сессии |
+| [ARCH.md](ARCH.md) | архитектура со схемами: топология, конвейер, рой, память, control plane (EN) |
 | [AGENTS.md](AGENTS.md) | правила для агентов (мандат Superpowers, стандарты) |
 | [INSTALL.ru.md](INSTALL.ru.md) | установка: prerequisites, dev-окружение, L0 bootstrap |
 | [TODO.ru.md](TODO.ru.md) | бэклог и обязательные петли |
