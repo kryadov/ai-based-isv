@@ -51,3 +51,9 @@ Code quality gates: `uv run ruff check .` / `uv run mypy packages apps` / `uv ru
 - Repository is **public** on GitHub; canonical repo of the platform itself stays here, target projects get canonical repos in Gitea.
 - Source code Standard: **English only** in code (comments/strings); Russian lives in `*.ru.md` mirrors and internal RU design docs (see TODO: translate spec/plans to EN).
 - Do not recreate the k3d cluster unless needed — `infra/scripts/bootstrap.sh <section>` is idempotent; colima must have ≥6CPU/24GB.
+
+## Decisions log (append-only, owner-approved)
+
+- 2026-11-08: project types confirmed (§13.5) — SaaS / internal service / tool / assistant; **external projects deliver a tested release artifact or Docker image to the org registry** (no canary; release-candidate acceptance instead).
+- 2026-11-08: project offboarding — implemented in v0 via bootstrap CLI (`org-bootstrap offboard`), not deferred.
+- 2026-11-08: onboarding wizard — v0 in CLI (apps/bootstrap), full 📁 Projects UI in M10.
