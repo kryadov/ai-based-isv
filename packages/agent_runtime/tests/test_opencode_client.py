@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
+from typing import cast
 
 import httpx
 import pytest
-from agent_runtime.opencode_client import OpencodeClient, OpencodeError
+from agent_runtime.opencode_client import OpencodeClient, OpencodeError, _EventStream
 
 
 def _handler(request: httpx.Request) -> httpx.Response:
@@ -203,3 +205,76 @@ async def test_streaming_http_error_raises_opencode_error() -> None:
                 pass
 
     assert "unauthorized" in str(exc_info.value)
+
+
+async def test_get_session_returns_data(client: OpencodeClient) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/session/ses_test" and request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "id": "ses_test",
+                        "outcome": "succeeded",
+                        "tokens": {"input": 3, "output": 5, "reasoning": 0},
+                    }
+                },
+            )
+        if request.url.path == "/api/session/ses_bad" and request.method == "GET":
+            return httpx.Response(200, json={"data": "not-a-dict"})
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(
+        base_url="http://localhost:8080", transport=transport
+    ) as http:
+        client = OpencodeClient(http)
+        data = await client.get_session("ses_test")
+
+    assert data["id"] == "ses_test"
+    assert data["outcome"] == "succeeded"
+    assert data["tokens"]["input"] == 3
+
+    async with httpx.AsyncClient(
+        base_url="http://localhost:8080", transport=transport
+    ) as http:
+        client = OpencodeClient(http)
+        with pytest.raises(OpencodeError):
+            await client.get_session("ses_bad")
+
+
+async def test_event_stream_aclose_closes_response() -> None:
+    class _TrackedStream(httpx.AsyncByteStream):
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            event = json.dumps(
+                {"id": "evt_1", "type": "session.created", "data": {"sessionID": "ses_test"}}
+            )
+            yield f"data: {event}\n\n".encode()
+            await asyncio.Event().wait()
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    stream = _TrackedStream()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/event" and request.method == "GET":
+            return httpx.Response(
+                200,
+                stream=stream,
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(
+        base_url="http://localhost:8080", transport=transport
+    ) as http:
+        client = OpencodeClient(http)
+        events = cast(_EventStream, await client.events("ses_test"))
+        await events.aclose()
+
+    assert stream.closed

@@ -91,6 +91,10 @@ class _EventStream:
             self._response = None
             self._line_iterator = None
 
+    async def aclose(self) -> None:
+        """Explicitly close the SSE stream."""
+        await self._close()
+
 
 class OpencodeClient:
     """Minimal async client for the opencode serve HTTP API.
@@ -131,6 +135,16 @@ class OpencodeClient:
             json={"text": text},
         )
         await _raise_for_status(response)
+
+    async def get_session(self, session_id: str) -> dict[str, Any]:
+        """Fetch the session status object (including token counts)."""
+        response = await self._http.get(f"/api/session/{session_id}")
+        await _raise_for_status(response)
+        payload = response.json()
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise OpencodeError("Malformed session status response")
+        return data
 
     async def events(self, session_id: str) -> AsyncIterator[dict[str, Any]]:
         """Return an async iterator over SSE events belonging to ``session_id``.
