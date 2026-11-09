@@ -26,6 +26,13 @@ section_vault() {
   kubectl -n "$NS" wait --for=condition=Initialized pod -l app.kubernetes.io/name=openbao --timeout=300s 2>/dev/null || true
   sleep 5
   POD="$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=openbao -o jsonpath='{.items[0].metadata.name}')"
+  local OK="" STATUS_OUT
+  for i in $(seq 1 30); do
+    STATUS_OUT="$(kubectl -n "$NS" exec "$POD" -- env BAO_ADDR=http://127.0.0.1:8200 bao status 2>/dev/null || true)"
+    if echo "$STATUS_OUT" | grep -q "Seal Type"; then OK=1; break; fi
+    sleep 3
+  done
+  [ -n "$OK" ] || { echo "vault: pod не отвечает (30 попыток exec)"; exit 1; }
   vrun() { kubectl -n "$NS" exec "$POD" -- env BAO_ADDR=http://127.0.0.1:8200 VAULT_ADDR=http://127.0.0.1:8200 bao "$@"; }
   local keys_file="$ROOT/.vault-unseal-keys.json" init_status ukey
   sleep 3
