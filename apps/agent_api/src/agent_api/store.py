@@ -34,6 +34,7 @@ async def create_run(session: AsyncSession, project: str, task_ref: str,
     row = RunRow(project=project, task_ref=task_ref, budget_tokens=budget_tokens)
     session.add(row)
     await session.flush()
+    await session.commit()
     return row.id
 
 
@@ -44,6 +45,7 @@ async def add_vertex(session: AsyncSession, run_id: int, name: str, done_when: s
                     deps_json=deps or [], paths_allow_json=paths_allow or [])
     session.add(row)
     await session.flush()
+    await session.commit()
     return row.id
 
 
@@ -139,6 +141,7 @@ async def register_identity(session: AsyncSession, name: str, role: str,
     row = IdentityRow(name=name, role=role, allowed_sections_json=allowed_sections or [])
     session.add(row)
     await session.flush()
+    await session.commit()
     return row.id
 
 
@@ -149,6 +152,7 @@ async def set_budget(session: AsyncSession, subject: str, limit_tokens: int) -> 
         row = BudgetRow(subject=subject, limit_tokens=limit_tokens, spent_tokens=0)
         session.add(row)
         await session.flush()
+        await session.commit()
         return row.id
     await session.execute(
         update(BudgetRow).where(BudgetRow.subject == subject)
@@ -174,6 +178,7 @@ async def create_hitl(session: AsyncSession, kind: str, subject: str,
     row = HITLRow(kind=kind, subject=subject, context_json=context or {})
     session.add(row)
     await session.flush()
+    await session.commit()
     return row.id
 
 
@@ -200,6 +205,7 @@ async def append_audit(session: AsyncSession, actor: str, action: str, target: s
                    payload_json=payload or {})
     session.add(row)
     await session.flush()
+    await session.commit()
     return row.id
 
 
@@ -207,4 +213,5 @@ async def enqueue_merge(session: AsyncSession, pr_ref: str, project: str) -> int
     row = MergeQueueRow(pr_ref=pr_ref, project=project)
     session.add(row)
     await session.flush()
+    await session.commit()
     return row.id
