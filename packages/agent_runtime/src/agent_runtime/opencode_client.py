@@ -114,16 +114,18 @@ class OpencodeClient:
     ) -> str:
         """Create a new session and return its identifier.
 
-        By default the request body is empty, so the server uses the model and
-        workspace configured in its ``opencode.jsonc``. Pass ``model`` and/or
-        ``directory`` only when you need to override those defaults.
+        By default the request body is an empty JSON object, so the server uses
+        the model and workspace configured in its ``opencode.jsonc``. Pass
+        ``model`` and/or ``directory`` only when you need to override those
+        defaults. The body is always a JSON object: opencode serve 2.2.0 answers
+        a *bodyless* request with ``400 InvalidRequestError: Expected object``.
         """
         body: dict[str, Any] = {}
         if model is not None:
             body["model"] = model
         if directory is not None:
             body["location"] = {"directory": directory}
-        response = await self._http.post("/api/session", json=body or None)
+        response = await self._http.post("/api/session", json=body)
         await _raise_for_status(response)
         payload = response.json()
         return str(payload["data"]["id"])

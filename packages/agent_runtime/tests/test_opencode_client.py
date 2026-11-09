@@ -129,6 +129,31 @@ async def test_create_session_returns_id(client: OpencodeClient) -> None:
     assert session_id == "ses_test"
 
 
+async def test_create_session_always_sends_a_json_object_body() -> None:
+    """Regression: opencode serve 2.2.0 rejects a bodyless POST /api/session.
+
+    Verified live on 2026-11-09 against the pinned image: a request with no body
+    answers ``400 {"_tag":"InvalidRequestError","message":"Expected object"}``;
+    only an explicit empty JSON object ``{}`` is accepted.
+    """
+    bodies: list[bytes] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/session" and request.method == "POST":
+            bodies.append(request.content)
+            return httpx.Response(200, json={"data": {"id": "ses_test"}})
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(
+        base_url="http://localhost:8080", transport=transport
+    ) as http:
+        client = OpencodeClient(http)
+        assert await client.create_session() == "ses_test"
+
+    assert bodies == [b"{}"]
+
+
 async def test_create_session_with_overrides(client: OpencodeClient) -> None:
     session_id = await client.create_session(
         model={"id": "custom-model", "providerID": "custom-provider"},
