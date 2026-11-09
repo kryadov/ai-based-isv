@@ -143,21 +143,6 @@ async def register_identity(session: AsyncSession, name: str, role: str,
 
 
 async def set_budget(session: AsyncSession, subject: str, limit_tokens: int) -> int:
-    """Создать/обновить бюджет (лимит) субъекта."""
-    row = await session.scalar(select(BudgetRow).where(BudgetRow.subject == subject))
-    if row is None:
-        row = BudgetRow(subject=subject, limit_tokens=limit_tokens, spent_tokens=0)
-        session.add(row)
-        await session.flush()
-        return row.id
-    await session.execute(
-        update(BudgetRow).where(BudgetRow.subject == subject)
-        .values(limit_tokens=limit_tokens)
-    )
-    return row.id
-
-
-async def set_budget(session: AsyncSession, subject: str, limit_tokens: int) -> int:
     """Создать/обновить лимит бюджета субъекта."""
     row = await session.scalar(select(BudgetRow).where(BudgetRow.subject == subject))
     if row is None:

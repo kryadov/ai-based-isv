@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-
-import pytest
+from agent_api.models import AuditRow
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent_api import store
@@ -106,7 +104,7 @@ async def test_audit_append_and_list(session: AsyncSession) -> None:
     await store.append_audit(session, "human", "hitl.decide", "hitl:3",
                              outcome="rejected")
     events = await session.scalars(
-        __import__("sqlalchemy").select(store.AuditRow).order_by(store.AuditRow.id)
+        __import__("sqlalchemy").select(AuditRow).order_by(AuditRow.id)
     )
     all_events = list(events)
     assert len(all_events) == 2

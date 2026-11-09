@@ -5,10 +5,9 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 import pytest
+from agent_api.models import Base
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
-
-from agent_api.models import Base
 
 
 @pytest.fixture
