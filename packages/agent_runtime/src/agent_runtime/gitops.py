@@ -23,11 +23,13 @@ Token handling (the security-critical part). A Gitea access token is passed to g
 on-disk ``.git/config``. This was chosen over embedding credentials in the push URL
 (``https://oauth2:<token>@host/...``) because a URL would leak the token into the
 process command line (visible in ``ps``), into ``CalledProcessError.cmd`` and into any
-logged remote URL, and would persist it in ``.git/config`` via ``remote set-url``.
-The header keeps the token out of every one of those, and ``Authorization: token ...``
-is Gitea's documented scheme for git-over-HTTP with no username required. When no token
-is given git pushes to the remote exactly as configured (local-path remotes in tests),
-and the header injection is skipped entirely.
+logged remote URL, and would persist it in ``.git/config`` via ``remote set-url``. The
+header keeps the token out of every one of those. ``Authorization: token ...`` is the
+expected scheme (no username required) — to be confirmed live in Task 10; the repo's
+``m2a_pr_flow.sh`` precedent authenticates over git-http with Basic credentials in the
+URL, so if the header form is rejected the swap is a one-line change here to a Basic
+header. When no token is given git pushes to the remote exactly as configured
+(local-path remotes in tests), and the header injection is skipped entirely.
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ import re
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
+from urllib.parse import urlsplit
 
 # git commit identity (author and committer) — deterministic, not the operator's.
 AGENT_RUNTIME_NAME = "agent-runtime"
@@ -50,7 +53,8 @@ _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 class GitOperationError(RuntimeError):
-    """A git subprocess failed (non-zero exit) or its output was unusable."""
+    """A git subprocess failed (non-zero exit), its output was unusable, or the
+    operation was refused (a rejected argument or precondition)."""
 
 
 def _git_env(token: str | None = None) -> dict[str, str]:
@@ -86,6 +90,28 @@ def _repo_dir_name(repo_url: str) -> str:
     return name or "repo"
 
 
+def _reject_credentialed_url(repo_url: str) -> None:
+    """Fail closed if ``repo_url`` embeds credentials (a token/password in the URL).
+
+    ``repo_url`` is used verbatim as a git argument (so it appears in ``ps`` output and
+    in :class:`GitOperationError` text) and, for a fresh clone, is persisted by git as
+    ``remote.origin.url`` in ``.git/config``. The module's contract is that the Gitea
+    access token travels ONLY through the ``token=`` parameter as an HTTP header, never
+    in the URL — so a credentialed URL is refused rather than silently stripped, and the
+    message deliberately does not echo ``repo_url`` (which could itself carry the secret).
+    scp-style remotes (``git@host:path``) and clean http(s) URLs are allowed; the ssh
+    user is not a secret.
+    """
+    parts = urlsplit(repo_url)
+    has_password = parts.password is not None
+    http_userinfo = parts.scheme in {"http", "https"} and parts.username is not None
+    if has_password or http_userinfo:
+        raise GitOperationError(
+            "repo_url must not embed credentials; pass the Gitea access token via the "
+            "token= parameter (sent as an HTTP header) instead of an https://user:token@host URL"
+        )
+
+
 def _run(
     args: Sequence[str],
     cwd: Path,
@@ -96,8 +122,9 @@ def _run(
     """Run ``git <args>`` and wrap any failure in :class:`GitOperationError`.
 
     The message quotes argv (which never carries the token — credentials travel in
-    ``env``, see :func:`_git_env`) and git's stderr; git does not echo an
-    ``http.extraHeader`` value, so no credential leaks through the detail either.
+    ``env``, see :func:`_git_env`; and a credentialed ``repo_url`` is rejected before it
+    can enter argv, see :func:`_reject_credentialed_url`) and git's stderr; git does not
+    echo an ``http.extraHeader`` value, so no credential leaks through the detail either.
     """
     argv = ["git", *args]
     try:
@@ -133,8 +160,11 @@ def ensure_repo(
     First call runs ``git clone --branch <base>``; later calls fetch the base branch and
     hard-reset onto ``origin/<base>``, discarding any local commit or working-tree edit
     from a previous vertex so every run starts from a pristine base. The remote is kept
-    as configured (no credentials embedded). Returns the clone directory.
+    as configured (no credentials embedded). Raises :class:`GitOperationError` if
+    ``repo_url`` carries credentials — pass the token via ``token=`` instead. Returns the
+    clone directory.
     """
+    _reject_credentialed_url(repo_url)
     env = _git_env(token)
     workspace.mkdir(parents=True, exist_ok=True)
     repo_dir = workspace / _repo_dir_name(repo_url)

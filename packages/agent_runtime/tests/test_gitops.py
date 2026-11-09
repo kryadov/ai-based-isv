@@ -25,6 +25,7 @@ from agent_runtime.gitops import (
     AGENT_RUNTIME_EMAIL,
     AGENT_RUNTIME_NAME,
     GitOperationError,
+    _reject_credentialed_url,
     ensure_repo,
     push_diff,
 )
@@ -245,5 +246,61 @@ def test_token_is_never_stored_in_repo_config(tmp_path: Path) -> None:
 
     stored = (repo_dir / ".git" / "config").read_text(encoding="utf-8")
     assert secret not in stored
-    assert secret not in subprocess.list2cmdline(["git", "remote", "get-url", "origin"])
+    # the on-disk remote is exactly the clean URL we passed in — no credentials appended
     assert _git(["remote", "get-url", "origin"], repo_dir).strip() == remote_url
+
+
+def test_token_never_leaks_into_exception_text(tmp_path: Path) -> None:
+    """The security-critical property: a token passed to push_diff must never appear in
+    the GitOperationError text, which embeds the git argv and the remote URL from stderr.
+    Exercised for real by pushing to a reachable-then-broken remote so the failure path
+    quotes argv (no token) and git's stderr (the URL, still credential-free)."""
+    secret = "LEAK-CHECK-t0k3n"
+    remote_url, _ = _bare_remote_with_main(tmp_path)
+    repo_dir = ensure_repo(tmp_path / "ws", remote_url, "main", token=secret)
+
+    # stage a real, applyable diff on the clean base
+    (repo_dir / "README.txt").write_text("one\ntwo\nleak\n", encoding="utf-8")
+    diff = _git(["diff", "--", "README.txt"], repo_dir)
+    _git(["checkout", "--", "README.txt"], repo_dir)
+
+    # repoint the remote to an unroutable URL (no credentials) so the push must fail
+    _git(["remote", "set-url", "origin", "http://127.0.0.1:1/nope.git"], repo_dir)
+    with pytest.raises(GitOperationError) as exc_info:
+        push_diff(repo_dir, diff, "agent/vertex-8", message="push fails", token=secret)
+
+    assert secret not in str(exc_info.value)
+    # and it never reached the on-disk remote either
+    assert secret not in (repo_dir / ".git" / "config").read_text(encoding="utf-8")
+
+
+def test_credentialed_repo_url_is_rejected(tmp_path: Path) -> None:
+    """A token embedded in repo_url (standard git idiom) is the one thing this module must
+    never accept: it would reach argv, exception text and .git/config. Fail closed — and
+    the rejection itself must not echo the secret."""
+    secret = "sup3r-s3cret-gitea-token"
+    credentialed = f"http://oauth2:{secret}@gitea.invalid/owner/repo.git"
+    workspace = tmp_path / "ws"
+
+    with pytest.raises(GitOperationError) as exc_info:
+        ensure_repo(workspace, credentialed, "main")
+
+    assert secret not in str(exc_info.value)
+    # fail-closed before any side effect: nothing was cloned or written
+    assert not workspace.exists()
+
+    # token-as-username form is rejected too
+    with pytest.raises(GitOperationError):
+        ensure_repo(tmp_path / "ws2", f"https://{secret}@gitea.invalid/o/r.git", "main")
+
+    # the allow side of the rule: clean http(s), file, local path and scp-style ssh are
+    # all fine (the ssh user is not a secret)
+    for ok in [
+        "https://gitea.invalid/o/r.git",
+        "http://gitea.invalid/o/r.git",
+        "file:///srv/git/r.git",
+        "/srv/git/r.git",
+        "git@github.com:owner/repo.git",
+        "ssh://git@host/o/r.git",
+    ]:
+        _reject_credentialed_url(ok)  # must not raise
