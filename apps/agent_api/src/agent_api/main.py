@@ -117,6 +117,14 @@ def create_app() -> FastAPI:
             )
             return {"identity_id": ident_id}
 
+    @app.post("/budgets/{subject}")
+    async def set_budget(subject: str, payload: dict[str, Any]) -> dict[str, Any]:
+        async with app.state.session_factory() as session:
+            budget_id = await store.set_budget(
+                session, subject, limit_tokens=int(payload.get("limit_tokens", 0))
+            )
+            return {"budget_id": budget_id}
+
     @app.post("/budgets/{subject}/consume")
     async def consume_budget(subject: str, payload: dict[str, Any]) -> dict[str, Any]:
         async with app.state.session_factory() as session:
