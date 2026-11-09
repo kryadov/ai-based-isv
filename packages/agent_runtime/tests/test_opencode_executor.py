@@ -94,12 +94,16 @@ def _handler(
 def test_docker_serve_builds_expected_argv(tmp_path: Path) -> None:
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
-    commands: list[list[str]] = []
+    commands: list[tuple[list[str], str | None]] = []
 
-    def runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
-        commands.append(argv)
+    def runner(argv: list[str], input: str | None = None) -> subprocess.CompletedProcess[str]:
+        commands.append((argv, input))
         if argv[0] == "docker" and "run" in argv:
             return subprocess.CompletedProcess(argv, returncode=0, stdout="cid123\n")
+        if argv[0] == "docker" and "logs" in argv:
+            return subprocess.CompletedProcess(
+                argv, returncode=0, stdout="server password fast-token\n"
+            )
         return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
 
     serve = DockerServe(
@@ -111,23 +115,28 @@ def test_docker_serve_builds_expected_argv(tmp_path: Path) -> None:
     )
     base_url = serve.start()
 
-    assert base_url == "http://127.0.0.1:12345"
+    assert base_url == "http://opencode:fast-token@127.0.0.1:12345"
 
-    build = next((c for c in commands if c[0] == "docker" and "build" in c), None)
-    run = next((c for c in commands if c[0] == "docker" and "run" in c), None)
+    build = next((c for c in commands if c[0][0] == "docker" and "build" in c[0]), None)
+    run = next((c for c in commands if c[0][0] == "docker" and "run" in c[0]), None)
 
     assert build is not None
-    assert "opencode-git:2.2.0" in build
+    build_argv, build_input = build
+    assert "opencode-git:2.2.0" in build_argv
+    assert build_input is not None
+    assert f"FROM {OPENCODE_IMAGE}" in build_input
+    assert "apt-get install -y git" in build_input or "apk add --no-cache git" in build_input
 
     assert run is not None
-    assert f"-v{repo_dir}:/workspace" in run or f"-v{repo_dir}:/workspace" in run
-    assert "-p12345:4096" in run or "-p" in run and "12345:4096" in run
-    assert "serve" in run
-    assert "--hostname" in run
-    assert "0.0.0.0" in run
-    assert "--port" in run
-    assert "4096" in run
-    assert "opencode-git:2.2.0" in run
+    run_argv, _ = run
+    assert f"-v{repo_dir}:/workspace" in run_argv
+    assert "-p12345:4096" in run_argv
+    assert "serve" in run_argv
+    assert "--hostname" in run_argv
+    assert "0.0.0.0" in run_argv
+    assert "--port" in run_argv
+    assert "4096" in run_argv
+    assert "opencode-git:2.2.0" in run_argv
 
 
 async def test_start_returns_session_and_streams_events(tmp_path: Path) -> None:
@@ -337,7 +346,7 @@ def test_scrape_password_extracts_token_from_noise() -> None:
         "another line\n"
     )
 
-    def runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
+    def runner(argv: list[str], input: str | None = None) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(argv, returncode=0, stdout=logs)
 
     serve = DockerServe(
@@ -354,7 +363,7 @@ def test_scrape_password_extracts_token_from_noise() -> None:
 def test_start_embeds_password_in_base_url() -> None:
     commands: list[list[str]] = []
 
-    def runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
+    def runner(argv: list[str], input: str | None = None) -> subprocess.CompletedProcess[str]:
         commands.append(argv)
         if argv[0] == "docker" and "run" in argv:
             return subprocess.CompletedProcess(argv, returncode=0, stdout="cid\n")
@@ -412,7 +421,9 @@ async def test_done_path_releases_resources(tmp_path: Path) -> None:
 async def test_start_failure_after_container_start_stops_container(tmp_path: Path) -> None:
     commands: list[list[str]] = []
 
-    def docker_runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
+    def docker_runner(
+        argv: list[str], input: str | None = None
+    ) -> subprocess.CompletedProcess[str]:
         commands.append(argv)
         if argv[0] == "docker" and "run" in argv:
             return subprocess.CompletedProcess(argv, returncode=0, stdout="cid\n")

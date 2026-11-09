@@ -34,6 +34,8 @@ from agent_runtime.pathguard import diff_files
 from agent_runtime.session_log import SessionLog
 from agent_runtime.settings import OPENCODE_IMAGE, OPENCODE_PORT
 
+_DockerRunner = Callable[[list[str], str | None], subprocess.CompletedProcess[str]]
+
 
 class DockerServe:
     """Build a git-enabled derived image and run ``opencode serve`` in Docker.
@@ -44,7 +46,8 @@ class DockerServe:
 
     ``runner`` is the single command-execution seam: tests inject a callable that
     returns a :class:`subprocess.CompletedProcess`; the default uses the real
-    ``subprocess`` runner. This keeps the password-scraping path testable.
+    ``subprocess`` runner. The seam accepts an optional ``input`` string so the
+    Dockerfile can be piped into ``docker build -``.
     """
 
     def __init__(
@@ -54,7 +57,7 @@ class DockerServe:
         repo_dir: Path,
         port: int,
         env: dict[str, str],
-        runner: Callable[[list[str]], subprocess.CompletedProcess[str]] | None = None,
+        runner: _DockerRunner | None = None,
     ) -> None:
         self._image = image
         self._repo_dir = repo_dir
@@ -70,13 +73,16 @@ class DockerServe:
         The password printed in the container logs is scraped and embedded as
         HTTP Basic credentials.
         """
-        build_result = self._runner(self._build_argv())
+        build_result = self._runner(
+            self._build_argv(),
+            _dockerfile(self._image),
+        )
         if build_result.returncode != 0:
             raise RuntimeError(
                 f"docker build failed for {self._derived_image}: {build_result.stderr}"
             )
 
-        run_result = self._runner(self._run_argv())
+        run_result = self._runner(self._run_argv(), None)
         if run_result.returncode != 0:
             raise RuntimeError(f"docker run failed: {run_result.stderr}")
 
@@ -90,7 +96,7 @@ class DockerServe:
         container_id = self._container_id
         if container_id is None:
             return
-        self._runner(["docker", "stop", container_id])
+        self._runner(["docker", "stop", container_id], None)
         self._container_id = None
 
     def _build_argv(self) -> list[str]:
@@ -123,7 +129,7 @@ class DockerServe:
         if self._container_id is None:
             return ""
         for _ in range(60):
-            result = self._runner(["docker", "logs", self._container_id])
+            result = self._runner(["docker", "logs", self._container_id], None)
             output = (result.stdout or "") + (result.stderr or "")
             password = _password_from_logs(output)
             if password:
@@ -145,7 +151,7 @@ class OpencodeExecutor:
         llm_endpoint: str,
         port: int = OPENCODE_PORT,
         transport: httpx.AsyncBaseTransport | None = None,
-        docker_runner: Callable[[list[str]], subprocess.CompletedProcess[str]] | None = None,
+        docker_runner: _DockerRunner | None = None,
     ) -> None:
         self._base_url = base_url
         self._workspace = workspace
@@ -485,8 +491,11 @@ def _derived_image_tag(image: str) -> str:
     return f"opencode-git:{tag}"
 
 
-def _subprocess_runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(argv, capture_output=True, text=True, check=False)
+def _subprocess_runner(
+    argv: list[str],
+    input: str | None = None,  # noqa: A002
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(argv, capture_output=True, text=True, check=False, input=input)
 
 
 def _password_from_logs(logs: str) -> str:
