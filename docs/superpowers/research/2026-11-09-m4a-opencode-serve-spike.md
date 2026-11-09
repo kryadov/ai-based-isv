@@ -1,6 +1,7 @@
 # M4a Spike: `opencode serve` in Docker via LiteLLM
 
 > Throwaway research note. Goal: confirm the REST+SSE surface, provider config, and latency of OpenCode v2 running headlessly in Docker against the lab LiteLLM gateway.
+> Verified against pinned image `ghcr.io/anomalyco/opencode:2.2.0` on the live laptop stand.
 
 ## Pinned image
 
@@ -65,7 +66,7 @@ Configuration is done via a project-level `opencode.jsonc` file in the workspace
 
 - `LITELLM_API_KEY` is the LiteLLM master key (from OpenBao `secret/litellm/master`).
 - The LiteLLM endpoint is reachable at `192.168.5.1:30084` from inside the Docker network (colima VM IP). `host.docker.internal:30084` also works.
-- The broad `permissions` rule is **required for headless runs**; any unconfigured `ask` permission hangs the session because there is no interactive client to reply (OpenCode issue #14473).
+- The broad `permissions` rule is **required for headless runs**; any tool permission that resolves to `ask` blocks forever because there is no interactive client to reply (OpenCode issue #14473).
 
 ## Authentication
 
@@ -80,7 +81,21 @@ Example:
 curl -u "opencode:$PASS" http://127.0.0.1:8080/api/info
 ```
 
+## OpenAPI schema
+
+The server publishes the OpenAPI 3.1.0 document at:
+
+```text
+GET /openapi.json
+```
+
+- Returns `application/json`, ~318 KB for v2.2.0.
+- Confirms the paths documented below: `/api/info`, `/api/session`, `/api/session/{sessionID}/prompt`, `/api/session/{sessionID}/diff`, `/api/event`, etc.
+- `/api/openapi.json` and `/docs/openapi.json` do **not** serve the schema (404 or redirect).
+
 ## Endpoint paths and JSON shapes
+
+**Important:** the JSON examples below are verbatim captures, but the server returns **additional/optional fields** depending on the endpoint and session state. Client models should use `extra="allow"` (Pydantic) or equivalent and treat fields as optional unless marked required.
 
 ### `GET /api/info`
 
@@ -124,6 +139,13 @@ Response:
 }
 ```
 
+HTTP error example (model as string instead of `Model.Ref`):
+
+```text
+HTTP/1.1 400 Bad Request
+{"_tag":"InvalidRequestError","message":"Expected Model.Ref | null\n  at [\"model\"]","kind":"Payload"}
+```
+
 ### `POST /api/session/{sessionID}/prompt`
 
 Request:
@@ -149,7 +171,7 @@ Response:
 
 ### `GET /api/session/{sessionID}` (status / outcome)
 
-Useful for polling when SSE is not available:
+Useful for polling when SSE is not available. Observed `outcome` values: `succeeded`, `failed`. The field may be absent on a brand-new session.
 
 ```json
 {
@@ -175,21 +197,25 @@ Response when no files changed:
 { "data": [] }
 ```
 
-Schema when files changed:
+Real non-empty response, captured after the agent edited `README.md` (model `qwen3`, git installed in the container, session `ses_e3f60b0fbffeXdFKwtcX6Fzw2T`):
 
 ```json
 {
   "data": [
     {
-      "file": "src/example.py",
-      "patch": "@@ -1,3 +1,4 @@\n ...",
-      "additions": 1,
-      "deletions": 0,
+      "file": "README.md",
+      "patch": "diff --git a/README.md b/README.md\nindex 69c95ed..a40b9eb 100644\n--- a/README.md\n+++ b/README.md\n@@ -1,2 +1 @@\n-# test\n EDITED-BY-OPENCODE\n\\ No newline at end of file\n",
+      "additions": 0,
+      "deletions": 1,
       "status": "modified"
     }
   ]
 }
 ```
+
+- `status` is one of `added`, `deleted`, `modified`.
+- `additions`/`deletions` are per-file hunk totals from git.
+- **Critical:** the diff endpoint returns `{"data":[]}` unless `git` is available inside the container; the official `2.2.0` image does **not** include git.
 
 ## SSE event stream
 
@@ -197,6 +223,7 @@ Schema when files changed:
 - Headers: `Accept: text/event-stream`, `Authorization: Basic ...`
 - The stream is global; filter client-side by `data.sessionID` or `location.directory`.
 - Optional query parameter `types` filters event types, but the simplest robust approach is to subscribe to all events and filter in the client.
+- **Subscribe before sending the prompt.** Because the stream is global and does not replay, opening it after `POST /prompt` risks missing the terminal `session.execution.succeeded`/`failed` event and hanging the client. Verified by intentionally connecting after the prompt: the terminal event was missed; connecting before the prompt captured it reliably.
 
 ### Raw SSE wire format
 
@@ -215,7 +242,7 @@ data: {"id":"evt_1c08a675b001H400ZvuLseJ0YQ","created":1794231658331,"type":"ses
 
 ### Example events (parsed JSON)
 
-**Terminal completion event**
+**Terminal success event**
 
 ```json
 {
@@ -226,6 +253,30 @@ data: {"id":"evt_1c08a675b001H400ZvuLseJ0YQ","created":1794231658331,"type":"ses
   "durable": {
     "aggregateID": "ses_e3f740986ffePoPeqwtbpQNdK6",
     "seq": 12,
+    "version": 1
+  }
+}
+```
+
+**Terminal failure event**
+
+Captured with an invalid model alias (`does-not-exist`, session `ses_e3f5aea76ffeIKX7yul7M36kq6`):
+
+```json
+{
+  "id": "evt_1c0a515a00010pPGIGU49wzen5",
+  "created": 1794233406880,
+  "type": "session.execution.failed",
+  "data": {
+    "sessionID": "ses_e3f5aea76ffeIKX7yul7M36kq6",
+    "error": {
+      "type": "provider.no-route",
+      "message": "Model unavailable: litellm/does-not-exist"
+    }
+  },
+  "durable": {
+    "aggregateID": "ses_e3f5aea76ffeIKX7yul7M36kq6",
+    "seq": 5,
     "version": 1
   }
 }
@@ -248,22 +299,37 @@ data: {"id":"evt_1c08a675b001H400ZvuLseJ0YQ","created":1794231658331,"type":"ses
 }
 ```
 
-**Tool / step event**
+**Tool success event**
+
+Observed when the model actually invoked a tool (model `qwen3`):
 
 ```json
 {
-  "id": "evt_1c08bf7f6001yY5oqL4dMs7KGr",
-  "created": 1794231760886,
-  "type": "session.text.ended",
+  "id": "evt_1c0990665001Z10Vjj50J0tirk",
+  "type": "session.tool.success",
   "location": { "directory": "/workspace" },
   "data": {
-    "sessionID": "ses_e3f740986ffePoPeqwtbpQNdK6",
-    "assistantMessageID": "msg_1c08bf69c001ma7GyScfs4AiHE",
-    "ordinal": 0,
-    "text": "OPENCODE-OK"
+    "sessionID": "ses_e3f69c781ffejDNbs1TGjLa57m",
+    "assistantMessageID": "msg_1c0989f78001OEle2F54eZYSKU",
+    "tool": "write",
+    "result": { "path": "README.md" }
   }
 }
 ```
+
+## Field-shape notes for client models
+
+The same logical "session" object has different field sets depending on context:
+
+- `POST /api/session` response: `id`, `projectID`, `model`, `cost`, `tokens`, `time`, `location`.
+- `GET /api/session/{id}` status: adds `outcome`, `title`, `time.idle`.
+- `session.created` SSE event: adds `slug`, `version`, `subpath`, omits `cost`/`tokens`.
+
+Do not transcribe any single example literally. Recommended client approach:
+
+- Pydantic: `model_config = ConfigDict(extra="allow")` on all response models.
+- Treat every field as `Optional` unless your code path explicitly requires it.
+- Use a small set of required fields (`id` for sessions, `type` for events) and ignore unknown fields.
 
 ## Latency
 
@@ -271,6 +337,7 @@ data: {"id":"evt_1c08a675b001H400ZvuLseJ0YQ","created":1794231658331,"type":"ses
   - Session `ses_e3f7f8866ffebqJzXkDQbOOlcz`: created → updated delta ≈ 20.4 s.
 - **Warm / cached prompt**: ~0.5–1.5 s.
   - Subsequent "Reply with exactly: ..." prompts returned in < 1.5 s with high `cache.read` token counts.
+- **Tool-use turn (qwen3)**: ~40–290 s on the local 7B model.
 
 Use generous timeouts (≥ 120 s, ideally 600 s) when driving the slow local model.
 
@@ -282,5 +349,8 @@ Use generous timeouts (≥ 120 s, ideally 600 s) when driving the slow local mod
 4. **Bind-mount single files on macOS/colima is brittle**: mounting `opencode.jsonc` as a single file caused Docker to expose it as a directory inside the container. Mount the parent workspace directory and place the config file inside it.
 5. **Data / DB isolation**: mount a dedicated host directory to `/root/.opencode` so the SQLite state is isolated per run and does not leak between spikes.
 6. **SSE is global**: subscribe once and filter by `sessionID`; there is no per-session SSE endpoint in the tested surface.
-7. **SSE event format**: only `data:` lines, no `event:` field. The type is in the JSON payload.
-8. **Model tool reliability**: `qwen2.5-coder:7b` sometimes emits raw tool-call JSON as assistant text instead of executing the tool; for the runtime client this is still a `session.execution.succeeded` event.
+7. **SSE subscribe ordering**: open `GET /api/event` **before** `POST /session/{id}/prompt`, otherwise the terminal event can be missed and the adapter hangs.
+8. **SSE event format**: only `data:` lines, no `event:` field. The type is in the JSON payload.
+9. **Git is required for non-empty diffs**: the official `2.2.0` image does not contain `git`; without it, `GET /session/{id}/diff` always returns `{"data":[]}` even when the agent edits files. Install git in the image (or mount a git binary) before relying on the diff endpoint.
+10. **Failure terminal event**: `session.execution.failed` carries `data.error.type` and `data.error.message`; the status endpoint shows `"outcome": "failed"`.
+11. **Model tool reliability**: `qwen2.5-coder:7b` sometimes emits raw tool-call JSON as assistant text instead of executing the tool; `qwen3` invoked tools reliably in this spike.
