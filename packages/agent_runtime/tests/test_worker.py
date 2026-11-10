@@ -41,7 +41,12 @@ def _init_bare_repo(tmp_path: Path) -> Path:
     bare = tmp_path / "origin.git"
     work = tmp_path / "origin_work"
     work.mkdir(parents=True)
-    subprocess.run(["git", "init", str(work)], check=True, capture_output=True, env=_GIT_ENV)
+    subprocess.run(
+        ["git", "init", "-b", "main", str(work)],
+        check=True,
+        capture_output=True,
+        env=_GIT_ENV,
+    )
     (work / "README.md").write_text("# base\n", encoding="utf-8")
     subprocess.run(
         ["git", "-C", str(work), "add", "."],
