@@ -491,8 +491,8 @@ echo "M4b flow: sandbox teardown clean (pod/service/secret removed)"
 kubectl -n agents run m4b-netpol-probe --image=alpine:3.20 --restart=Never --command -- \
   sh -c 'wget -qO- -T 5 http://gitea-http.platform.svc.cluster.local:3000/api/v1/version >/dev/null || exit 11; \
     wget -qO- -T 8 http://litellm.platform.svc.cluster.local:4000/health/liveliness >/dev/null || exit 12; \
-    nc -zv -w 3 postgres-platform-rw.platform.svc.cluster.local 5432 >/dev/null 2>&1 && exit 13; \
-    nc -zv -w 3 192.168.5.2 15432 >/dev/null 2>&1 && exit 14; \
+    timeout 5 nc -z postgres-platform-rw.platform.svc.cluster.local 5432 >/dev/null 2>&1 && exit 13; \
+    timeout 5 nc -z 192.168.5.2 15432 >/dev/null 2>&1 && exit 14; \
     echo NETPOL_OK'
 kubectl -n agents wait --for=jsonpath='{.status.phase}'=Succeeded pod/m4b-netpol-probe --timeout=120s >/dev/null 2>&1 \
   || true
