@@ -127,7 +127,9 @@ def test_pod_manifest_shape() -> None:
     assert "gitea-admin-TOKEN-SECRET" not in main_json
     assert main["workingDir"] == "/workspace/run-30/vertex-29"
     env_main = {e["name"]: e for e in main["env"]}
-    assert env_main["OPENCODE_DB"]["value"] == "/workspace/run-30/.opencode-db-29"
+    assert "OPENCODE_DB" not in env_main, (
+        "state must stay in the container: OPENCODE_DB on the PVC breaks snapshots"
+    )
     assert env_main["LITELLM_API_KEY"]["valueFrom"]["secretKeyRef"]["key"] == "litellm-api-key"
     main_mounts = main["volumeMounts"]
     assert {"name": "workspace", "mountPath": "/workspace"} in main_mounts, (
@@ -167,7 +169,7 @@ def test_start_happy_path_returns_handle() -> None:
                 subprocess.CompletedProcess([], 0, stdout=_ready_pod_json(), stderr=""),
             ),
             (
-                "logs",
+                "kubectl -n agents logs",
                 subprocess.CompletedProcess(
                     [], 0, stdout="server password pod-secret-token\n", stderr=""
                 ),
@@ -208,7 +210,7 @@ def test_nodeport_allocation_skips_used() -> None:
                 subprocess.CompletedProcess([], 0, stdout=_ready_pod_json(), stderr=""),
             ),
             (
-                "logs",
+                "kubectl -n agents logs",
                 subprocess.CompletedProcess([], 0, stdout="server password tok\n", stderr=""),
             ),
         ]
@@ -234,7 +236,7 @@ def test_nodeport_conflict_retries_next() -> None:
                 subprocess.CompletedProcess([], 0, stdout=_ready_pod_json(), stderr=""),
             ),
             (
-                "logs",
+                "kubectl -n agents logs",
                 subprocess.CompletedProcess([], 0, stdout="server password tok\n", stderr=""),
             ),
         ]
@@ -254,7 +256,7 @@ def test_stop_deletes_service_pod_secret_idempotent() -> None:
                 subprocess.CompletedProcess([], 0, stdout=_ready_pod_json(), stderr=""),
             ),
             (
-                "logs",
+                "kubectl -n agents logs",
                 subprocess.CompletedProcess([], 0, stdout="server password tok\n", stderr=""),
             ),
         ]
@@ -409,7 +411,7 @@ def test_factory_builds_executor_with_handle_values(
             ),
             ("get pod", subprocess.CompletedProcess([], 0, stdout=_ready_pod_json(), stderr="")),
             (
-                "logs",
+                "kubectl -n agents logs",
                 subprocess.CompletedProcess(
                     [], 0, stdout="server password pod-secret-token\n", stderr=""
                 ),
@@ -439,7 +441,10 @@ def test_sandbox_session_stop_tears_down_sandbox() -> None:
     kube = FakeKube(
         [
             ("get pod", subprocess.CompletedProcess([], 0, stdout=_ready_pod_json(), stderr="")),
-            ("logs", subprocess.CompletedProcess([], 0, stdout="server password tok\n", stderr="")),
+            (
+                "kubectl -n agents logs",
+                subprocess.CompletedProcess([], 0, stdout="server password tok\n", stderr=""),
+            ),
         ]
     )
     factory = ks.KubeSandboxExecutorFactory(

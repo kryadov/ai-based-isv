@@ -159,13 +159,21 @@ def pod_manifest(
                     "name": "serve",
                     "image": image,
                     "imagePullPolicy": "IfNotPresent",
-                    "command": ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096"],
+                    "command": [
+                        "opencode",
+                        "serve",
+                        "--hostname",
+                        "0.0.0.0",
+                        "--port",
+                        "4096",
+                        "--print-logs",
+                    ],
                     "workingDir": run_dir,
+                    # NO OPENCODE_DB: pointing opencode's state into the PVC-backed
+                    # workspace breaks its snapshot/diff machinery (deterministic
+                    # empty diffs, verified 2026-11-10). Containers are per-vertex,
+                    # so the default ephemeral state already isolates sessions.
                     "env": [
-                        {
-                            "name": "OPENCODE_DB",
-                            "value": f"/workspace/run-{run_id}/.opencode-db-{vertex_id}",
-                        },
                         {
                             "name": "LITELLM_API_KEY",
                             "valueFrom": {
