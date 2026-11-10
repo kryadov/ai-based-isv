@@ -264,7 +264,7 @@ IGN
 (
   cd "$SEED"
   git init -q -b main
-  git add -A
+  git add pyproject.toml src tests .gitignore
   git -c user.name=m4a-acceptance -c user.email=m4a-acceptance@lab.local \
     commit -qm "m4a: seed micro Python project"
   # credentials travel as an HTTP header — the same scheme the worker's gitops uses
