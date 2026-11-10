@@ -489,8 +489,8 @@ echo "M4b flow: sandbox teardown clean (pod/service/secret removed)"
 #     Postgres (cluster service or host NodePort). Positive control proves the
 #     probe pod itself is fine before asserting the denials.
 kubectl -n agents run m4b-netpol-probe --image=alpine:3.20 --restart=Never --command -- \
-  sh -c 'wget -qO- -T 5 http://gitea-http.platform.svc.cluster.local:3000/api/v1/version >/dev/null || exit 11; \
-    wget -qO- -T 8 http://litellm.platform.svc.cluster.local:4000/health/liveliness >/dev/null || exit 12; \
+  sh -c 'i=0; until wget -qO- -T 5 http://gitea-http.platform.svc.cluster.local:3000/api/v1/version >/dev/null; do i=$((i+1)); [ $i -ge 5 ] && exit 11; sleep 3; done; \
+    i=0; until wget -qO- -T 8 http://litellm.platform.svc.cluster.local:4000/health/liveliness >/dev/null; do i=$((i+1)); [ $i -ge 5 ] && exit 12; sleep 3; done; \
     timeout 5 nc -z postgres-platform-rw.platform.svc.cluster.local 5432 >/dev/null 2>&1 && exit 13; \
     timeout 5 nc -z 192.168.5.2 15432 >/dev/null 2>&1 && exit 14; \
     echo NETPOL_OK'
