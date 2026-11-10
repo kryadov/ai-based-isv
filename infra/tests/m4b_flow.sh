@@ -212,8 +212,6 @@ for _ in 1 2 3 4 5; do
 done
 [ "$PG_OK" = "1" ] || fail "Postgres NodePort $PG_PORT (db $PG_DB) is unreachable"
 
-PY
-
 # ---------------------------------------------------------------------------
 # 2) Seed the scratch repo (idempotent: org and repo are recreated every run)
 # ---------------------------------------------------------------------------
