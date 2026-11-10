@@ -562,3 +562,14 @@ async def test_evidence_root_separates_artifacts_from_workspace(tmp_path: Path) 
     assert expected_evidence.is_dir()
     # workspace itself is not polluted with evidence
     assert not (workspace / ".agent_runtime").exists()
+
+
+def test_opencode_config_text_renders_provider_and_permissions() -> None:
+    from agent_runtime.opencode_executor import opencode_config_text
+
+    text = opencode_config_text(model="litellm/qwen3", llm_endpoint="http://litellm.internal:4000")
+    assert '"model": "litellm/qwen3"' in text
+    assert '"baseURL": "http://litellm.internal:4000"' in text
+    assert '"apiKey": "{env:LITELLM_API_KEY}"' in text
+    assert '"effect": "allow"' in text
+    assert text.startswith("{") and text.endswith("\n")

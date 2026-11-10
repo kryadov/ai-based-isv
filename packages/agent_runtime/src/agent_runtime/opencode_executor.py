@@ -39,6 +39,34 @@ _DockerRunner = Callable[
 ]
 
 
+def opencode_config_text(*, model: str, llm_endpoint: str) -> str:
+    """Render the opencode.jsonc content shared by docker and k3s sandboxes."""
+    provider_id, model_id = _split_model(model)
+    config = {
+        "$schema": "https://opencode.ai/config.json",
+        "model": f"{provider_id}/{model_id}",
+        "permissions": [{"action": "*", "resource": "*", "effect": "allow"}],
+        "providers": {
+            provider_id: {
+                "name": f"{provider_id} provider",
+                "env": ["LITELLM_API_KEY"],
+                "package": "@opencode/ai/providers/openai-compatible",
+                "settings": {
+                    "baseURL": llm_endpoint,
+                    "apiKey": "{env:LITELLM_API_KEY}",
+                },
+                "models": {
+                    model_id: {
+                        "name": model_id,
+                        "modelID": model_id,
+                    }
+                },
+            }
+        },
+    }
+    return f"{json.dumps(config, indent=2, ensure_ascii=False)}\n"
+
+
 class DockerServe:
     """Build a git-enabled derived image and run ``opencode serve`` in Docker.
 
@@ -255,31 +283,8 @@ class OpencodeExecutor:
             await asyncio.to_thread(self._serve.stop)
 
     def _write_config(self, workspace: Path) -> None:
-        provider_id, model_id = _split_model(self._model)
-        config = {
-            "$schema": "https://opencode.ai/config.json",
-            "model": f"{provider_id}/{model_id}",
-            "permissions": [{"action": "*", "resource": "*", "effect": "allow"}],
-            "providers": {
-                provider_id: {
-                    "name": f"{provider_id} provider",
-                    "env": ["LITELLM_API_KEY"],
-                    "package": "@opencode/ai/providers/openai-compatible",
-                    "settings": {
-                        "baseURL": self._llm_endpoint,
-                        "apiKey": "{env:LITELLM_API_KEY}",
-                    },
-                    "models": {
-                        model_id: {
-                            "name": model_id,
-                            "modelID": model_id,
-                        }
-                    },
-                }
-            },
-        }
         (workspace / "opencode.jsonc").write_text(
-            f"{json.dumps(config, indent=2, ensure_ascii=False)}\n",
+            opencode_config_text(model=self._model, llm_endpoint=self._llm_endpoint),
             encoding="utf-8",
         )
 
