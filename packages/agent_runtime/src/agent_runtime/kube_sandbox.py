@@ -119,7 +119,10 @@ def pod_manifest(
         "set -e; "
         f"rm -rf '{run_dir}'; "
         f"mkdir -p '{run_dir}'; "
-        f"git clone --depth 1 -b '{base_branch}' \"{credentialed_url}\" '{run_dir}'; "
+        # Full clone (not --depth 1): the harness snapshot/diff mechanism reads
+        # repository history; a shallow clone made its diff come back empty
+        # (deterministic on the k3s stand, 4/4 attempts on 2026-11-10).
+        f"git clone -b '{base_branch}' \"{credentialed_url}\" '{run_dir}'; "
         f"cp /config/opencode.jsonc '{run_dir}/opencode.jsonc'"
     )
     return {
