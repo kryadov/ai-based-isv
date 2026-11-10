@@ -3,7 +3,7 @@
 > Read this file FIRST. Then `ARCH.md` (how it works, diagrams), `AGENTS.md` (rules), `TODO.md` (backlog).
 > This file is updated at the end of EVERY increment. If your findings contradict it — verify, then update it.
 
-Last updated: 2026-11-09 (evening — pre-compaction snapshot, M3 closed)
+Last updated: 2026-11-10 (M4a closed — executor E2E live; next M4b)
 
 ## What this project is
 
@@ -30,16 +30,27 @@ Verified acceptance flows (run them on the stand):
 ./infra/tests/m2c_flow.sh          # tracker issues → poller + LLM gateway
 ./infra/tests/m2d_flow.sh          # bootstrap CLI end-to-end
 ./infra/tests/m3_flow.sh           # control plane on live Postgres (NodePort, no port-forward)
+./infra/tests/m4a_flow.sh          # agent_runtime E2E: issue-like vertex → agent in docker → PR branch with evidence
 ```
 
-All five PASS as of this snapshot. Code gates: `uv run ruff check .` / `uv run mypy packages apps` / `uv run pytest` — green (35 tests).
+All six PASS as of this snapshot (`m4a_flow.sh` PASS ×2 live, ~2.5 min per run). Code gates: `uv run ruff check .` / `uv run mypy packages apps` / `uv run pytest` — green (143 passed, 1 skipped).
+
+**M4a adds — agent_runtime (first real executor, verified E2E):**
+
+- **Executor contract** (`packages/agent_runtime/src/agent_runtime/executor.py`): `Executor.start(ExecutionRequest) -> ExecutionSession` (events/wait_done/diff/status/stop/result) — harness-agnostic; control plane never sees the harness.
+- **OpenCode adapter**: thin REST/SSE client to `opencode serve` 2.2.0 (pinned `ghcr.io/anomalyco/opencode:2.2.0`; derived git-enabled image built via Dockerfile-on-stdin), docker launcher with Basic-auth password scraped from logs, eager SSE subscribe → pump into append-only NDJSON session log (torn-tail safe), run manifest (image pin, model, verdict), fail-closed on stream cuts.
+- **Code-validated acceptance**: `done_when` (JSON checks: cmd/files_exist; empty/unparseable/unknown → FAIL) and `paths_allow` guard (deletions/renames/copies guarded both sides; unparseable diff → FAIL; per-section path attribution) — no LLM judgment.
+- **Run-scoped worker** (`python -m agent_runtime.worker`): claim from `agent_api` (lease+heartbeat off-loop) → pristine clone + sandbox copy (`git clone --local`) → opencode in docker → diff → pathguard → apply to pristine clone → done_when → push `agent/vertex-{id}` with `--force` (token via `http.extraHeader`, never argv/URL/config) → complete/fail with verdict in audit; max-attempts blacklist; heartbeat-409 → abandon.
+- **Evidence**: `.agent-runtime-workspace/run-N/{target/, sandbox/, .agent_runtime/runs/run-N/vertex-M/{session_log.ndjson,manifest.json}}` (gitignored).
+- **Live lessons baked in**: model must be `litellm/qwen3` (qwen-coder returns tool-calls as text — preflight asserts `tool_calls`); bodyless `POST /api/session` → 400 (client sends `{}`); `Authorization: token <TOKEN>` header scheme confirmed live on Gitea git-http; done_when cmd runs on host with scrubbed env (PATH/HOME/LANG/TMPDIR only — M4b moves checks into the pod); snapshot intermittency (empty diff on retried sessions) — M4b spike.
 
 ## Milestones
 
 - ✅ **M1** — monorepo skeleton (release **v0.1.0**)
 - ✅ **M2a/M2b/M2c/M2d** — L0 infrastructure + bootstrapper CLI (release **v0.2.0**)
 - ✅ **M3 — control plane (DONE)**: `isv_core` domain + `agent_api` (vertex queue with lease, identities, budgets, HITL inbox, audit journal, merge queue) — merged to main, **m3_flow PASS on live Postgres**, CI green, release **v0.3.0**. Plan: `docs/superpowers/plans/2026-11-09-m3-control-plane.md`.
-- ⏭️ **Next: M4** (agent_runtime: Executor/OpenCode in k3s sandbox, MCP task-source/git/llm) — write the plan at increment start (`docs/superpowers/plans/` convention). Then M5 (gates + review), M6 (canary), M7 (memory), M8 (swarm mode), M9 (polyglot dogfood), M10 (UI panel + Automations).
+- ✅ **M4a — Executor/OpenCode locally (DONE 2026-11-10)**: `agent_runtime` — Executor contract, OpenCode adapter (docker, pin 2.2.0), session log, done_when/paths_allow code validation, run manifest, run-scoped worker; **m4a_flow PASS ×2 live**, regressions m2a–d+m3 PASS, gates green. Plan: `docs/superpowers/plans/2026-11-09-m4a-executor-opencode.md`; design: `docs/superpowers/specs/2026-11-09-m4-agent-runtime-design.md`.
+- ⏭️ **Next: M4b** (sandbox in k3s: pod manager — initContainer clone, NetworkPolicy allow-list, Vault-token brokering into initContainer; spikes: NetworkPolicy enforcement on k3d, harness snapshot intermittency) → then **M4c** (MCP task-source/git/llm + full E2E with tracker status loop). Then M5 (gates + review), M6 (canary), M7 (memory), M8 (swarm mode), M9 (polyglot dogfood), M10 (UI panel + Automations). Release v0.4.0 at M4 close (a+b+c).
 
 ## Releases / conventions
 
@@ -49,6 +60,8 @@ All five PASS as of this snapshot. Code gates: `uv run ruff check .` / `uv run m
 - Onboarding per project kind (§13.1): per-kind repo templates + tutorials planned (TODO), wizard v0 in CLI, Projects UI in M10 — confirmed by owner.
 
 ## Open decisions (owner)
+
+- Executor model on the stand: `litellm/qwen3` (qwen-coder cannot drive the harness — tool-calls arrive as text; LiteLLM/Ollama translation quirk). Cloud API keys would lift both quality and speed of agent vertices.
 
 - OpenProject auth quirk (password/basic auth broken) — investigate or OIDC; until then Gitea Issues is the tracker (TODO.md)
 - LiteLLM providers: local Ollama now; cloud API keys when provided
