@@ -8,13 +8,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from agent_api import store
 
 
-async def _make_run_with_vertices(session: AsyncSession, count: int = 1,
-                                  deps_of_second: list[str] | None = None) -> int:
+async def _make_run_with_vertices(
+    session: AsyncSession, count: int = 1, deps_of_second: list[str] | None = None
+) -> int:
     run_id = await store.create_run(session, project="isv-product", task_ref="TRK-1")
     await store.add_vertex(session, run_id, name=f"v1-{count}", done_when="t green")
     if count > 1:
-        await store.add_vertex(session, run_id, name=f"v2-{count}", done_when="ok",
-                               deps=deps_of_second or [f"v1-{count}"])
+        await store.add_vertex(
+            session,
+            run_id,
+            name=f"v2-{count}",
+            done_when="ok",
+            deps=deps_of_second or [f"v1-{count}"],
+        )
     return run_id
 
 
@@ -46,8 +52,7 @@ async def test_complete_vertex_terminal(session: AsyncSession) -> None:
     run_id = await _make_run_with_vertices(session)
     claimed = await store.claim_vertex(session, run_id, agent="w")
     assert claimed is not None
-    assert await store.complete_vertex(session, claimed["id"], agent="w",
-                                       result_data={"pr": 1})
+    assert await store.complete_vertex(session, claimed["id"], agent="w", result_data={"pr": 1})
     again = await store.claim_vertex(session, run_id, agent="w")
     assert again is None, "done vertex is not handed out"
 
@@ -73,8 +78,7 @@ async def test_deps_block_claim_until_done(session: AsyncSession) -> None:
     session2 = session
     run_id = await store.create_run(session2, "p", "t")
     await store.add_vertex(session2, run_id, name="first", done_when="x")
-    await store.add_vertex(session2, run_id, name="second", done_when="y",
-                           deps=["first"])
+    await store.add_vertex(session2, run_id, name="second", done_when="y", deps=["first"])
     claimed = await store.claim_vertex(session2, run_id, agent="w")
     assert claimed is not None and claimed["name"] == "first"
     await store.complete_vertex(session2, claimed["id"], agent="w")
@@ -99,13 +103,9 @@ async def test_hitl_decide_once(session: AsyncSession) -> None:
 
 
 async def test_audit_append_and_list(session: AsyncSession) -> None:
-    await store.append_audit(session, "worker-1", "vertex.complete", "vertex:12",
-                             payload={"pr": 1})
-    await store.append_audit(session, "human", "hitl.decide", "hitl:3",
-                             outcome="rejected")
-    events = await session.scalars(
-        __import__("sqlalchemy").select(AuditRow).order_by(AuditRow.id)
-    )
+    await store.append_audit(session, "worker-1", "vertex.complete", "vertex:12", payload={"pr": 1})
+    await store.append_audit(session, "human", "hitl.decide", "hitl:3", outcome="rejected")
+    events = await session.scalars(__import__("sqlalchemy").select(AuditRow).order_by(AuditRow.id))
     all_events = list(events)
     assert len(all_events) == 2
     assert all_events[0].actor == "worker-1"

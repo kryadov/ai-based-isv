@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Тестовый endpoint для acceptance M2c (raw-socket: http.server на macOS+vz кидает hang-up
 на loopback-подключения; raw-сокет доказанно работает). Принимает POST, сохраняет payload."""
+
 import contextlib
 import socket
 

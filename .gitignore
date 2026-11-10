@@ -56,3 +56,9 @@ infra/.vault-unseal-keys.json
 infra/.vault-unseal-keys.json
 infra/.vault-root-token
 agent-api.db
+
+# Agent runtime workspace: target-repo clones, opencode sandboxes and the run
+# evidence (session logs + manifests) written by the M4a vertex worker.
+# No trailing slash: `git check-ignore` must also match not-yet-created dirs.
+.agent-runtime-workspace
+.agent_runtime

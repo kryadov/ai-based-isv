@@ -61,7 +61,8 @@ def test_identity_and_budget() -> None:
 
 
 def test_audit_event_append_shape() -> None:
-    e = AuditEvent(actor="exec-csv-01", action="vertex.complete", target="vertex:12",
-                   payload={"pr": 41})
+    e = AuditEvent(
+        actor="exec-csv-01", action="vertex.complete", target="vertex:12", payload={"pr": 41}
+    )
     assert e.outcome == "ok"
     assert e.payload == {"pr": 41}

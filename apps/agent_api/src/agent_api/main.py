@@ -61,7 +61,8 @@ def create_app() -> FastAPI:
     async def add_vertex(run_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         async with app.state.session_factory() as session:
             vertex_id = await store.add_vertex(
-                session, run_id,
+                session,
+                run_id,
                 name=str(payload.get("name", "")),
                 done_when=str(payload.get("done_when", "")),
                 deps=list(payload.get("deps", [])),
@@ -84,7 +85,9 @@ def create_app() -> FastAPI:
     async def heartbeat(vertex_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         async with app.state.session_factory() as session:
             ok = await store.heartbeat_vertex(
-                session, vertex_id, agent=str(payload.get("agent", "")),
+                session,
+                vertex_id,
+                agent=str(payload.get("agent", "")),
                 ttl_seconds=int(payload.get("ttl_seconds", 300)),
             )
             if not ok:
@@ -95,7 +98,9 @@ def create_app() -> FastAPI:
     async def complete(vertex_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         async with app.state.session_factory() as session:
             ok = await store.complete_vertex(
-                session, vertex_id, agent=str(payload.get("agent", "")),
+                session,
+                vertex_id,
+                agent=str(payload.get("agent", "")),
                 result_data=payload.get("result"),
             )
             if not ok:
@@ -114,7 +119,9 @@ def create_app() -> FastAPI:
     async def register_identity(payload: dict[str, Any]) -> dict[str, Any]:
         async with app.state.session_factory() as session:
             ident_id = await store.register_identity(
-                session, name=str(payload["name"]), role=str(payload.get("role", "executor")),
+                session,
+                name=str(payload["name"]),
+                role=str(payload.get("role", "executor")),
                 allowed_sections=list(payload.get("allowed_sections", [])),
             )
             return {"identity_id": ident_id}
@@ -139,7 +146,9 @@ def create_app() -> FastAPI:
     async def create_hitl(payload: dict[str, Any]) -> dict[str, Any]:
         async with app.state.session_factory() as session:
             rid = await store.create_hitl(
-                session, kind=str(payload["kind"]), subject=str(payload["subject"]),
+                session,
+                kind=str(payload["kind"]),
+                subject=str(payload["subject"]),
                 context=payload.get("context"),
             )
             return {"request_id": rid}
@@ -147,19 +156,17 @@ def create_app() -> FastAPI:
     @app.get("/hitl/pending")
     async def list_pending() -> dict[str, Any]:
         async with app.state.session_factory() as session:
-            rows = await session.scalars(
-                select(HITLRow).where(HITLRow.status == "pending")
-            )
-            return {"pending": [
-                {"id": r.id, "kind": r.kind, "subject": r.subject} for r in rows
-            ]}
+            rows = await session.scalars(select(HITLRow).where(HITLRow.status == "pending"))
+            return {"pending": [{"id": r.id, "kind": r.kind, "subject": r.subject} for r in rows]}
 
     @app.post("/hitl/{request_id}/decision")
     async def decide_hitl(request_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         async with app.state.session_factory() as session:
             from sqlalchemy import select
+
             status = await store.decide_hitl(
-                session, request_id,
+                session,
+                request_id,
                 action=str(payload.get("action", "approve")),
                 decided_by=str(payload.get("decided_by", "human")),
                 note=payload.get("note"),
@@ -167,16 +174,21 @@ def create_app() -> FastAPI:
             if status is None:
                 rows = await session.scalars(select(HITLRow).where(HITLRow.id == request_id))
                 exists = rows.first() is not None
-                raise HTTPException(status_code=409 if exists else 404,
-                                    detail="not pending" if exists else "not found")
+                raise HTTPException(
+                    status_code=409 if exists else 404,
+                    detail="not pending" if exists else "not found",
+                )
             return {"status": status}
 
     @app.post("/audit")
     async def append_audit(payload: dict[str, Any]) -> dict[str, Any]:
         async with app.state.session_factory() as session:
             event_id = await store.append_audit(
-                session, actor=str(payload["actor"]), action=str(payload["action"]),
-                target=str(payload["target"]), outcome=str(payload.get("outcome", "ok")),
+                session,
+                actor=str(payload["actor"]),
+                action=str(payload["action"]),
+                target=str(payload["target"]),
+                outcome=str(payload.get("outcome", "ok")),
                 payload=payload.get("payload"),
             )
             return {"event_id": event_id}
@@ -184,30 +196,38 @@ def create_app() -> FastAPI:
     @app.get("/audit")
     async def list_audit(target: str | None = None, limit: int = 50) -> dict[str, Any]:
         from sqlalchemy import select
+
         async with app.state.session_factory() as session:
             stmt = select(AuditRow).order_by(AuditRow.id.desc()).limit(limit)
             if target:
                 stmt = stmt.where(AuditRow.target == target)
             rows = await session.scalars(stmt)
-            return {"events": [
-                {"id": r.id, "ts": str(r.ts), "actor": r.actor, "action": r.action,
-                 "target": r.target, "outcome": r.outcome, "payload": r.payload_json}
-                for r in rows
-            ]}
+            return {
+                "events": [
+                    {
+                        "id": r.id,
+                        "ts": str(r.ts),
+                        "actor": r.actor,
+                        "action": r.action,
+                        "target": r.target,
+                        "outcome": r.outcome,
+                        "payload": r.payload_json,
+                    }
+                    for r in rows
+                ]
+            }
 
     @app.post("/merge-queue")
     async def enqueue_merge(payload: dict[str, Any]) -> dict[str, Any]:
         async with app.state.session_factory() as session:
             entry_id = await store.enqueue_merge(
-                session, pr_ref=str(payload["pr_ref"]), project=str(payload["project"]),
+                session,
+                pr_ref=str(payload["pr_ref"]),
+                project=str(payload["project"]),
             )
             return {"entry_id": entry_id}
 
     return app
-
-
-
-
 
 
 if __name__ == "__main__":
