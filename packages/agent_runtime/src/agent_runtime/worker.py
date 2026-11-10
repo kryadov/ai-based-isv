@@ -26,10 +26,18 @@ from agent_runtime.done_when import (
 )
 from agent_runtime.executor import ExecutionRequest, ExecutionSession, ExecutionStatus, Executor
 from agent_runtime.gitops import apply_diff, clone_local, ensure_repo, push_head
+from agent_runtime.kube_sandbox import (
+    KubeSandboxExecutorFactory,
+    reconcile_orphans,
+)
+from agent_runtime.kube_sandbox import (
+    kubectl_runner as _kubectl_runner,
+)
 from agent_runtime.manifest import write_manifest
 from agent_runtime.opencode_executor import OpencodeExecutor
 from agent_runtime.pathguard import DiffUnparseable, diff_files, filter_violations
 from agent_runtime.settings import WorkerSettings
+from agent_runtime.vault_broker import read_gitea_token
 
 
 class ControlPlaneClient:
@@ -100,6 +108,58 @@ class ControlPlaneClient:
 
 def _git_token(raw: str) -> str | None:
     return raw if raw else None
+
+
+def build_executor(
+    settings: WorkerSettings,
+    *,
+    repo_dir: Path,
+    kube_runner: Any | None = None,
+) -> Executor:
+    """Construct the backend executor: docker spawn (M4a) or k3s sandbox (M4b).
+
+    The k3s path brokers the Gitea token (explicit ``git_token`` wins over
+    OpenBao) and reconciles sandbox pods orphaned by dead workers before the
+    first vertex is claimed.
+    """
+    if settings.sandbox_backend == "k3s":
+        gitea_token = _git_token(settings.git_token)
+        if gitea_token is None:
+            root_token = settings.vault_root_token
+            if not root_token:
+                path = settings.vault_root_token_path
+                if not path.exists():
+                    raise ValueError(
+                        "k3s backend needs a Gitea token: set AGENT_RUNTIME_GIT_TOKEN "
+                        f"or provide the vault root token file at {path}"
+                    )
+                root_token = path.read_text(encoding="utf-8").strip()
+            kubectl: Any = kube_runner if kube_runner is not None else _kubectl_runner
+            gitea_token = read_gitea_token(kubectl, root_token=root_token)
+            reconcile_orphans(
+                kubectl,
+                namespace=settings.k8s_namespace,
+                max_age_seconds=float(settings.lease_ttl_seconds) * 2,
+            )
+        return KubeSandboxExecutorFactory(
+            gitea_token=gitea_token,
+            litellm_api_key=settings.litellm_api_key,
+            litellm_base_url=settings.litellm_base_url,
+            model=settings.model,
+            evidence_root=_run_workspace(settings),
+            namespace=settings.k8s_namespace,
+            nodeport_range=(settings.nodeport_range_low, settings.nodeport_range_high),
+            kube_runner=kube_runner,
+        )
+    sandbox_dir = _reset_sandbox(repo_dir, _sandbox_dir(settings))
+    return OpencodeExecutor(
+        base_url=settings.opencode_base_url,
+        workspace=sandbox_dir,
+        evidence_root=_run_workspace(settings),
+        model=settings.model,
+        llm_endpoint=settings.litellm_base_url,
+        port=settings.opencode_port,
+    )
 
 
 def _run_workspace(settings: WorkerSettings) -> Path:
@@ -463,16 +523,7 @@ def main() -> None:
         settings.base_branch,
         token=_git_token(settings.git_token),
     )
-    sandbox_dir = _reset_sandbox(repo_dir, _sandbox_dir(settings))
-
-    executor = OpencodeExecutor(
-        base_url=settings.opencode_base_url,
-        workspace=sandbox_dir,
-        evidence_root=run_ws,
-        model=settings.model,
-        llm_endpoint=settings.litellm_base_url,
-        port=settings.opencode_port,
-    )
+    executor = build_executor(settings, repo_dir=repo_dir)
 
     with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(worker_loop(settings, executor))

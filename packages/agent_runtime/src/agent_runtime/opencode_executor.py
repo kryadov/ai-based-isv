@@ -187,8 +187,10 @@ class OpencodeExecutor:
         transport: httpx.AsyncBaseTransport | None = None,
         docker_runner: _DockerRunner | None = None,
         evidence_root: Path | None = None,
+        auth: tuple[str, str] | None = None,
     ) -> None:
         self._base_url = base_url
+        self._auth = auth
         self._workspace = workspace
         self._image = image
         self._model = model
@@ -250,6 +252,8 @@ class OpencodeExecutor:
             )
             base_url = await asyncio.to_thread(self._serve.start)
             auth = self._serve.auth
+        else:
+            auth = self._auth
 
         http = httpx.AsyncClient(
             base_url=base_url,

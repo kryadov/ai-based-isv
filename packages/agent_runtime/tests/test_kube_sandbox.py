@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
+from agent_runtime.executor import ExecutionStatus
 from agent_runtime.kube_sandbox import (
     KubeSandbox,
     KubeSandboxError,
@@ -17,6 +21,7 @@ from agent_runtime.kube_sandbox import (
     secret_manifest,
     service_manifest,
 )
+from agent_runtime.opencode_executor import OpencodeExecutor
 
 Run = Callable[[list[str], str | None], subprocess.CompletedProcess[str]]
 
@@ -317,3 +322,158 @@ def test_runner_error_raises_kube_sandbox_error_without_token_echo() -> None:
     assert "gitea-admin-TOKEN-SECRET" not in str(excinfo.value)
     deletes = " ".join(" ".join(argv) for argv, _ in kube.calls_with("delete"))
     assert "secret/agent-30-29" in deletes
+
+
+class _StubSession:
+    """Minimal ExecutionSession double for wiring tests."""
+
+    def __init__(self) -> None:
+        self.stopped = False
+
+    def events(self) -> AsyncIterator[Any]:
+        async def _empty() -> AsyncIterator[Any]:
+            return
+            yield  # pragma: no cover  (unreachable generator formality)
+
+        return _empty()
+
+    async def wait_done(self) -> Any:
+        return ExecutionStatus.DONE
+
+    async def diff(self) -> str:
+        return ""
+
+    async def status(self) -> ExecutionStatus:
+        return ExecutionStatus.DONE
+
+    async def stop(self) -> None:
+        self.stopped = True
+
+    @property
+    def result(self) -> Any:
+        return None
+
+
+def _opencode_mock(request: httpx.Request) -> httpx.Response:
+    """Minimal opencode serve: session create, SSE terminal event, diff."""
+    if request.method == "POST" and request.url.path.endswith("/session"):
+        return httpx.Response(200, json={"data": {"id": "ses_t"}})
+    if request.url.path == "/api/event":
+        body = (
+            'data: {"id":"e1","type":"session.execution.succeeded",'
+            '"data":{"sessionID":"ses_t"}}\n\n'
+        )
+        return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+    if "diff" in request.url.path:
+        return httpx.Response(200, json={"data": []})
+    return httpx.Response(200, json={})
+
+
+def _factory_request() -> Any:
+    from agent_runtime.executor import ExecutionRequest
+
+    return ExecutionRequest(
+        run_id=30,
+        vertex_id=29,
+        name="v",
+        prompt="p",
+        paths_allow=[],
+        done_when='{"checks":[]}',
+        repo_url="http://127.0.0.1:30080/swarm-lab/target-scratch",
+        work_branch="agent/vertex-29",
+    )
+
+
+def test_factory_builds_executor_with_handle_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import agent_runtime.kube_sandbox as ks
+
+    created: dict[str, Any] = {}
+
+    class SpyExecutor(OpencodeExecutor):
+        def __init__(self, **kwargs: Any) -> None:
+            created.update(kwargs)
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(ks, "OpencodeExecutor", SpyExecutor)
+    kube = FakeKube(
+        [
+            (
+                "get svc",
+                subprocess.CompletedProcess([], 0, stdout=json.dumps({"items": []}), stderr=""),
+            ),
+            ("get pod", subprocess.CompletedProcess([], 0, stdout=_ready_pod_json(), stderr="")),
+            (
+                "logs",
+                subprocess.CompletedProcess(
+                    [], 0, stdout="server password pod-secret-token\n", stderr=""
+                ),
+            ),
+        ]
+    )
+    factory = ks.KubeSandboxExecutorFactory(
+        gitea_token="gitea-admin-TOKEN-SECRET",
+        litellm_api_key="sk-master-KEY-SECRET",
+        litellm_base_url="http://litellm.platform.svc.cluster.local:4000",
+        model="litellm/qwen3",
+        evidence_root=tmp_path,
+        kube_runner=kube,
+        transport=httpx.MockTransport(_opencode_mock),
+    )
+    session = asyncio.run(factory.start(_factory_request()))
+    assert created["base_url"] == "http://127.0.0.1:30100"
+    assert created["auth"] == ("opencode", "pod-secret-token")
+    assert created["evidence_root"] == tmp_path
+    assert created["model"] == "litellm/qwen3"
+    assert isinstance(session, ks.SandboxSession)
+
+
+def test_sandbox_session_stop_tears_down_sandbox() -> None:
+    import agent_runtime.kube_sandbox as ks
+
+    kube = FakeKube(
+        [
+            ("get pod", subprocess.CompletedProcess([], 0, stdout=_ready_pod_json(), stderr="")),
+            ("logs", subprocess.CompletedProcess([], 0, stdout="server password tok\n", stderr="")),
+        ]
+    )
+    factory = ks.KubeSandboxExecutorFactory(
+        gitea_token="t",
+        litellm_api_key="k",
+        litellm_base_url="http://litellm.platform.svc.cluster.local:4000",
+        model="litellm/qwen3",
+        evidence_root=Path("/tmp/ev"),
+        kube_runner=kube,
+        transport=httpx.MockTransport(_opencode_mock),
+    )
+
+    async def drive() -> None:
+        session = await factory.start(_factory_request())
+        assert isinstance(session, ks.SandboxSession)
+        await session.stop()
+
+    asyncio.run(drive())
+    deletes = " ".join(" ".join(argv) for argv, _ in kube.calls_with("delete"))
+    assert "pod/agent-30-29" in deletes
+    assert "secret/agent-30-29" in deletes
+    assert "service/agent-30-29" in deletes
+
+
+def test_factory_start_sandbox_failure_propagates() -> None:
+    import agent_runtime.kube_sandbox as ks
+
+    kube = FakeKube(
+        [("apply Secret", subprocess.CompletedProcess([], 1, stdout="", stderr="boom"))]
+    )
+    factory = ks.KubeSandboxExecutorFactory(
+        gitea_token="t",
+        litellm_api_key="k",
+        litellm_base_url="http://litellm.platform.svc.cluster.local:4000",
+        model="litellm/qwen3",
+        evidence_root=Path("/tmp/ev"),
+        kube_runner=kube,
+        transport=httpx.MockTransport(_opencode_mock),
+    )
+    with pytest.raises(KubeSandboxError):
+        asyncio.run(factory.start(_factory_request()))

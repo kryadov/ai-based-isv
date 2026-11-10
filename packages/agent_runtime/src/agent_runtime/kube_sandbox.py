@@ -13,17 +13,28 @@ them as env/volume. Teardown deletes Pod, Service and Secret (idempotent,
 
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+import httpx
 from pydantic import BaseModel
 
-from agent_runtime.opencode_executor import opencode_config_text
+from agent_runtime.executor import (
+    ExecutionEvent,
+    ExecutionRequest,
+    ExecutionResult,
+    ExecutionSession,
+    ExecutionStatus,
+)
+from agent_runtime.opencode_executor import OpencodeExecutor, opencode_config_text
+from agent_runtime.session_log import SessionLog
 from agent_runtime.settings import OPENCODE_IMAGE
 
 #: Same shape as the docker runner seam (argv, stdin) — keeps the injection
@@ -41,7 +52,7 @@ class KubeSandboxError(RuntimeError):
     """Raised when the sandbox cannot be created or torn down."""
 
 
-def _kubectl_runner(argv: list[str], stdin: str | None) -> subprocess.CompletedProcess[str]:
+def kubectl_runner(argv: list[str], stdin: str | None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(argv, capture_output=True, text=True, check=False, input=stdin)
 
 
@@ -244,7 +255,7 @@ class KubeSandbox:
         self._model = model
         self._namespace = namespace
         self._low, self._high = nodeport_range
-        self._kube = kube_runner if kube_runner is not None else _kubectl_runner
+        self._kube = kube_runner if kube_runner is not None else kubectl_runner
         self._image = image
         self._name = _object_name(run_id, vertex_id)
 
@@ -373,6 +384,105 @@ class KubeSandbox:
                 break
         assert last is not None
         raise self._fail("service", last)
+
+
+class SandboxSession:
+    """ExecutionSession that tears its sandbox down when the worker stops it."""
+
+    def __init__(self, inner: ExecutionSession, sandbox: KubeSandbox) -> None:
+        self._inner = inner
+        self._sandbox = sandbox
+
+    def events(self) -> AsyncIterator[ExecutionEvent]:
+        return self._inner.events()
+
+    async def wait_done(self) -> ExecutionStatus:
+        return await self._inner.wait_done()
+
+    async def diff(self) -> str:
+        return await self._inner.diff()
+
+    async def status(self) -> ExecutionStatus:
+        return await self._inner.status()
+
+    @property
+    def result(self) -> ExecutionResult | None:
+        return self._inner.result
+
+    @property
+    def session_log(self) -> SessionLog:
+        return self._inner.session_log
+
+    async def stop(self) -> None:
+        await self._inner.stop()
+        await asyncio.to_thread(self._sandbox.stop)
+
+
+class KubeSandboxExecutorFactory:
+    """Executor that gives every vertex its own k3s sandbox.
+
+    Implements the Executor protocol, so the worker loop stays identical to
+    the docker backend: ``start(request)`` spawns the sandbox, attaches an
+    ``OpencodeExecutor`` to it, and wraps the session so ``stop()`` tears the
+    sandbox down (the worker already calls ``stop()`` in its ``finally``).
+    """
+
+    def __init__(
+        self,
+        *,
+        gitea_token: str,
+        litellm_api_key: str,
+        litellm_base_url: str,
+        model: str,
+        evidence_root: Path,
+        namespace: str = "agents",
+        nodeport_range: tuple[int, int] = (30100, 30110),
+        kube_runner: KubeRunner | None = None,
+        image: str = OPENCODE_IMAGE,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._gitea_token = gitea_token
+        self._litellm_api_key = litellm_api_key
+        self._litellm_base_url = litellm_base_url
+        self._model = model
+        self._evidence_root = evidence_root
+        self._namespace = namespace
+        self._nodeport_range = nodeport_range
+        self._kube_runner = kube_runner
+        self._image = image
+        self._transport = transport
+
+    async def start(self, request: ExecutionRequest) -> ExecutionSession:
+        sandbox = KubeSandbox(
+            gitea_token=self._gitea_token,
+            repo_url=request.repo_url,
+            base_branch=request.base_branch,
+            run_id=request.run_id,
+            vertex_id=request.vertex_id,
+            litellm_base_url=self._litellm_base_url,
+            litellm_api_key=self._litellm_api_key,
+            model=self._model,
+            namespace=self._namespace,
+            nodeport_range=self._nodeport_range,
+            kube_runner=self._kube_runner,
+            image=self._image,
+        )
+        handle = await asyncio.to_thread(sandbox.start)
+        executor = OpencodeExecutor(
+            base_url=handle.base_url,
+            auth=("opencode", handle.password),
+            workspace=self._evidence_root,
+            evidence_root=self._evidence_root,
+            model=self._model,
+            llm_endpoint=self._litellm_base_url,
+            transport=self._transport,
+        )
+        try:
+            inner = await executor.start(request)
+        except BaseException:
+            await asyncio.to_thread(sandbox.stop)
+            raise
+        return SandboxSession(inner=inner, sandbox=sandbox)
 
 
 def reconcile_orphans(kube: KubeRunner, *, namespace: str, max_age_seconds: float) -> int:
