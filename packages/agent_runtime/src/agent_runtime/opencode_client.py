@@ -43,9 +43,7 @@ class _EventStream:
             "GET",
             "/api/event",
             headers={"Accept": "text/event-stream"},
-            timeout=httpx.Timeout(
-                _SSE_READ_TIMEOUT_SECONDS, read=_SSE_READ_TIMEOUT_SECONDS
-            ),
+            timeout=httpx.Timeout(_SSE_READ_TIMEOUT_SECONDS, read=_SSE_READ_TIMEOUT_SECONDS),
         )
         self._response = await self._stream.__aenter__()
         await _raise_for_status(self._response)
@@ -179,11 +177,7 @@ class OpencodeClient:
         response = await self._http.get(f"/api/session/{session_id}/diff")
         await _raise_for_status(response)
         payload = response.json()
-        patches = [
-            str(item["patch"])
-            for item in payload.get("data", [])
-            if item.get("patch")
-        ]
+        patches = [str(item["patch"]) for item in payload.get("data", []) if item.get("patch")]
         return "\n".join(patches)
 
 

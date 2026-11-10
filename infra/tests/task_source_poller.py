@@ -5,6 +5,7 @@
 («изменения задач доходят до платформы») и прототип дедупликации по checkpoint.
 Env: GITEA_URL, GITEA_TOKEN, OWNER, REPO, ENDPOINT, CHECKPOINT (опц.).
 """
+
 import json
 import os
 import urllib.parse
@@ -28,14 +29,25 @@ def api(path, params=None):
 
 
 def deliver(items):
-    payload = {"source": "gitea", "repo": f"{OWNER}/{REPO}", "issues": [
-        {"number": i["number"], "title": i["title"],
-         "state": i["state"], "updated_at": i["updated_at"]}
-        for i in items
-    ]}
+    payload = {
+        "source": "gitea",
+        "repo": f"{OWNER}/{REPO}",
+        "issues": [
+            {
+                "number": i["number"],
+                "title": i["title"],
+                "state": i["state"],
+                "updated_at": i["updated_at"],
+            }
+            for i in items
+        ],
+    }
     req = urllib.request.Request(
-        ENDPOINT, data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"}, method="POST")
+        ENDPOINT,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
     with urllib.request.urlopen(req) as r:
         assert r.status == 200, f"endpoint вернул {r.status}"
 

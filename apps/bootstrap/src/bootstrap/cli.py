@@ -22,25 +22,40 @@ PROFILE_PATH = REPO_ROOT / "infra" / "env.local.yaml"
 def _gitea_token() -> str:
     """Gitea admin token from OpenBao (secret gitea/admin, field apitoken)."""
     pod = subprocess.run(  # noqa: S603
-        ["bash", "-c", (
-            "kubectl -n platform get pod -l app.kubernetes.io/name=openbao "
-            "-o jsonpath='{.items[0].metadata.name}'"
-        )],
-        capture_output=True, text=True, cwd=REPO_ROOT, check=True,
+        [
+            "bash",
+            "-c",
+            (
+                "kubectl -n platform get pod -l app.kubernetes.io/name=openbao "
+                "-o jsonpath='{.items[0].metadata.name}'"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        check=True,
     ).stdout.strip()
     out = subprocess.run(  # noqa: S603
-        ["bash", "-c", (
-            f"kubectl -n platform exec {pod} -- env BAO_ADDR=http://127.0.0.1:8200 "
-            "BAO_TOKEN=$(cat infra/.vault-root-token) bao kv get "
-            "-field=token secret/gitea/admin"
-        )],
-        capture_output=True, text=True, cwd=REPO_ROOT, check=True,
+        [
+            "bash",
+            "-c",
+            (
+                f"kubectl -n platform exec {pod} -- env BAO_ADDR=http://127.0.0.1:8200 "
+                "BAO_TOKEN=$(cat infra/.vault-root-token) bao kv get "
+                "-field=token secret/gitea/admin"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        check=True,
     )
     token = out.stdout.strip()
     if not token:
         typer.secho("Failed to read the Gitea token from OpenBao.", fg=typer.colors.RED)
         raise typer.Exit(code=1)
     return token
+
 
 SECTIONS = (
     "vault",
@@ -153,8 +168,10 @@ def onboard(
     client = GiteaClient(base_url="http://localhost:30080", token=token, owner=owner)
     status = client.ensure_repo(project)
     register_or_update(ProjectRecord(name=project, kind=kind, owner=owner, reason=reason))
-    typer.secho(f"Project {project}: repo {status}, registered in infra/projects.yaml",
-                fg=typer.colors.GREEN)
+    typer.secho(
+        f"Project {project}: repo {status}, registered in infra/projects.yaml",
+        fg=typer.colors.GREEN,
+    )
 
 
 @app.command()
@@ -167,6 +184,7 @@ def offboard(
     client = GiteaClient(base_url="http://localhost:30080", token=token, owner="swarm-admin")
     import json as _json
     import urllib.request as _req
+
     req = _req.Request(
         f"{client.base_url}/api/v1/repos/{client.owner}/{project}",
         data=_json.dumps({"archived": True}).encode(),
@@ -176,8 +194,10 @@ def offboard(
     with _req.urlopen(req) as r:
         assert r.status == 200, f"gitea archive failed: {r.status}"
     rec = offboard_project(project, reason=reason)
-    typer.secho(f"Project {project}: archived in Gitea + registry ({rec.status_date})",
-                fg=typer.colors.GREEN)
+    typer.secho(
+        f"Project {project}: archived in Gitea + registry ({rec.status_date})",
+        fg=typer.colors.GREEN,
+    )
 
 
 if __name__ == "__main__":

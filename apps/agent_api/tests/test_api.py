@@ -12,8 +12,10 @@ from httpx2 import ASGITransport, AsyncClient
 @pytest.fixture
 async def client() -> AsyncIterator[AsyncClient]:
     app = create_app()
-    async with app.router.lifespan_context(app), AsyncClient(transport=ASGITransport(app=app),
-                           base_url="http://test") as c:
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c,
+    ):
         yield c
 
 
@@ -27,21 +29,19 @@ async def test_full_run_lifecycle(client: AsyncClient) -> None:
     assert r.status_code == 200
     run_id = r.json()["run_id"]
 
-    r = await client.post(f"/runs/{run_id}/vertices",
-                          json={"name": "only", "done_when": "green"})
+    r = await client.post(f"/runs/{run_id}/vertices", json={"name": "only", "done_when": "green"})
     assert r.status_code == 200
 
-    r = await client.post("/vertices/claim",
-                          json={"run_id": run_id, "agent": "w1"})
+    r = await client.post("/vertices/claim", json={"run_id": run_id, "agent": "w1"})
     claimed = r.json()["vertex"]
     assert claimed is not None and claimed["name"] == "only"
 
-    r = await client.post(f"/vertices/{claimed['id']}/heartbeat",
-                          json={"agent": "w1"})
+    r = await client.post(f"/vertices/{claimed['id']}/heartbeat", json={"agent": "w1"})
     assert r.status_code == 200
 
-    r = await client.post(f"/vertices/{claimed['id']}/complete",
-                          json={"agent": "w1", "result": {"pr": 7}})
+    r = await client.post(
+        f"/vertices/{claimed['id']}/complete", json={"agent": "w1", "result": {"pr": 7}}
+    )
     assert r.status_code == 200
 
 
@@ -60,11 +60,11 @@ async def test_hitl_approve_and_double_decision(client: AsyncClient) -> None:
     rid = r.json()["request_id"]
     r = await client.get("/hitl/pending")
     assert r.json()["pending"] and r.json()["pending"][0]["id"] == rid
-    r = await client.post(f"/hitl/{rid}/decision", json={"action": "approve",
-                                                         "decided_by": "kryadov"})
+    r = await client.post(
+        f"/hitl/{rid}/decision", json={"action": "approve", "decided_by": "kryadov"}
+    )
     assert r.json()["status"] == "approved"
-    r = await client.post(f"/hitl/{rid}/decision", json={"action": "reject",
-                                                         "decided_by": "x"})
+    r = await client.post(f"/hitl/{rid}/decision", json={"action": "reject", "decided_by": "x"})
     assert r.status_code == 409
 
 
@@ -80,8 +80,9 @@ async def test_budget_exceeded_conflict(client: AsyncClient) -> None:
 
 
 async def test_audit_append_and_list(client: AsyncClient) -> None:
-    await client.post("/audit", json={"actor": "w1", "action": "vertex.complete",
-                                      "target": "vertex:3"})
+    await client.post(
+        "/audit", json={"actor": "w1", "action": "vertex.complete", "target": "vertex:3"}
+    )
     r = await client.get("/audit", params={"target": "vertex:3"})
     events = r.json()["events"]
     assert events and events[0]["target"] == "vertex:3"

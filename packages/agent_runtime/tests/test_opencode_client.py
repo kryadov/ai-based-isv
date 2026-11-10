@@ -118,9 +118,7 @@ def _handler(request: httpx.Request) -> httpx.Response:
 @pytest.fixture
 async def client() -> AsyncIterator[OpencodeClient]:
     transport = httpx.MockTransport(_handler)
-    async with httpx.AsyncClient(
-        base_url="http://localhost:8080", transport=transport
-    ) as http:
+    async with httpx.AsyncClient(base_url="http://localhost:8080", transport=transport) as http:
         yield OpencodeClient(http)
 
 
@@ -145,9 +143,7 @@ async def test_create_session_always_sends_a_json_object_body() -> None:
         return httpx.Response(404)
 
     transport = httpx.MockTransport(handler)
-    async with httpx.AsyncClient(
-        base_url="http://localhost:8080", transport=transport
-    ) as http:
+    async with httpx.AsyncClient(base_url="http://localhost:8080", transport=transport) as http:
         client = OpencodeClient(http)
         assert await client.create_session() == "ses_test"
 
@@ -221,12 +217,10 @@ async def test_streaming_http_error_raises_opencode_error() -> None:
         return httpx.Response(404)
 
     transport = httpx.MockTransport(handler)
-    async with httpx.AsyncClient(
-        base_url="http://localhost:8080", transport=transport
-    ) as http:
+    async with httpx.AsyncClient(base_url="http://localhost:8080", transport=transport) as http:
         client = OpencodeClient(http)
         with pytest.raises(OpencodeError) as exc_info:
-            async for _event in (await client.events("ses_test")):
+            async for _event in await client.events("ses_test"):
                 pass
 
     assert "unauthorized" in str(exc_info.value)
@@ -250,9 +244,7 @@ async def test_get_session_returns_data(client: OpencodeClient) -> None:
         return httpx.Response(404)
 
     transport = httpx.MockTransport(handler)
-    async with httpx.AsyncClient(
-        base_url="http://localhost:8080", transport=transport
-    ) as http:
+    async with httpx.AsyncClient(base_url="http://localhost:8080", transport=transport) as http:
         client = OpencodeClient(http)
         data = await client.get_session("ses_test")
 
@@ -260,9 +252,7 @@ async def test_get_session_returns_data(client: OpencodeClient) -> None:
     assert data["outcome"] == "succeeded"
     assert data["tokens"]["input"] == 3
 
-    async with httpx.AsyncClient(
-        base_url="http://localhost:8080", transport=transport
-    ) as http:
+    async with httpx.AsyncClient(base_url="http://localhost:8080", transport=transport) as http:
         client = OpencodeClient(http)
         with pytest.raises(OpencodeError):
             await client.get_session("ses_bad")
@@ -295,9 +285,7 @@ async def test_event_stream_aclose_closes_response() -> None:
         return httpx.Response(404)
 
     transport = httpx.MockTransport(handler)
-    async with httpx.AsyncClient(
-        base_url="http://localhost:8080", transport=transport
-    ) as http:
+    async with httpx.AsyncClient(base_url="http://localhost:8080", transport=transport) as http:
         client = OpencodeClient(http)
         events = cast(_EventStream, await client.events("ses_test"))
         await events.aclose()

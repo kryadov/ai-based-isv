@@ -29,8 +29,9 @@ def _now() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
-async def create_run(session: AsyncSession, project: str, task_ref: str,
-                     budget_tokens: int = 200_000) -> int:
+async def create_run(
+    session: AsyncSession, project: str, task_ref: str, budget_tokens: int = 200_000
+) -> int:
     row = RunRow(project=project, task_ref=task_ref, budget_tokens=budget_tokens)
     session.add(row)
     await session.flush()
@@ -38,11 +39,21 @@ async def create_run(session: AsyncSession, project: str, task_ref: str,
     return row.id
 
 
-async def add_vertex(session: AsyncSession, run_id: int, name: str, done_when: str,
-                     deps: list[str] | None = None,
-                     paths_allow: list[str] | None = None) -> int:
-    row = VertexRow(run_id=run_id, name=name, done_when=done_when,
-                    deps_json=deps or [], paths_allow_json=paths_allow or [])
+async def add_vertex(
+    session: AsyncSession,
+    run_id: int,
+    name: str,
+    done_when: str,
+    deps: list[str] | None = None,
+    paths_allow: list[str] | None = None,
+) -> int:
+    row = VertexRow(
+        run_id=run_id,
+        name=name,
+        done_when=done_when,
+        deps_json=deps or [],
+        paths_allow_json=paths_allow or [],
+    )
     session.add(row)
     await session.flush()
     await session.commit()
@@ -59,8 +70,9 @@ async def _deps_satisfied(session: AsyncSession, run_id: int, deps: list[str]) -
     return all(by_name.get(d) == "done" for d in deps)
 
 
-async def claim_vertex(session: AsyncSession, run_id: int, agent: str,
-                       ttl_seconds: int = 300) -> dict[str, Any] | None:
+async def claim_vertex(
+    session: AsyncSession, run_id: int, agent: str, ttl_seconds: int = 300
+) -> dict[str, Any] | None:
     """Atomically claim a queued vertex with satisfied deps (or expired lease)."""
     rows = await session.scalars(
         select(VertexRow).where(
@@ -87,38 +99,54 @@ async def claim_vertex(session: AsyncSession, run_id: int, agent: str,
     result = await session.execute(
         update(VertexRow)
         .where(VertexRow.id == candidate.id, VertexRow.status == candidate.status)
-        .values(status="running", leased_by=agent,
-                lease_until=_now() + timedelta(seconds=ttl_seconds),
-                attempts=candidate.attempts + 1)
-        .returning(VertexRow.id, VertexRow.name, VertexRow.done_when,
-                   VertexRow.paths_allow_json, VertexRow.attempts)
+        .values(
+            status="running",
+            leased_by=agent,
+            lease_until=_now() + timedelta(seconds=ttl_seconds),
+            attempts=candidate.attempts + 1,
+        )
+        .returning(
+            VertexRow.id,
+            VertexRow.name,
+            VertexRow.done_when,
+            VertexRow.paths_allow_json,
+            VertexRow.attempts,
+        )
     )
     row = result.one()
     await session.commit()
-    return {"id": row.id, "name": row.name, "done_when": row.done_when,
-            "paths_allow": row.paths_allow_json, "attempts": row.attempts}
+    return {
+        "id": row.id,
+        "name": row.name,
+        "done_when": row.done_when,
+        "paths_allow": row.paths_allow_json,
+        "attempts": row.attempts,
+    }
 
 
-async def heartbeat_vertex(session: AsyncSession, vertex_id: int, agent: str,
-                           ttl_seconds: int = 300) -> bool:
+async def heartbeat_vertex(
+    session: AsyncSession, vertex_id: int, agent: str, ttl_seconds: int = 300
+) -> bool:
     result = await session.execute(
         update(VertexRow)
-        .where(VertexRow.id == vertex_id, VertexRow.leased_by == agent,
-               VertexRow.status == "running")
+        .where(
+            VertexRow.id == vertex_id, VertexRow.leased_by == agent, VertexRow.status == "running"
+        )
         .values(lease_until=_now() + timedelta(seconds=ttl_seconds))
     )
     await session.commit()
     return cast(CursorResult[Any], result).rowcount > 0
 
 
-async def complete_vertex(session: AsyncSession, vertex_id: int, agent: str,
-                          result_data: dict[str, Any] | None = None) -> bool:
+async def complete_vertex(
+    session: AsyncSession, vertex_id: int, agent: str, result_data: dict[str, Any] | None = None
+) -> bool:
     result = await session.execute(
         update(VertexRow)
-        .where(VertexRow.id == vertex_id, VertexRow.leased_by == agent,
-               VertexRow.status == "running")
-        .values(status="done", leased_by=None, lease_until=None,
-                result_json=result_data or {})
+        .where(
+            VertexRow.id == vertex_id, VertexRow.leased_by == agent, VertexRow.status == "running"
+        )
+        .values(status="done", leased_by=None, lease_until=None, result_json=result_data or {})
     )
     await session.commit()
     return cast(CursorResult[Any], result).rowcount > 0
@@ -128,16 +156,18 @@ async def fail_vertex(session: AsyncSession, vertex_id: int, agent: str) -> bool
     """Requeue the vertex (lease lost / done_when not satisfied)."""
     result = await session.execute(
         update(VertexRow)
-        .where(VertexRow.id == vertex_id, VertexRow.leased_by == agent,
-               VertexRow.status == "running")
+        .where(
+            VertexRow.id == vertex_id, VertexRow.leased_by == agent, VertexRow.status == "running"
+        )
         .values(status="queued", leased_by=None, lease_until=None)
     )
     await session.commit()
     return cast(CursorResult[Any], result).rowcount > 0
 
 
-async def register_identity(session: AsyncSession, name: str, role: str,
-                            allowed_sections: list[str] | None = None) -> int:
+async def register_identity(
+    session: AsyncSession, name: str, role: str, allowed_sections: list[str] | None = None
+) -> int:
     row = IdentityRow(name=name, role=role, allowed_sections_json=allowed_sections or [])
     session.add(row)
     await session.flush()
@@ -155,8 +185,7 @@ async def set_budget(session: AsyncSession, subject: str, limit_tokens: int) -> 
         await session.commit()
         return row.id
     await session.execute(
-        update(BudgetRow).where(BudgetRow.subject == subject)
-        .values(limit_tokens=limit_tokens)
+        update(BudgetRow).where(BudgetRow.subject == subject).values(limit_tokens=limit_tokens)
     )
     return row.id
 
@@ -165,16 +194,18 @@ async def consume_budget(session: AsyncSession, subject: str, tokens: int) -> bo
     """Spend tokens; False if the budget is unset or the limit is exceeded (atomic)."""
     result = await session.execute(
         update(BudgetRow)
-        .where(BudgetRow.subject == subject,
-               BudgetRow.spent_tokens + tokens <= BudgetRow.limit_tokens)
+        .where(
+            BudgetRow.subject == subject, BudgetRow.spent_tokens + tokens <= BudgetRow.limit_tokens
+        )
         .values(spent_tokens=BudgetRow.spent_tokens + tokens)
     )
     await session.commit()
     return cast(CursorResult[Any], result).rowcount > 0
 
 
-async def create_hitl(session: AsyncSession, kind: str, subject: str,
-                      context: dict[str, Any] | None = None) -> int:
+async def create_hitl(
+    session: AsyncSession, kind: str, subject: str, context: dict[str, Any] | None = None
+) -> int:
     row = HITLRow(kind=kind, subject=subject, context_json=context or {})
     session.add(row)
     await session.flush()
@@ -182,15 +213,19 @@ async def create_hitl(session: AsyncSession, kind: str, subject: str,
     return row.id
 
 
-async def decide_hitl(session: AsyncSession, request_id: int, action: str,
-                      decided_by: str, note: str | None = None) -> str | None:
+async def decide_hitl(
+    session: AsyncSession, request_id: int, action: str, decided_by: str, note: str | None = None
+) -> str | None:
     """Decide a pending request; None if the request is not pending."""
     result = await session.execute(
         update(HITLRow)
         .where(HITLRow.id == request_id, HITLRow.status == "pending")
-        .values(status={"approve": "approved", "reject": "rejected"}[action],
-                decided_by=decided_by, decision_note=note,
-                decided_at=_now())
+        .values(
+            status={"approve": "approved", "reject": "rejected"}[action],
+            decided_by=decided_by,
+            decision_note=note,
+            decided_at=_now(),
+        )
         .returning(HITLRow.status)
     )
     await session.commit()
@@ -198,11 +233,17 @@ async def decide_hitl(session: AsyncSession, request_id: int, action: str,
     return row.status if row else None
 
 
-async def append_audit(session: AsyncSession, actor: str, action: str, target: str,
-                       outcome: str = "ok",
-                       payload: dict[str, Any] | None = None) -> int:
-    row = AuditRow(actor=actor, action=action, target=target, outcome=outcome,
-                   payload_json=payload or {})
+async def append_audit(
+    session: AsyncSession,
+    actor: str,
+    action: str,
+    target: str,
+    outcome: str = "ok",
+    payload: dict[str, Any] | None = None,
+) -> int:
+    row = AuditRow(
+        actor=actor, action=action, target=target, outcome=outcome, payload_json=payload or {}
+    )
     session.add(row)
     await session.flush()
     await session.commit()

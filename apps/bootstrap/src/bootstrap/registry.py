@@ -56,8 +56,11 @@ def offboard_project(name: str, reason: str, path: Path = REGISTRY_PATH) -> Proj
     if name not in by_name:
         raise KeyError(f"project {name!r} not in registry")
     rec = by_name[name].model_copy(
-        update={"status": "archived", "status_date": datetime.now(UTC).strftime("%Y-%m-%d"),
-                "reason": reason}
+        update={
+            "status": "archived",
+            "status_date": datetime.now(UTC).strftime("%Y-%m-%d"),
+            "reason": reason,
+        }
     )
     by_name[name] = rec
     save_registry(list(by_name.values()), path)

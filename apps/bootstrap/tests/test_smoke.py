@@ -30,5 +30,6 @@ def test_check_all_returns_results() -> None:
 
 def test_py_typed_marker_present() -> None:
     import bootstrap
+
     marker = Path(bootstrap.__file__).parent / "py.typed"
     assert marker.exists()
