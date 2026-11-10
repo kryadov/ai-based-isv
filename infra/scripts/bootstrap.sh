@@ -282,6 +282,29 @@ section_litellm() {
   echo "litellm: ready (api http://localhost:30084/v1)"
 }
 
+section_agents() {
+  # Namespace + scratch PVC + network policy for agent sandbox pods (M4b).
+  kubectl apply -f "$ROOT/agents/namespace.yaml"
+  kubectl apply -f "$ROOT/agents/pvc.yaml"
+  kubectl apply -f "$ROOT/agents/netpol-default-deny.yaml"
+  kubectl apply -f "$ROOT/agents/netpol-allow.yaml"
+  # k3d publishes only individually mapped host ports; add the sandbox
+  # NodePort range to the load balancer once (live serverlb swap, no cluster
+  # recreation). Guarded: skip when the range is already mapped.
+  if command -v k3d >/dev/null 2>&1 && command -v docker >/dev/null 2>&1; then
+    if ! docker port k3d-swarm-lab-serverlb 2>/dev/null | grep -q "30100/tcp"; then
+      k3d cluster edit swarm-lab --port-add "30100-30110:30100-30110@loadbalancer" \
+        && echo "agents: added k3d NodePort range 30100-30110"
+    else
+      echo "agents: k3d NodePort range 30100-30110 already mapped"
+    fi
+  else
+    echo "agents: k3d/docker not found — skipping NodePort range mapping" >&2
+  fi
+  kubectl -n agents get pvc agent-scratch >/dev/null
+  echo "agents: namespace, agent-scratch PVC, network policies Ready"
+}
+
 case "${1:-all}" in
   vault)  section_vault ;;
   cnpg)   section_cnpg ;;
@@ -293,6 +316,7 @@ case "${1:-all}" in
   demo)   section_demo ;;
   openproject) section_openproject ;;
   litellm) section_litellm ;;
-  all)    section_vault; section_cnpg; section_gitea; section_runner; section_argocd; section_monitoring; section_loki; section_demo; section_openproject; section_litellm ;;
-  *) echo "usage: $0 [vault|cnpg|gitea|runner|argocd|monitoring|loki|demo|openproject|litellm|all]"; exit 2 ;;
+  agents) section_agents ;;
+  all)    section_vault; section_cnpg; section_gitea; section_runner; section_argocd; section_monitoring; section_loki; section_demo; section_openproject; section_litellm; section_agents ;;
+  *) echo "usage: $0 [vault|cnpg|gitea|runner|argocd|monitoring|loki|demo|openproject|litellm|agents|all]"; exit 2 ;;
 esac

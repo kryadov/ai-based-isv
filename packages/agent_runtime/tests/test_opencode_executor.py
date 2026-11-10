@@ -562,3 +562,49 @@ async def test_evidence_root_separates_artifacts_from_workspace(tmp_path: Path) 
     assert expected_evidence.is_dir()
     # workspace itself is not polluted with evidence
     assert not (workspace / ".agent_runtime").exists()
+
+
+def test_opencode_config_text_renders_provider_and_permissions() -> None:
+    from agent_runtime.opencode_executor import opencode_config_text
+
+    text = opencode_config_text(model="litellm/qwen3", llm_endpoint="http://litellm.internal:4000")
+    assert '"model": "litellm/qwen3"' in text
+    assert '"baseURL": "http://litellm.internal:4000"' in text
+    assert '"apiKey": "{env:LITELLM_API_KEY}"' in text
+    assert '"effect": "allow"' in text
+    assert text.startswith("{") and text.endswith("\n")
+
+
+async def test_attached_mode_sends_basic_auth(tmp_path: Path) -> None:
+    """k3s sandboxes attach with Basic auth scraped from the pod logs."""
+    import base64
+
+    import httpx
+    from agent_runtime.opencode_executor import OpencodeExecutor
+
+    seen_auth: list[str | None] = []
+    terminal = {
+        "id": "evt_t",
+        "type": "session.execution.succeeded",
+        "data": {"sessionID": "ses_test"},
+    }
+    inner = _handler(events=[terminal], diff_items=[], status_tokens=None)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_auth.append(request.headers.get("Authorization"))
+        return inner(request)
+
+    executor = OpencodeExecutor(
+        base_url="http://127.0.0.1:30100",
+        workspace=tmp_path,
+        model="qwen-coder",
+        llm_endpoint="http://litellm.swarm-lab.svc:30084/v1",
+        transport=httpx.MockTransport(handler),
+        auth=("opencode", "pod-pass"),
+    )
+    session = await executor.start(_request())
+    status = await session.wait_done()
+    assert status == ExecutionStatus.DONE
+    expected = "Basic " + base64.b64encode(b"opencode:pod-pass").decode()
+    assert seen_auth, "at least one request must have been made"
+    assert all(h == expected for h in seen_auth)

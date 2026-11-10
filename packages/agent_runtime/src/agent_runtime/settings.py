@@ -1,6 +1,7 @@
 """Runtime constants and worker settings for the agent runtime."""
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -28,6 +29,18 @@ class WorkerSettings(BaseSettings):
     litellm_api_key: str = ""
     model: str = ""
     git_token: str = ""
+    # --- k3s sandbox backend (M4b) ---
+    # v0 contract: ONE worker per run — the age-based orphan sweep is unsafe
+    # with concurrent workers.
+    sandbox_backend: Literal["docker", "k3s"] = "docker"
+    k8s_namespace: str = "agents"
+    nodeport_range_low: int = 30100
+    nodeport_range_high: int = 30110
+    host_ip: str = ""  # LiteLLM hostAliases target; required for the docker path only
+    vault_root_token_path: Path = Path("infra/.vault-root-token")
+    openbao_pod_label: str = "app.kubernetes.io/name=openbao"
+    openbao_namespace: str = "platform"
+    vault_root_token: str = ""  # explicit override; otherwise read from vault_root_token_path
 
     @model_validator(mode="after")
     def _required_at_runtime(self) -> "WorkerSettings":
