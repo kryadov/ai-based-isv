@@ -360,7 +360,7 @@ env \
   AGENT_RUNTIME_GIT_TOKEN="$TOKEN" \
   AGENT_RUNTIME_SANDBOX_BACKEND=k3s \
   AGENT_RUNTIME_K8S_NAMESPACE=agents \
-  AGENT_RUNTIME_LITELLM_BASE_URL="http://litellm.platform.svc.cluster.local:4000" \
+  AGENT_RUNTIME_LITELLM_BASE_URL="http://litellm.platform.svc.cluster.local:4000/v1" \
   AGENT_RUNTIME_LITELLM_API_KEY="$MK" \
   AGENT_RUNTIME_MODEL="$MODEL" \
   uv run python -m agent_runtime.worker > "$WORKER_LOG" 2>&1 &
