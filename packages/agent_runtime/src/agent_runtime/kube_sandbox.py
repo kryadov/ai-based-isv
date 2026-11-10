@@ -117,6 +117,7 @@ def pod_manifest(
     credentialed_url = clone_url.replace("http://", "http://oauth2:$GITEA_TOKEN@")
     clone_script = (
         "set -e; "
+        f"rm -rf '{run_dir}'; "
         f"mkdir -p '{run_dir}'; "
         f"git clone --depth 1 -b '{base_branch}' \"{credentialed_url}\" '{run_dir}'; "
         f"cp /config/opencode.jsonc '{run_dir}/opencode.jsonc'"
