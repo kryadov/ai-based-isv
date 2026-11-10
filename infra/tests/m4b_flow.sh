@@ -349,7 +349,9 @@ mkdir -p "$WORKSPACE_DIR/run-$RUN_ID"
 WORKER_LOG="$WORKSPACE_DIR/run-$RUN_ID/worker.log"
 # AGENT_RUNTIME_SANDBOX_BACKEND=k3s: the executor attaches to an `opencode serve`
 # POD (KubeSandboxExecutorFactory), not a docker container. The LLM endpoint is the
-# IN-CLUSTER LiteLLM service — the pod cannot use the host NodePort URL.
+# IN-CLUSTER LiteLLM service. NO AGENT_RUNTIME_GIT_TOKEN: the worker resolves the
+# credential from OpenBao itself (vault-only path E2E) and uses it for BOTH the
+# host-side git operations and the sandbox pod clone.
 env \
   AGENT_RUNTIME_API_URL="$API_URL" \
   AGENT_RUNTIME_RUN_ID="$RUN_ID" \
@@ -357,7 +359,6 @@ env \
   AGENT_RUNTIME_WORKSPACE_DIR="$WORKSPACE_DIR" \
   AGENT_RUNTIME_REPO_URL="$GITEA/$ORG/$REPO.git" \
   AGENT_RUNTIME_BASE_BRANCH=main \
-  AGENT_RUNTIME_GIT_TOKEN="$TOKEN" \
   AGENT_RUNTIME_SANDBOX_BACKEND=k3s \
   AGENT_RUNTIME_K8S_NAMESPACE=agents \
   AGENT_RUNTIME_LITELLM_BASE_URL="http://litellm.platform.svc.cluster.local:4000/v1" \
