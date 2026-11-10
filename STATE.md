@@ -3,7 +3,17 @@
 > Read this file FIRST. Then `ARCH.md` (how it works, diagrams), `AGENTS.md` (rules), `TODO.md` (backlog).
 > This file is updated at the end of EVERY increment. If your findings contradict it — verify, then update it.
 
-Last updated: 2026-11-10 (M4b closed — k3s sandbox executor; next M4c)
+**⚠️ WORKSTATION HANDOFF (2026-11-10, evening):** this session ended on a macOS
+laptop; work continues on a **Windows workstation**. Read
+`docs/superpowers/HANDOFF-2026-11-10.md` BEFORE anything else — it carries the
+session rulings, the operational lessons (the live stand does NOT transfer; run
+`org-bootstrap apply` fresh; bash flows need WSL2; openrouter models; deferred
+minors), and the M4c execution notes. Short version: M4a+M4b are DONE and merged
+(PR #7, #21); **M4c is planned and NOT started**
+(`docs/superpowers/plans/2026-11-11-m4c-mcp-servers.md` — execute INLINE,
+release v0.4.0 closes M4).
+
+Last updated: 2026-11-10 (M4b closed — k3s sandbox executor verified live, next M4c)
 
 ## What this project is
 
