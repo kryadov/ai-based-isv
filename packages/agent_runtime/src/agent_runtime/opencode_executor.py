@@ -34,7 +34,9 @@ from agent_runtime.pathguard import diff_files
 from agent_runtime.session_log import SessionLog
 from agent_runtime.settings import OPENCODE_IMAGE, OPENCODE_PORT
 
-_DockerRunner = Callable[[list[str], str | None], subprocess.CompletedProcess[str]]
+_DockerRunner = Callable[
+    [list[str], str | None, dict[str, str] | None], subprocess.CompletedProcess[str]
+]
 
 
 class DockerServe:
@@ -42,12 +44,13 @@ class DockerServe:
 
     The official pinned image does not contain ``git``, so the launcher builds a
     tiny derived image (``opencode-git:<tag>``) once and uses it for the session.
-    The host port is mapped to the fixed container port ``4096``.
+    The host port is mapped on loopback only to the fixed container port ``4096``.
 
     ``runner`` is the single command-execution seam: tests inject a callable that
     returns a :class:`subprocess.CompletedProcess`; the default uses the real
-    ``subprocess`` runner. The seam accepts an optional ``input`` string so the
-    Dockerfile can be piped into ``docker build -``.
+    ``subprocess`` runner. The seam accepts an ``input`` string for ``docker build -``
+    and an environment mapping so ``docker run -e KEY`` can forward secrets without
+    placing their values in argv.
     """
 
     def __init__(
@@ -66,37 +69,40 @@ class DockerServe:
         self._runner = runner if runner is not None else _subprocess_runner
         self._container_id: str | None = None
         self._derived_image = _derived_image_tag(image)
+        self._auth: tuple[str, str] | None = None
+
+    @property
+    def auth(self) -> tuple[str, str] | None:
+        """HTTP Basic credentials scraped from the server logs, if present."""
+        return self._auth
 
     def start(self) -> str:
-        """Start the container and return a ``base_url`` for the HTTP client.
-
-        The password printed in the container logs is scraped and embedded as
-        HTTP Basic credentials.
-        """
+        """Start the container and return a credential-free client ``base_url``."""
         build_result = self._runner(
             self._build_argv(),
             _dockerfile(self._image),
+            None,
         )
         if build_result.returncode != 0:
             raise RuntimeError(
                 f"docker build failed for {self._derived_image}: {build_result.stderr}"
             )
 
-        run_result = self._runner(self._run_argv(), None)
+        run_result = self._runner(self._run_argv(), None, {**os.environ, **self._env})
         if run_result.returncode != 0:
             raise RuntimeError(f"docker run failed: {run_result.stderr}")
 
         self._container_id = run_result.stdout.strip()
         password = self._scrape_password()
-        credentials = f"opencode:{password}@" if password else ""
-        return f"http://{credentials}127.0.0.1:{self._port}"
+        self._auth = ("opencode", password) if password else None
+        return f"http://127.0.0.1:{self._port}"
 
     def stop(self) -> None:
         """Stop the running container, if any."""
         container_id = self._container_id
         if container_id is None:
             return
-        self._runner(["docker", "stop", container_id], None)
+        self._runner(["docker", "stop", container_id], None, None)
         self._container_id = None
 
     def _build_argv(self) -> list[str]:
@@ -104,8 +110,8 @@ class DockerServe:
 
     def _run_argv(self) -> list[str]:
         env_args: list[str] = []
-        for key, value in self._env.items():
-            env_args.extend(["-e", f"{key}={value}"])
+        for key in self._env:
+            env_args.extend(["-e", key])
         return [
             "docker",
             "run",
@@ -114,7 +120,7 @@ class DockerServe:
             "-w",
             "/workspace",
             f"-v{self._repo_dir}:/workspace",
-            f"-p{self._port}:{OPENCODE_PORT}",
+            f"-p127.0.0.1:{self._port}:{OPENCODE_PORT}",
             *env_args,
             self._derived_image,
             "serve",
@@ -129,7 +135,7 @@ class DockerServe:
         if self._container_id is None:
             return ""
         for _ in range(60):
-            result = self._runner(["docker", "logs", self._container_id], None)
+            result = self._runner(["docker", "logs", self._container_id], None, None)
             output = (result.stdout or "") + (result.stderr or "")
             password = _password_from_logs(output)
             if password:
@@ -204,6 +210,7 @@ class OpencodeExecutor:
         write_manifest(manifest_path, manifest)
 
         base_url = self._base_url
+        auth: tuple[str, str] | None = None
         if base_url is None:
             self._write_config(self._workspace)
             self._serve = DockerServe(
@@ -214,9 +221,11 @@ class OpencodeExecutor:
                 runner=self._docker_runner,
             )
             base_url = await asyncio.to_thread(self._serve.start)
+            auth = self._serve.auth
 
         http = httpx.AsyncClient(
             base_url=base_url,
+            auth=auth,
             transport=self._transport,
             timeout=httpx.Timeout(600.0),
         )
@@ -250,9 +259,7 @@ class OpencodeExecutor:
         config = {
             "$schema": "https://opencode.ai/config.json",
             "model": f"{provider_id}/{model_id}",
-            "permissions": [
-                {"action": "*", "resource": "*", "effect": "allow"}
-            ],
+            "permissions": [{"action": "*", "resource": "*", "effect": "allow"}],
             "providers": {
                 provider_id: {
                     "name": f"{provider_id} provider",
@@ -463,9 +470,7 @@ class OpencodeSession:
     ) -> None:
         if not self._manifest_path.exists():
             return
-        manifest: dict[str, Any] = json.loads(
-            self._manifest_path.read_text(encoding="utf-8")
-        )
+        manifest: dict[str, Any] = json.loads(self._manifest_path.read_text(encoding="utf-8"))
         manifest["ts_end"] = datetime.now(UTC).isoformat()
         manifest["diff_stat"] = diff_stat
         manifest["tokens_used"] = tokens_used
@@ -496,8 +501,16 @@ def _derived_image_tag(image: str) -> str:
 def _subprocess_runner(
     argv: list[str],
     input: str | None = None,  # noqa: A002
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(argv, capture_output=True, text=True, check=False, input=input)
+    return subprocess.run(
+        argv,
+        capture_output=True,
+        text=True,
+        check=False,
+        input=input,
+        env=env,
+    )
 
 
 def _password_from_logs(logs: str) -> str:
@@ -543,19 +556,12 @@ def _diff_stat(diff: str) -> str | None:
     if not files:
         return "0 files changed"
     additions = sum(
-        1
-        for line in diff.splitlines()
-        if line.startswith("+") and not line.startswith("+++")
+        1 for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++")
     )
     deletions = sum(
-        1
-        for line in diff.splitlines()
-        if line.startswith("-") and not line.startswith("---")
+        1 for line in diff.splitlines() if line.startswith("-") and not line.startswith("---")
     )
     file_word = "file" if len(files) == 1 else "files"
     ins_word = "insertion" if additions == 1 else "insertions"
     del_word = "deletion" if deletions == 1 else "deletions"
-    return (
-        f"{len(files)} {file_word} changed, "
-        f"{additions} {ins_word}(+), {deletions} {del_word}(-)"
-    )
+    return f"{len(files)} {file_word} changed, {additions} {ins_word}(+), {deletions} {del_word}(-)"

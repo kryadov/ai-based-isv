@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -46,7 +46,7 @@ def _handler(
     events: list[dict[str, Any]],
     diff_items: list[dict[str, Any]],
     status_tokens: dict[str, Any] | None = None,
-) -> Any:
+) -> Callable[[httpx.Request], httpx.Response]:
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         method = request.method
@@ -94,10 +94,14 @@ def _handler(
 def test_docker_serve_builds_expected_argv(tmp_path: Path) -> None:
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
-    commands: list[tuple[list[str], str | None]] = []
+    commands: list[tuple[list[str], str | None, dict[str, str] | None]] = []
 
-    def runner(argv: list[str], input: str | None = None) -> subprocess.CompletedProcess[str]:
-        commands.append((argv, input))
+    def runner(
+        argv: list[str],
+        input: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        commands.append((argv, input, env))
         if argv[0] == "docker" and "run" in argv:
             return subprocess.CompletedProcess(argv, returncode=0, stdout="cid123\n")
         if argv[0] == "docker" and "logs" in argv:
@@ -115,22 +119,27 @@ def test_docker_serve_builds_expected_argv(tmp_path: Path) -> None:
     )
     base_url = serve.start()
 
-    assert base_url == "http://opencode:fast-token@127.0.0.1:12345"
+    assert base_url == "http://127.0.0.1:12345"
+    assert serve.auth == ("opencode", "fast-token")
 
     build = next((c for c in commands if c[0][0] == "docker" and "build" in c[0]), None)
     run = next((c for c in commands if c[0][0] == "docker" and "run" in c[0]), None)
 
     assert build is not None
-    build_argv, build_input = build
+    build_argv, build_input, _ = build
     assert "opencode-git:2.2.0" in build_argv
     assert build_input is not None
     assert f"FROM {OPENCODE_IMAGE}" in build_input
     assert "apt-get install -y git" in build_input or "apk add --no-cache git" in build_input
 
     assert run is not None
-    run_argv, _ = run
+    run_argv, _, run_env = run
     assert f"-v{repo_dir}:/workspace" in run_argv
-    assert "-p12345:4096" in run_argv
+    assert "-p127.0.0.1:12345:4096" in run_argv
+    assert run_argv[run_argv.index("-e") + 1] == "LITELLM_API_KEY"
+    assert all("secret" not in arg for arg in run_argv)
+    assert run_env is not None
+    assert run_env["LITELLM_API_KEY"] == "secret"
     assert "serve" in run_argv
     assert "--hostname" in run_argv
     assert "0.0.0.0" in run_argv
@@ -152,9 +161,7 @@ async def test_start_returns_session_and_streams_events(tmp_path: Path) -> None:
             "data": {"sessionID": "ses_test"},
         },
     ]
-    transport = httpx.MockTransport(
-        _handler(events=events, diff_items=[], status_tokens=None)
-    )
+    transport = httpx.MockTransport(_handler(events=events, diff_items=[], status_tokens=None))
     executor = OpencodeExecutor(
         base_url="http://localhost:8080",
         workspace=tmp_path,
@@ -263,9 +270,7 @@ async def test_stream_cut_is_not_done(tmp_path: Path) -> None:
             "data": {"sessionID": "ses_test", "delta": "hello"},
         }
     ]
-    transport = httpx.MockTransport(
-        _handler(events=events, diff_items=[], status_tokens=None)
-    )
+    transport = httpx.MockTransport(_handler(events=events, diff_items=[], status_tokens=None))
     executor = OpencodeExecutor(
         base_url="http://localhost:8080",
         workspace=tmp_path,
@@ -340,13 +345,13 @@ async def test_stop_stops(tmp_path: Path) -> None:
 
 
 def test_scrape_password_extracts_token_from_noise() -> None:
-    logs = (
-        "bootstrap line\n"
-        "server password abc-xyz-123\n"
-        "another line\n"
-    )
+    logs = "bootstrap line\nserver password abc-xyz-123\nanother line\n"
 
-    def runner(argv: list[str], input: str | None = None) -> subprocess.CompletedProcess[str]:
+    def runner(
+        argv: list[str],
+        input: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(argv, returncode=0, stdout=logs)
 
     serve = DockerServe(
@@ -360,10 +365,14 @@ def test_scrape_password_extracts_token_from_noise() -> None:
     assert serve._scrape_password() == "abc-xyz-123"
 
 
-def test_start_embeds_password_in_base_url() -> None:
+def test_start_returns_credential_free_url_and_basic_auth() -> None:
     commands: list[list[str]] = []
 
-    def runner(argv: list[str], input: str | None = None) -> subprocess.CompletedProcess[str]:
+    def runner(
+        argv: list[str],
+        input: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         commands.append(argv)
         if argv[0] == "docker" and "run" in argv:
             return subprocess.CompletedProcess(argv, returncode=0, stdout="cid\n")
@@ -382,7 +391,46 @@ def test_start_embeds_password_in_base_url() -> None:
     )
     base_url = serve.start()
 
-    assert base_url == "http://opencode:secret-token@127.0.0.1:4096"
+    assert base_url == "http://127.0.0.1:4096"
+    assert serve.auth == ("opencode", "secret-token")
+
+
+async def test_executor_sends_scraped_password_as_basic_auth(tmp_path: Path) -> None:
+    authorization_headers: list[str | None] = []
+
+    def docker_runner(
+        argv: list[str],
+        input: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        if argv[0] == "docker" and "run" in argv:
+            return subprocess.CompletedProcess(argv, returncode=0, stdout="cid\n")
+        if argv[0] == "docker" and "logs" in argv:
+            return subprocess.CompletedProcess(
+                argv, returncode=0, stdout="server password secret-token\n"
+            )
+        return subprocess.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+    base_handler = _handler(events=[], diff_items=[])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/session" and request.method == "POST":
+            authorization_headers.append(request.headers.get("authorization"))
+        return base_handler(request)
+
+    executor = OpencodeExecutor(
+        base_url=None,
+        workspace=tmp_path,
+        model="qwen-coder",
+        llm_endpoint="http://litellm.swarm-lab.svc:30084/v1",
+        transport=httpx.MockTransport(handler),
+        docker_runner=docker_runner,
+    )
+
+    session = await executor.start(_request())
+    await session.stop()
+
+    assert authorization_headers == ["Basic b3BlbmNvZGU6c2VjcmV0LXRva2Vu"]
 
 
 async def test_done_path_releases_resources(tmp_path: Path) -> None:
@@ -393,9 +441,7 @@ async def test_done_path_releases_resources(tmp_path: Path) -> None:
             "data": {"sessionID": "ses_test"},
         }
     ]
-    transport = httpx.MockTransport(
-        _handler(events=events, diff_items=[], status_tokens=None)
-    )
+    transport = httpx.MockTransport(_handler(events=events, diff_items=[], status_tokens=None))
 
     stop_calls: list[None] = []
 
@@ -422,7 +468,9 @@ async def test_start_failure_after_container_start_stops_container(tmp_path: Pat
     commands: list[list[str]] = []
 
     def docker_runner(
-        argv: list[str], input: str | None = None
+        argv: list[str],
+        input: str | None = None,
+        env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         commands.append(argv)
         if argv[0] == "docker" and "run" in argv:
@@ -493,9 +541,7 @@ async def test_evidence_root_separates_artifacts_from_workspace(tmp_path: Path) 
             "data": {"sessionID": "ses_test"},
         }
     ]
-    transport = httpx.MockTransport(
-        _handler(events=events, diff_items=[], status_tokens=None)
-    )
+    transport = httpx.MockTransport(_handler(events=events, diff_items=[], status_tokens=None))
     executor = OpencodeExecutor(
         base_url="http://localhost:8080",
         workspace=workspace,
