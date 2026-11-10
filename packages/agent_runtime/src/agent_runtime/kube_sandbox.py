@@ -33,9 +33,19 @@ from agent_runtime.executor import (
     ExecutionSession,
     ExecutionStatus,
 )
-from agent_runtime.opencode_executor import OpencodeExecutor, opencode_config_text
+from agent_runtime.opencode_executor import (
+    OpencodeExecutor,
+    _derived_image_tag,
+    opencode_config_text,
+)
 from agent_runtime.session_log import SessionLog
 from agent_runtime.settings import OPENCODE_IMAGE
+
+#: The k3s sandbox runs the git-enabled derived image (the official image ships
+#: no git, and the harness diff endpoint depends on it — M4a spike). The image
+#: must be imported into the cluster before the first vertex (section_agents /
+#: the acceptance preflight do it).
+SANDBOX_IMAGE = _derived_image_tag(OPENCODE_IMAGE)
 
 #: Same shape as the docker runner seam (argv, stdin) — keeps the injection
 #: test pattern identical across sandbox backends.
@@ -256,7 +266,7 @@ class KubeSandbox:
         namespace: str = "agents",
         nodeport_range: tuple[int, int] = (30100, 30110),
         kube_runner: KubeRunner | None = None,
-        image: str = OPENCODE_IMAGE,
+        image: str = SANDBOX_IMAGE,
     ) -> None:
         self._gitea_token = gitea_token
         self._repo_url = repo_url
@@ -451,7 +461,7 @@ class KubeSandboxExecutorFactory:
         namespace: str = "agents",
         nodeport_range: tuple[int, int] = (30100, 30110),
         kube_runner: KubeRunner | None = None,
-        image: str = OPENCODE_IMAGE,
+        image: str = SANDBOX_IMAGE,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._gitea_token = gitea_token

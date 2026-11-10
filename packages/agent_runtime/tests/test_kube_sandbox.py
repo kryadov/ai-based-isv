@@ -101,6 +101,12 @@ def test_in_cluster_clone_url_rewrites_authority_keeps_path() -> None:
 
 
 def test_pod_manifest_shape() -> None:
+    from agent_runtime.kube_sandbox import SANDBOX_IMAGE
+
+    assert SANDBOX_IMAGE.startswith("opencode-git:"), (
+        "the sandbox must run the git-enabled derived image: the official image "
+        "ships no git and the harness diff endpoint depends on it"
+    )
     pod = pod_manifest(
         image="opencode-git:2.2.0",
         repo_url="http://127.0.0.1:30080/swarm-lab/target-scratch",
@@ -184,6 +190,10 @@ def test_start_happy_path_returns_handle() -> None:
     assert handle.workspace_pod_path == "/workspace/run-30/vertex-29"
     secret = kube.first_stdin("apply", "Secret")
     assert secret["stringData"]["gitea-token"] == "gitea-admin-TOKEN-SECRET"
+    applied_pod = kube.first_stdin("apply", "Pod")
+    assert applied_pod["spec"]["containers"][0]["image"].startswith("opencode-git:"), (
+        "the spawned pod must use the git-enabled derived image"
+    )
     assert kube.calls_with("delete") == [], "happy path must not tear anything down"
 
 
