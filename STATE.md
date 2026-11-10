@@ -3,7 +3,7 @@
 > Read this file FIRST. Then `ARCH.md` (how it works, diagrams), `AGENTS.md` (rules), `TODO.md` (backlog).
 > This file is updated at the end of EVERY increment. If your findings contradict it — verify, then update it.
 
-Last updated: 2026-11-10 (M4a closed — executor E2E live; next M4b)
+Last updated: 2026-11-10 (M4b closed — k3s sandbox executor; next M4c)
 
 ## What this project is
 
@@ -31,9 +31,10 @@ Verified acceptance flows (run them on the stand):
 ./infra/tests/m2d_flow.sh          # bootstrap CLI end-to-end
 ./infra/tests/m3_flow.sh           # control plane on live Postgres (NodePort, no port-forward)
 ./infra/tests/m4a_flow.sh          # agent_runtime E2E: issue-like vertex → agent in docker → PR branch with evidence
+./infra/tests/m4b_flow.sh          # same vertex in a k3s sandbox pod: NetworkPolicy + Secret + NodePort + netpol negative
 ```
 
-All six PASS as of this snapshot (`m4a_flow.sh` PASS ×2 live, ~2.5 min per run). Code gates: `uv run ruff check .` / `uv run mypy packages apps` / `uv run pytest` — green (143 passed, 1 skipped).
+All six PASS as of this snapshot, plus `m4b_flow.sh` PASS (k3s sandbox vertex, ~4.5 min per run incl. pod spin-up). Code gates: `uv run ruff check .` / `uv run mypy packages apps` / `uv run pytest` — green (166 passed, 1 skipped).
 
 **M4a adds — agent_runtime (first real executor, verified E2E):**
 
@@ -44,13 +45,22 @@ All six PASS as of this snapshot (`m4a_flow.sh` PASS ×2 live, ~2.5 min per run)
 - **Evidence**: `.agent-runtime-workspace/run-N/{target/, sandbox/, .agent_runtime/runs/run-N/vertex-M/{session_log.ndjson,manifest.json}}` (gitignored).
 - **Live lessons baked in**: model must be `litellm/qwen3` (qwen-coder returns tool-calls as text — preflight asserts `tool_calls`); bodyless `POST /api/session` → 400 (client sends `{}`); `Authorization: token <TOKEN>` header scheme confirmed live on Gitea git-http; done_when cmd runs on host with scrubbed env (PATH/HOME/LANG/TMPDIR only — M4b moves checks into the pod); snapshot intermittency (empty diff on retried sessions) — M4b spike.
 
+**M4b adds — sandbox in k3s (verified E2E, `m4b_flow.sh` PASS):**
+
+- **`agent_runtime/kube_sandbox.py`**: pod/service/secret lifecycle over a `kubectl` runner seam (same injection pattern as the docker spawn; no k8s SDK). Pod = initContainer (alpine/git clone via in-cluster `gitea-http.platform.svc.cluster.local:3000`, token via per-run Secret env — never argv) + serve container (derived `opencode-git:<tag>` image — **the base image has no git and the diff endpoint requires it**; PVC mounted; NO `OPENCODE_DB` — it breaks the harness snapshot machinery), NodePort service (range 30100–30110, allocated + conflict-retried), `reconcile_orphans` sweeps pods orphaned by dead workers. Teardown: Pod/Service/Secret idempotent (PVC persists). Evidence stays host-side (the adapter's SSE pump).
+- **`vault_broker.py`**: read-only Gitea token from OpenBao via `kubectl exec … bao kv get` (m2a pattern); worker prefers explicit `AGENT_RUNTIME_GIT_TOKEN`.
+- **`section_agents`** (bootstrap): namespace `agents`, PVC `agent-scratch` (5Gi, local-path — Pending until first consumer), default-deny + allow network policies; k3d NodePort range guard (`k3d cluster edit --port-add`, no cluster recreation).
+- **Worker**: `AGENT_RUNTIME_SANDBOX_BACKEND=k3s` dispatch (`build_executor`); docker path unchanged.
+- **Live lessons**: NetPolicy IS enforced on k3d (negative tests: Postgres cluster :5432 and host :15432 denied; positives gitea/litellm in-cluster); one-shot probe pods must retry outbound checks (CNI warm-up transients) and a sleeping pod + `kubectl exec` is the stable probe pattern; opencode phones home to `models.opencode.ai` (non-fatal under the policy so far — WATCH in M4c: a free-gateway fallback was observed once under allow-all egress); OpenBao seals on host restarts — flows reading secrets must preflight/unseal (`infra/.vault-unseal-keys.json`); k3d publishes only individually mapped NodePorts — new ranges need `k3d cluster edit --port-add`; transient LiteLLM pod recreation (probable memory-pressure eviction during LLM load) can flake preflights — rerun.
+
 ## Milestones
 
 - ✅ **M1** — monorepo skeleton (release **v0.1.0**)
 - ✅ **M2a/M2b/M2c/M2d** — L0 infrastructure + bootstrapper CLI (release **v0.2.0**)
 - ✅ **M3 — control plane (DONE)**: `isv_core` domain + `agent_api` (vertex queue with lease, identities, budgets, HITL inbox, audit journal, merge queue) — merged to main, **m3_flow PASS on live Postgres**, CI green, release **v0.3.0**. Plan: `docs/superpowers/plans/2026-11-09-m3-control-plane.md`.
 - ✅ **M4a — Executor/OpenCode locally (DONE 2026-11-10)**: `agent_runtime` — Executor contract, OpenCode adapter (docker, pin 2.2.0), session log, done_when/paths_allow code validation, run manifest, run-scoped worker; **m4a_flow PASS ×2 live**, regressions m2a–d+m3 PASS, gates green. Plan: `docs/superpowers/plans/2026-11-09-m4a-executor-opencode.md`; design: `docs/superpowers/specs/2026-11-09-m4-agent-runtime-design.md`.
-- ⏭️ **Next: M4b** (sandbox in k3s: pod manager — initContainer clone, NetworkPolicy allow-list, Vault-token brokering into initContainer; spikes: NetworkPolicy enforcement on k3d, harness snapshot intermittency) → then **M4c** (MCP task-source/git/llm + full E2E with tracker status loop). Then M5 (gates + review), M6 (canary), M7 (memory), M8 (swarm mode), M9 (polyglot dogfood), M10 (UI panel + Automations). Release v0.4.0 at M4 close (a+b+c).
+- ✅ **M4b — sandbox in k3s (DONE 2026-11-10)**: pod/service/secret lifecycle over kubectl seam, NetworkPolicy default-deny + allow (verified live), Vault-brokered read-only token, PVC workspace, per-attempt full clone, `reconcile_orphans`; **m4b_flow PASS live** (vertex → branch → verdict → teardown → netpol negative). Plan: `docs/superpowers/plans/2026-11-10-m4b-k3s-sandbox.md`; spike notes: `docs/superpowers/research/2026-11-10-m4b-*.md`.
+- ⏭️ **Next: M4c** (MCP-серверы task-source/git/llm — FastMCP, streamable HTTP; полный E2E: Gitea issue → run → агент в поде → PR с evidence; петля статусов трекера In Progress → Done; затем release v0.4.0 = закрытие всего M4). Then M5 (gates + review), M6 (canary), M7 (memory), M8 (swarm mode), M9 (polyglot dogfood), M10 (UI panel + Automations).
 
 ## Releases / conventions
 
