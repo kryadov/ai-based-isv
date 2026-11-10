@@ -217,13 +217,15 @@ def test_push_diff_rejects_conflicting_diff(tmp_path: Path) -> None:
 def test_push_diff_overwrites_own_branch_on_retry(tmp_path: Path) -> None:
     remote_url, _ = _bare_remote_with_main(tmp_path)
     repo_dir = ensure_repo(tmp_path / "ws", remote_url, "main")
+    first_repo = ensure_repo(tmp_path / "ws-first", remote_url, "main")
 
-    (repo_dir / "README.txt").write_text("one\ntwo\nfirst\n", encoding="utf-8")
-    diff_one = _git(["diff", "--", "README.txt"], repo_dir)
-    _git(["checkout", "--", "README.txt"], repo_dir)
-    sha_one = push_diff(repo_dir, diff_one, "agent/vertex-6", message="first attempt")
+    (first_repo / "README.txt").write_text("one\ntwo\nfirst\n", encoding="utf-8")
+    diff_one = _git(["diff", "--", "README.txt"], first_repo)
+    _git(["checkout", "--", "README.txt"], first_repo)
+    sha_one = push_diff(first_repo, diff_one, "agent/vertex-6", message="first attempt")
 
-    # a retry re-clones to base and pushes a different commit to the same work branch
+    # The retry clone pre-dates the remote work branch and fetches only main, so it has
+    # no refs/remotes/origin/agent/vertex-6 tracking ref for --force-with-lease.
     ensure_repo(tmp_path / "ws", remote_url, "main")
     (repo_dir / "README.txt").write_text("one\ntwo\nsecond\n", encoding="utf-8")
     diff_two = _git(["diff", "--", "README.txt"], repo_dir)

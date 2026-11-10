@@ -45,10 +45,11 @@ from urllib.parse import urlsplit
 AGENT_RUNTIME_NAME = "agent-runtime"
 AGENT_RUNTIME_EMAIL = "agent-runtime@localhost"
 
-# Retries onto the same work branch may diverge (fresh base + a new commit).
-# --force-with-lease lets the worker overwrite its own branch while still refusing to
-# clobber a branch someone else moved in between.
+# Retries onto the same worker-owned work branch may diverge (fresh base + new commit).
+# The agent/vertex-* namespace has a single writer, so plain --force also covers clones
+# that have no remote-tracking ref (where --force-with-lease rejects with stale info).
 _PUSH_REFSPEC_FMT = "HEAD:refs/heads/{branch}"
+_GIT_TIMEOUT_SECONDS = 300.0
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -136,7 +137,10 @@ def _run(
             capture_output=True,
             text=True,
             check=True,
+            timeout=_GIT_TIMEOUT_SECONDS,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise GitOperationError(f"`{exc.cmd!r}` timed out after {exc.timeout} seconds") from exc
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or "").strip()
         raise GitOperationError(f"`{exc.cmd!r}` failed (exit {exc.returncode}): {detail}") from exc
@@ -244,7 +248,7 @@ def push_head(
         raise GitOperationError("commit sha is unchanged from the base; nothing to push")
 
     refspec = _PUSH_REFSPEC_FMT.format(branch=work_branch)
-    _run(["push", "--force-with-lease", "origin", refspec], repo_dir, env)
+    _run(["push", "--force", "origin", refspec], repo_dir, env)
     return sha
 
 
