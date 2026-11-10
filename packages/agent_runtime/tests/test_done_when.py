@@ -8,8 +8,12 @@ verdict. Nothing ever passes silently.
 
 from __future__ import annotations
 
+import json
+import shlex
+import sys
 from pathlib import Path
 
+import agent_runtime.done_when as done_when_module
 import pytest
 from agent_runtime.done_when import (
     DoneWhenCheck,
@@ -76,6 +80,55 @@ def test_cmd_pass_and_fail(tmp_path: Path) -> None:
     assert [result.passed for result in verdict.results] == [False]
 
 
+def test_default_cmd_runner_does_not_leak_worker_secrets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AGENT_RUNTIME_GIT_TOKEN", "secret")
+    monkeypatch.setenv("LITELLM_API_KEY", "also-secret")
+    output_path = tmp_path / "child-env.json"
+    script = (
+        "import json, os, pathlib, sys; "
+        "pathlib.Path(sys.argv[1]).write_text(json.dumps(dict(os.environ)), encoding='utf-8')"
+    )
+    command = (
+        f"{shlex.quote(sys.executable)} -c {shlex.quote(script)} {shlex.quote(str(output_path))}"
+    )
+    spec = parse_done_when(json.dumps({"checks": [{"type": "cmd", "run": command}]}))
+
+    verdict = validate_done_when(spec, cwd=tmp_path)
+
+    assert verdict.passed is True
+    child_env = json.loads(output_path.read_text(encoding="utf-8"))
+    assert "AGENT_RUNTIME_GIT_TOKEN" not in child_env
+    assert "LITELLM_API_KEY" not in child_env
+    assert "PATH" in child_env
+
+
+def test_default_cmd_runner_supports_pytest_with_scrubbed_environment(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "test_ok.py").write_text(
+        "def test_ok() -> None:\n    assert True\n", encoding="utf-8"
+    )
+    spec = parse_done_when('{"checks": [{"type": "cmd", "run": "pytest -q"}]}')
+
+    verdict = validate_done_when(spec, cwd=tmp_path)
+
+    assert verdict.passed is True, verdict.reason
+
+
+def test_default_cmd_runner_times_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(done_when_module, "_CMD_TIMEOUT_SECONDS", 0.05, raising=False)
+    command = f"{shlex.quote(sys.executable)} -c {shlex.quote('import time; time.sleep(1)')}"
+    spec = parse_done_when(json.dumps({"checks": [{"type": "cmd", "run": command}]}))
+
+    verdict = validate_done_when(spec, cwd=tmp_path)
+
+    assert verdict.passed is False
+    assert verdict.reason is not None
+    assert "timed out" in verdict.reason
+
+
 def test_first_fail_stops_execution(tmp_path: Path) -> None:
     seen: list[str] = []
 
@@ -108,6 +161,31 @@ def test_files_exist_pass_and_fail(tmp_path: Path) -> None:
     verdict = validate_done_when(failing, cwd=tmp_path)
     assert verdict.passed is False
     assert "src/missing.py" in verdict.results[0].detail
+
+
+def test_files_exist_rejects_absolute_paths_and_parent_escapes(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    outside = tmp_path / "secret.txt"
+    outside.write_text("secret\n", encoding="utf-8")
+    spec = parse_done_when(
+        json.dumps(
+            {
+                "checks": [
+                    {
+                        "type": "files_exist",
+                        "paths": [str(outside), "../secret.txt", "src/../../secret.txt"],
+                    }
+                ]
+            }
+        )
+    )
+
+    verdict = validate_done_when(spec, cwd=repo)
+
+    assert verdict.passed is False
+    assert verdict.results[0].passed is False
+    assert "outside the working directory" in verdict.results[0].detail
 
 
 def test_unknown_check_type_fails_closed(tmp_path: Path) -> None:

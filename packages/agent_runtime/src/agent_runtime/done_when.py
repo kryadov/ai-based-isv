@@ -1,9 +1,13 @@
 """Code-validated ``done_when`` checks — the fail-closed acceptance core of a vertex.
 
 After the agent reports done, OUR code (never an LLM) executes the declarative
-checks attached to the vertex in the sandbox: a ``cmd`` check must exit 0, a
-``files_exist`` check's paths must be present under the repo working directory.
-Checks run in specification order and the first FAIL stops the evaluation.
+checks attached to the vertex: a ``cmd`` check must exit 0, a ``files_exist``
+check's paths must be present under the repo working directory. Checks run in
+specification order and the first FAIL stops the evaluation.
+
+In M4a ``cmd`` is the host-side boundary: it runs agent-authored shell code with a
+scrubbed environment and a timeout, never with worker credentials. M4b moves these
+checks into the sandbox pod.
 
 Fail-closed policy (spec 2026-11-09-m4-agent-runtime-design.md, §done_when):
 
@@ -18,6 +22,7 @@ Fail-closed policy (spec 2026-11-09-m4-agent-runtime-design.md, §done_when):
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -68,6 +73,8 @@ class DoneWhenVerdict(BaseModel):
 
 _CMD_TYPE = "cmd"
 _FILES_EXIST_TYPE = "files_exist"
+_CMD_ENV_ALLOWLIST = ("PATH", "HOME", "LANG", "TMPDIR")
+_CMD_TIMEOUT_SECONDS = 300.0
 
 
 def parse_done_when(raw: str) -> DoneWhenSpec:
@@ -86,18 +93,31 @@ def parse_done_when(raw: str) -> DoneWhenSpec:
         raise DoneWhenUnparseable(f"done_when has no usable 'checks': {exc}") from exc
 
 
+def _cmd_environment() -> dict[str, str]:
+    """Return only the non-secret variables needed by ordinary build tools."""
+    return {key: os.environ[key] for key in _CMD_ENV_ALLOWLIST if key in os.environ}
+
+
 def _subprocess_run_cmd(cmd: str, cwd: Path) -> int:
-    """Default runner: the command through the sandbox shell, output captured."""
-    # shell=True is intentional: check bodies are authored by humans in tracker
-    # vertices and may use shell composition (pipes, &&); the sandbox is the boundary.
+    """Default runner: bounded shell execution without the worker's secret env."""
+    # shell=True is intentional: check bodies may use shell composition (pipes, &&).
+    # M4a reduces host exposure through this environment boundary; M4b uses a pod.
     completed = subprocess.run(
         cmd,
         shell=True,
         cwd=cwd,
+        env=_cmd_environment(),
         capture_output=True,
         check=False,
+        timeout=_CMD_TIMEOUT_SECONDS,
     )
     return completed.returncode
+
+
+def _path_is_within_cwd(raw_path: str, cwd: Path) -> bool:
+    """Accept relative paths only, including symlink-aware containment."""
+    path = Path(raw_path)
+    return not path.is_absolute() and (cwd / path).resolve().is_relative_to(cwd)
 
 
 def _run_one_check(
@@ -119,7 +139,11 @@ def _run_one_check(
     if check.type == _FILES_EXIST_TYPE:
         if not check.paths:
             return False, "files_exist check has no 'paths'"
-        missing = [path for path in check.paths if not (cwd / path).exists()]
+        resolved_cwd = cwd.resolve()
+        unsafe = [path for path in check.paths if not _path_is_within_cwd(path, resolved_cwd)]
+        if unsafe:
+            return False, f"paths outside the working directory: {', '.join(unsafe)}"
+        missing = [path for path in check.paths if not (resolved_cwd / path).exists()]
         if missing:
             return False, f"missing paths: {', '.join(missing)}"
         return True, f"all {len(check.paths)} paths exist under {cwd}"
