@@ -38,6 +38,18 @@ _DELETE = (
     "@@ -1 +0,0 @@\n"
     "-gone\n"
 )
+_RENAME_ONLY = (
+    "diff --git a/old_name.py b/evil.py\n"
+    "similarity index 100%\n"
+    "rename from old_name.py\n"
+    "rename to evil.py\n"
+)
+_MODE_ONLY = "diff --git a/scripts/run.sh b/scripts/run.sh\nold mode 100644\nnew mode 100755\n"
+_BINARY = (
+    "diff --git a/assets/logo.png b/assets/logo.png\n"
+    "index 1234567..89abcde 100644\n"
+    "Binary files a/assets/logo.png and b/assets/logo.png differ\n"
+)
 
 
 def test_diff_files_parses_paths() -> None:
@@ -73,6 +85,37 @@ def test_rename_yields_both_paths() -> None:
         "+y\n"
     )
     assert diff_files(diff) == ["old_name.py", "new_name.py"]
+
+
+def test_rename_only_diff_fails_closed() -> None:
+    with pytest.raises(DiffUnparseable):
+        diff_files(_RENAME_ONLY)
+
+
+def test_rename_mixed_with_content_guards_both_rename_paths() -> None:
+    changed = diff_files(_MODIFY + _RENAME_ONLY)
+
+    assert changed == ["src/app.py", "old_name.py", "evil.py"]
+    assert filter_violations(changed, ["src/**"]) == ["old_name.py", "evil.py"]
+
+
+def test_mode_only_mixed_with_content_guards_mode_path() -> None:
+    changed = diff_files(_MODIFY + _MODE_ONLY)
+
+    assert changed == ["src/app.py", "scripts/run.sh"]
+    assert filter_violations(changed, ["src/**"]) == ["scripts/run.sh"]
+
+
+def test_binary_mixed_with_content_fails_closed() -> None:
+    with pytest.raises(DiffUnparseable):
+        diff_files(_MODIFY + _BINARY)
+
+
+def test_unparseable_git_header_mixed_with_content_fails_closed() -> None:
+    diff = _MODIFY + "diff --git this header has no usable paths\n"
+
+    with pytest.raises(DiffUnparseable):
+        diff_files(diff)
 
 
 @pytest.mark.parametrize(
