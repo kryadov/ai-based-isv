@@ -504,7 +504,7 @@ for _ in 1 2 3; do
 done
 kubectl -n agents delete pod m4b-netpol-probe --force --grace-period=0 >/dev/null 2>&1 || true
 [ "$PROBE_OUT" = "NETPOL_OK" ] \
-  || fail "NetworkPolicy probe failed (out: ${PROBE_OUT:-none}; 11=gitea 12=litellm 13=pg-cluster 14=pg-host)"
+  || fail "NetworkPolicy probe failed (out: ${PROBE_OUT:-none}; phase=$(kubectl -n agents get pod m4b-netpol-probe -o jsonpath='{.status.phase}' 2>/dev/null); 11=gitea 12=litellm 13=pg-cluster 14=pg-host)"
 echo "M4b flow: NetworkPolicy verified — gitea+litellm reachable, Postgres denied"
 
 echo "M4b flow: PASS — vertex $VERTEX_ID pushed to $BRANCH in $ORG/$REPO"
