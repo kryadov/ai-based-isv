@@ -31,11 +31,12 @@ def test_read_gitea_token_returns_field() -> None:
     assert len(exec_calls) == 1
     argv_text = " ".join(exec_calls[0][0])
     assert "bao kv get -field=token secret/gitea/admin" in argv_text
-    assert "BAO_ADDR=http://127.0.0.1:8200" in argv_text
-    # The returned gitea token must never travel through argv.
+    # NO token may travel in argv — the root token reaches the pod via stdin.
+    assert _ROOT not in argv_text, "root token in argv is visible in process listings"
     assert _GITEA not in argv_text
-    # The root token reaches bao through the exec env (m2a precedent).
-    assert f"BAO_TOKEN={_ROOT}" in argv_text
+    assert exec_calls[0][1] is not None and _ROOT in exec_calls[0][1], (
+        "the root token travels through the runner stdin"
+    )
 
 
 def test_token_not_in_exception_on_failure() -> None:

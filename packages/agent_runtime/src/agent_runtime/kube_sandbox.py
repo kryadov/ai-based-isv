@@ -3,7 +3,10 @@
 The sandbox replaces the M4a docker spawn without touching the Executor
 contract: the worker attaches `OpencodeExecutor` to `SandboxHandle.base_url`
 (the adapter's attached-mode seam). Evidence stays host-side — the pod holds
-only the cloned repo, the generated opencode.jsonc, and OPENCODE_DB.
+only the cloned repo and the generated opencode.jsonc; opencode state stays
+inside the container (custom OPENCODE_DB breaks the harness snapshot/diff).
+v0 uses the platform's ADMIN Gitea token for the read-only clone (owner-approved
+builder-check exception; per-project read-only tokens are the M4c/M5 line).
 
 Secret material never travels in argv: the Gitea token and the harness
 config live in a per-run Secret applied via stdin; the initContainer reads
@@ -92,13 +95,14 @@ def secret_manifest(
     gitea_token: str,
     litellm_api_key: str,
     config_jsonc: str,
+    namespace: str = "agents",
 ) -> dict[str, Any]:
     return {
         "apiVersion": "v1",
         "kind": "Secret",
         "metadata": {
             "name": name,
-            "namespace": "agents",
+            "namespace": namespace,
             "labels": _labels(run_id, vertex_id),
         },
         "stringData": {
@@ -118,27 +122,31 @@ def pod_manifest(
     vertex_id: int,
     secret_name: str,
     config_jsonc: str,
+    namespace: str = "agents",
 ) -> dict[str, Any]:
     name = _object_name(run_id, vertex_id)
     run_dir = f"/workspace/run-{run_id}/vertex-{vertex_id}"
     clone_url = in_cluster_clone_url(repo_url)
-    # The token is substituted from the GITEA_TOKEN env (Secret-backed) at
-    # execution time — the manifest itself carries no secret material.
-    credentialed_url = clone_url.replace("http://", "http://oauth2:$GITEA_TOKEN@")
+    # Credentials travel via git env-based config (GIT_CONFIG_*), the same
+    # mechanism the worker's gitops uses: the manifest carries the "$GITEA_TOKEN"
+    # LITERAL only — the token never enters the clone URL, the git argv, or the
+    # cloned repo's .git/config (the workspace is agent-readable).
+    # Full clone (not --depth 1): the harness snapshot/diff mechanism reads
+    # repository history; a shallow clone made its diff come back empty
+    # (deterministic on the k3s stand, 4/4 attempts on 2026-11-10).
     clone_script = (
         "set -e; "
         f"rm -rf '{run_dir}'; "
         f"mkdir -p '{run_dir}'; "
-        # Full clone (not --depth 1): the harness snapshot/diff mechanism reads
-        # repository history; a shallow clone made its diff come back empty
-        # (deterministic on the k3s stand, 4/4 attempts on 2026-11-10).
-        f"git clone -b '{base_branch}' \"{credentialed_url}\" '{run_dir}'; "
+        "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader "
+        'GIT_CONFIG_VALUE_0="Authorization: token $GITEA_TOKEN"; '
+        f"git clone -b '{base_branch}' \"{clone_url}\" '{run_dir}'; "
         f"cp /config/opencode.jsonc '{run_dir}/opencode.jsonc'"
     )
     return {
         "apiVersion": "v1",
         "kind": "Pod",
-        "metadata": {"name": name, "namespace": "agents", "labels": _labels(run_id, vertex_id)},
+        "metadata": {"name": name, "namespace": namespace, "labels": _labels(run_id, vertex_id)},
         "spec": {
             "restartPolicy": "Never",
             "volumes": [
@@ -199,13 +207,15 @@ def pod_manifest(
     }
 
 
-def service_manifest(*, name: str, run_id: int, vertex_id: int, node_port: int) -> dict[str, Any]:
+def service_manifest(
+    *, name: str, run_id: int, vertex_id: int, node_port: int, namespace: str = "agents"
+) -> dict[str, Any]:
     return {
         "apiVersion": "v1",
         "kind": "Service",
         "metadata": {
             "name": name,
-            "namespace": "agents",
+            "namespace": namespace,
             "labels": _labels(run_id, vertex_id),
         },
         "spec": {
@@ -296,8 +306,8 @@ class KubeSandbox:
             f"(exit {result.returncode}): {result.stderr.strip()}"
         )
 
-    def _delete(self, kind: str) -> None:
-        self._kube(
+    def _delete(self, kind: str) -> subprocess.CompletedProcess[str]:
+        return self._kube(
             [
                 "kubectl",
                 "-n",
@@ -311,9 +321,13 @@ class KubeSandbox:
 
     def teardown(self) -> None:
         """Idempotently remove Service, Pod and Secret (PVC persists)."""
-        self._delete("service")
-        self._delete("pod")
-        self._delete("secret")
+        failures: list[str] = []
+        for kind in ("service", "pod", "secret"):
+            deletion = self._delete(kind)
+            if deletion is not None and deletion.returncode != 0:
+                failures.append(f"{kind}: {deletion.stderr.strip()}")
+        if failures:
+            raise KubeSandboxError(f"teardown of {self._name} incomplete — {', '.join(failures)}")
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -331,6 +345,7 @@ class KubeSandbox:
             gitea_token=self._gitea_token,
             litellm_api_key=self._litellm_api_key,
             config_jsonc=config_jsonc,
+            namespace=self._namespace,
         )
         pod = pod_manifest(
             image=self._image,
@@ -340,55 +355,62 @@ class KubeSandbox:
             vertex_id=self._vertex_id,
             secret_name=self._name,
             config_jsonc=config_jsonc,
+            namespace=self._namespace,
         )
         try:
-            applied = self._apply(secret)
-            if applied.returncode != 0:
-                raise self._fail("secret", applied)
-            pod_applied = self._apply(pod)
-            if pod_applied.returncode != 0:
-                raise self._fail("pod", pod_applied)
-            node_port = self._apply_service_with_retry(free)
-        except KubeSandboxError:
+            try:
+                applied = self._apply(secret)
+                if applied.returncode != 0:
+                    raise self._fail("secret", applied)
+                pod_applied = self._apply(pod)
+                if pod_applied.returncode != 0:
+                    raise self._fail("pod", pod_applied)
+                node_port = self._apply_service_with_retry(free)
+            except KubeSandboxError:
+                self.teardown()
+                raise
+
+            deadline = time.monotonic() + timeout_seconds
+            while True:
+                probe = self._kube(
+                    ["kubectl", "-n", self._namespace, "get", "pod", self._name, "-o", "json"], None
+                )
+                if probe.returncode != 0:
+                    self.teardown()
+                    raise self._fail("pod probe", probe)
+                status = json.loads(probe.stdout or "{}").get("status", {})
+                if status.get("phase") == "Failed":
+                    self.teardown()
+                    raise KubeSandboxError(f"pod {self._name} entered phase Failed")
+                if any(
+                    c.get("type") == "Ready" and c.get("status") == "True"
+                    for c in status.get("conditions", [])
+                ):
+                    break
+                if time.monotonic() >= deadline:
+                    self.teardown()
+                    raise KubeSandboxError(f"pod {self._name} not Ready within {timeout_seconds}s")
+                time.sleep(min(2.0, max(0.1, deadline - time.monotonic())))
+
+            logs = self._kube(["kubectl", "-n", self._namespace, "logs", self._name], None)
+            if logs.returncode != 0:
+                self.teardown()
+                raise self._fail("logs", logs)
+            password = _extract_password(logs.stdout)
+            if password is None:
+                self.teardown()
+                raise KubeSandboxError(f"no 'server password' line in logs of {self._name}")
+            return SandboxHandle(
+                base_url=f"http://127.0.0.1:{node_port}",
+                password=password,
+                workspace_pod_path=f"/workspace/run-{self._run_id}/vertex-{self._vertex_id}",
+                pod_name=self._name,
+            )
+        except BaseException:
+            # ANY failure after the Secret exists must reclaim Pod/Service/Secret —
+            # the Secret carries credentials and the Service holds a NodePort.
             self.teardown()
             raise
-
-        deadline = time.monotonic() + timeout_seconds
-        while True:
-            probe = self._kube(
-                ["kubectl", "-n", self._namespace, "get", "pod", self._name, "-o", "json"], None
-            )
-            if probe.returncode != 0:
-                self.teardown()
-                raise self._fail("pod probe", probe)
-            status = json.loads(probe.stdout or "{}").get("status", {})
-            if status.get("phase") == "Failed":
-                self.teardown()
-                raise KubeSandboxError(f"pod {self._name} entered phase Failed")
-            if any(
-                c.get("type") == "Ready" and c.get("status") == "True"
-                for c in status.get("conditions", [])
-            ):
-                break
-            if time.monotonic() >= deadline:
-                self.teardown()
-                raise KubeSandboxError(f"pod {self._name} not Ready within {timeout_seconds}s")
-            time.sleep(min(2.0, max(0.1, deadline - time.monotonic())))
-
-        logs = self._kube(["kubectl", "-n", self._namespace, "logs", self._name], None)
-        if logs.returncode != 0:
-            self.teardown()
-            raise self._fail("logs", logs)
-        password = _extract_password(logs.stdout)
-        if password is None:
-            self.teardown()
-            raise KubeSandboxError(f"no 'server password' line in logs of {self._name}")
-        return SandboxHandle(
-            base_url=f"http://127.0.0.1:{node_port}",
-            password=password,
-            workspace_pod_path=f"/workspace/run-{self._run_id}/vertex-{self._vertex_id}",
-            pod_name=self._name,
-        )
 
     def stop(self) -> None:
         self.teardown()
@@ -397,7 +419,11 @@ class KubeSandbox:
         last: subprocess.CompletedProcess[str] | None = None
         for port in free:
             manifest = service_manifest(
-                name=self._name, run_id=self._run_id, vertex_id=self._vertex_id, node_port=port
+                name=self._name,
+                run_id=self._run_id,
+                vertex_id=self._vertex_id,
+                node_port=port,
+                namespace=self._namespace,
             )
             result = self._apply(manifest)
             if result.returncode == 0:
@@ -437,8 +463,10 @@ class SandboxSession:
         return self._inner.session_log
 
     async def stop(self) -> None:
-        await self._inner.stop()
-        await asyncio.to_thread(self._sandbox.stop)
+        try:
+            await self._inner.stop()
+        finally:
+            await asyncio.to_thread(self._sandbox.stop)
 
 
 class KubeSandboxExecutorFactory:
@@ -509,7 +537,13 @@ class KubeSandboxExecutorFactory:
 
 
 def reconcile_orphans(kube: KubeRunner, *, namespace: str, max_age_seconds: float) -> int:
-    """Delete sandbox pods left behind by dead workers (older than max_age)."""
+    """Reclaim sandbox objects left behind by dead workers (older than max_age).
+
+    Deletes the Service, Pod AND Secret of every stale sandbox (the Secret
+    carries the Gitea token — a Pod removed without its Secret still leaks
+    credentials). Uses ``metadata.creationTimestamp`` so Pending pods are
+    covered too. Returns the number of fully reclaimed sandboxes.
+    """
     result = kube(
         ["kubectl", "-n", namespace, "get", "pods", "-l", f"{_LABEL_MANAGED}=yes", "-o", "json"],
         None,
@@ -519,15 +553,23 @@ def reconcile_orphans(kube: KubeRunner, *, namespace: str, max_age_seconds: floa
     now = datetime.now(UTC)
     removed = 0
     for item in json.loads(result.stdout or "{}").get("items", []):
-        name = item.get("metadata", {}).get("name")
-        started = item.get("status", {}).get("startTime")
-        if not name or not started:
+        metadata = item.get("metadata", {})
+        name = metadata.get("name")
+        created = metadata.get("creationTimestamp")
+        if not name or not created:
             continue
-        start = datetime.fromisoformat(started.replace("Z", "+00:00"))
-        if (now - start).total_seconds() > max_age_seconds:
-            kube(
-                ["kubectl", "-n", namespace, "delete", "pod", name, "--ignore-not-found"],
+        created_at = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+        if (now - created_at).total_seconds() <= max_age_seconds:
+            continue
+        failures: list[str] = []
+        for kind in ("service", "pod", "secret"):
+            deletion = kube(
+                ["kubectl", "-n", namespace, "delete", f"{kind}/{name}", "--ignore-not-found"],
                 None,
             )
-            removed += 1
+            if deletion.returncode != 0:
+                failures.append(f"{kind}: {deletion.stderr.strip()}")
+        if failures:
+            raise KubeSandboxError(f"reconcile failed for {name}: {'; '.join(failures)}")
+        removed += 1
     return removed

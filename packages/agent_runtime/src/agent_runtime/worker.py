@@ -110,37 +110,46 @@ def _git_token(raw: str) -> str | None:
     return raw if raw else None
 
 
+def resolve_gitea_token(settings: WorkerSettings, kube_runner: Any | None = None) -> str:
+    """Resolve the Gitea credential: explicit env token first, OpenBao second.
+
+    The brokered token feeds BOTH the host-side git operations and the sandbox
+    pod, so a Vault-only worker can clone and push private repositories.
+    """
+    explicit = _git_token(settings.git_token)
+    if explicit is not None:
+        return explicit
+    root_token = settings.vault_root_token
+    if not root_token:
+        path = settings.vault_root_token_path
+        if not path.exists():
+            raise ValueError(
+                "k3s backend needs a Gitea token: set AGENT_RUNTIME_GIT_TOKEN "
+                f"or provide the vault root token file at {path}"
+            )
+        root_token = path.read_text(encoding="utf-8").strip()
+    kubectl: Any = kube_runner if kube_runner is not None else _kubectl_runner
+    return read_gitea_token(
+        kubectl,
+        root_token=root_token,
+        namespace=settings.openbao_namespace,
+        pod_label=settings.openbao_pod_label,
+    )
+
+
 def build_executor(
     settings: WorkerSettings,
     *,
     repo_dir: Path,
+    gitea_token: str,
     kube_runner: Any | None = None,
 ) -> Executor:
     """Construct the backend executor: docker spawn (M4a) or k3s sandbox (M4b).
 
-    The k3s path brokers the Gitea token (explicit ``git_token`` wins over
-    OpenBao) and reconciles sandbox pods orphaned by dead workers before the
-    first vertex is claimed.
+    ``gitea_token`` is the RESOLVED credential (see resolve_gitea_token); the
+    k3s sandbox requires it, the docker path ignores it (it uses env creds).
     """
     if settings.sandbox_backend == "k3s":
-        gitea_token = _git_token(settings.git_token)
-        if gitea_token is None:
-            root_token = settings.vault_root_token
-            if not root_token:
-                path = settings.vault_root_token_path
-                if not path.exists():
-                    raise ValueError(
-                        "k3s backend needs a Gitea token: set AGENT_RUNTIME_GIT_TOKEN "
-                        f"or provide the vault root token file at {path}"
-                    )
-                root_token = path.read_text(encoding="utf-8").strip()
-            kubectl: Any = kube_runner if kube_runner is not None else _kubectl_runner
-            gitea_token = read_gitea_token(kubectl, root_token=root_token)
-            reconcile_orphans(
-                kubectl,
-                namespace=settings.k8s_namespace,
-                max_age_seconds=float(settings.lease_ttl_seconds) * 2,
-            )
         return KubeSandboxExecutorFactory(
             gitea_token=gitea_token,
             litellm_api_key=settings.litellm_api_key,
@@ -159,6 +168,36 @@ def build_executor(
         model=settings.model,
         llm_endpoint=settings.litellm_base_url,
         port=settings.opencode_port,
+    )
+
+
+def startup_executor(
+    settings: WorkerSettings,
+    *,
+    repo_dir: Path | None = None,
+    kube_runner: Any | None = None,
+) -> Executor:
+    """Worker-startup executor construction: token resolution + orphan sweep.
+
+    k3s only: BEFORE the first claim, sweep sandbox objects orphaned by dead
+    workers (they hold credentials and NodePorts). v0 is single-worker per
+    run — the age-based sweep is safe under that contract (see STATE.md).
+    """
+    if settings.sandbox_backend != "k3s":
+        if repo_dir is None:
+            raise ValueError("the docker backend needs repo_dir")
+        return build_executor(settings, repo_dir=repo_dir, gitea_token="", kube_runner=kube_runner)
+    kubectl: Any = kube_runner if kube_runner is not None else _kubectl_runner
+    reconcile_orphans(
+        kubectl,
+        namespace=settings.k8s_namespace,
+        max_age_seconds=float(settings.lease_ttl_seconds) * 2,
+    )
+    return build_executor(
+        settings,
+        repo_dir=repo_dir or _run_workspace(settings),
+        gitea_token=resolve_gitea_token(settings, kube_runner),
+        kube_runner=kube_runner,
     )
 
 
@@ -517,13 +556,24 @@ def main() -> None:
         os.environ["LITELLM_API_KEY"] = settings.litellm_api_key
 
     run_ws = _run_workspace(settings)
-    repo_dir = ensure_repo(
-        run_ws,
-        settings.repo_url,
-        settings.base_branch,
-        token=_git_token(settings.git_token),
-    )
-    executor = build_executor(settings, repo_dir=repo_dir)
+    if settings.sandbox_backend == "k3s":
+        # The brokered token must exist BEFORE the first host-side git call.
+        gitea_token = resolve_gitea_token(settings)
+        repo_dir = ensure_repo(
+            run_ws,
+            settings.repo_url,
+            settings.base_branch,
+            token=_git_token(gitea_token),
+        )
+        executor = startup_executor(settings, repo_dir=repo_dir)
+    else:
+        repo_dir = ensure_repo(
+            run_ws,
+            settings.repo_url,
+            settings.base_branch,
+            token=_git_token(settings.git_token),
+        )
+        executor = startup_executor(settings, repo_dir=repo_dir)
 
     with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(worker_loop(settings, executor))

@@ -1,6 +1,7 @@
 """Runtime constants and worker settings for the agent runtime."""
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -29,7 +30,9 @@ class WorkerSettings(BaseSettings):
     model: str = ""
     git_token: str = ""
     # --- k3s sandbox backend (M4b) ---
-    sandbox_backend: str = "docker"  # "docker" | "k3s"
+    # v0 contract: ONE worker per run — the age-based orphan sweep is unsafe
+    # with concurrent workers.
+    sandbox_backend: Literal["docker", "k3s"] = "docker"
     k8s_namespace: str = "agents"
     nodeport_range_low: int = 30100
     nodeport_range_high: int = 30110

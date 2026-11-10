@@ -1,9 +1,10 @@
-"""Vault brokering: read-only secrets for sandbox pods, via kubectl exec.
+"""Vault brokering: Gitea credentials for sandbox pods, via kubectl exec.
 
-v0 uses the platform's admin Gitea token (the m2a precedent); per-project
-tokens are the M4c/M5 hardening line. The root token travels through the
-kubectl exec env (same as infra/tests/m2a_pr_flow.sh); the RETURNED token
-must never appear in argv or exception text.
+v0 reads the platform's ADMIN Gitea token (owner-approved builder-check
+exception to the "read-only sandbox credentials" goal; per-project read-only
+tokens are the M4c/M5 hardening line). The root token travels through the
+runner stdin — never argv — and the RETURNED token never appears in argv or
+exception text.
 """
 
 from __future__ import annotations
@@ -36,24 +37,26 @@ def read_gitea_token(
     if not items:
         raise VaultBrokerError(f"no OpenBao pod with label {pod_label!r} in {namespace}")
     pod_name = items[0]["metadata"]["name"]
+    # The root token reaches the pod through stdin (a `read` in the remote
+    # shell), never through argv — process listings must not see it.
+    remote_script = (
+        "BAO_TOKEN=$(head -c 128); export BAO_TOKEN; "
+        "BAO_ADDR=http://127.0.0.1:8200 bao kv get -field=token secret/gitea/admin"
+    )
     result = kubectl_runner(
         [
             "kubectl",
             "-n",
             namespace,
             "exec",
+            "-i",
             pod_name,
             "--",
-            "env",
-            "BAO_ADDR=http://127.0.0.1:8200",
-            f"BAO_TOKEN={root_token}",
-            "bao",
-            "kv",
-            "get",
-            "-field=token",
-            "secret/gitea/admin",
+            "sh",
+            "-c",
+            remote_script,
         ],
-        None,
+        root_token,
     )
     if result.returncode != 0:
         raise VaultBrokerError(

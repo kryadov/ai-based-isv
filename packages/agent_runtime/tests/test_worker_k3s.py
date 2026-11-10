@@ -11,7 +11,7 @@ from agent_runtime.executor import Executor
 from agent_runtime.kube_sandbox import KubeSandboxExecutorFactory
 from agent_runtime.opencode_executor import OpencodeExecutor
 from agent_runtime.settings import WorkerSettings
-from agent_runtime.worker import build_executor
+from agent_runtime.worker import build_executor, resolve_gitea_token, startup_executor
 
 Run = Any  # kubectl runner callable shape (argv, stdin) -> CompletedProcess
 
@@ -48,35 +48,12 @@ def test_build_executor_docker_returns_opencode_executor(tmp_path: Path) -> None
     subprocess.run(["git", "-C", str(repo), "commit", "-qm", "init"], check=True, env=env)
     (tmp_path / "ws" / "run-30").mkdir(parents=True)
     settings = _settings(tmp_path)
-    executor = build_executor(settings, repo_dir=repo)
+    executor = build_executor(settings, repo_dir=repo, gitea_token="")
     assert isinstance(executor, OpencodeExecutor)
     assert isinstance(executor, Executor)
 
 
-def test_build_executor_k3s_returns_factory_and_brokers_token(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    calls: list[str] = []
-
-    def fake_broker(*a: Any, **kw: Any) -> str:
-        calls.append("brokered")
-        return "gitea-brokered-TOKEN"
-
-    def fake_reconcile(*a: Any, **kw: Any) -> int:
-        calls.append(f"reconcile:{kw.get('max_age_seconds')}")
-        return 0
-
-    monkeypatch.setattr("agent_runtime.worker.read_gitea_token", fake_broker)
-    monkeypatch.setattr("agent_runtime.worker.reconcile_orphans", fake_reconcile)
-    settings = _settings(tmp_path, sandbox_backend="k3s")
-    executor = build_executor(settings, repo_dir=tmp_path / "repo")
-    assert isinstance(executor, KubeSandboxExecutorFactory)
-    assert calls == ["brokered", "reconcile:600.0"], (
-        "broker first, then orphan reconcile (2x300s TTL)"
-    )
-
-
-def test_build_executor_k3s_prefers_explicit_git_token(
+def test_resolve_gitea_token_prefers_explicit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def must_not_broker(*a: Any, **kw: Any) -> str:
@@ -85,19 +62,94 @@ def test_build_executor_k3s_prefers_explicit_git_token(
 
     monkeypatch.setattr("agent_runtime.worker.read_gitea_token", must_not_broker)
     settings = _settings(tmp_path, sandbox_backend="k3s", git_token="explicit-token")
-    executor = build_executor(settings, repo_dir=tmp_path / "repo")
-    assert isinstance(executor, KubeSandboxExecutorFactory)
+    assert resolve_gitea_token(settings) == "explicit-token"
 
 
-def test_build_executor_k3s_requires_token_source(tmp_path: Path) -> None:
+def test_resolve_gitea_token_brokers_when_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_broker(kube_runner: Any, *, root_token: str, namespace: str, pod_label: str) -> str:
+        captured.update(root_token=root_token, namespace=namespace, pod_label=pod_label)
+        return "gitea-brokered-TOKEN"
+
+    monkeypatch.setattr("agent_runtime.worker.read_gitea_token", fake_broker)
+    token_file = tmp_path / "root-token"
+    token_file.write_text("vault-root-SECRET\n", encoding="utf-8")
     settings = _settings(
         tmp_path,
         sandbox_backend="k3s",
         git_token="",
-        vault_root_token_path=tmp_path / "missing-token-file",
+        vault_root_token_path=token_file,
+        openbao_namespace="platform-x",
+        openbao_pod_label="app.kubernetes.io/name=openbao-x",
+    )
+    assert resolve_gitea_token(settings) == "gitea-brokered-TOKEN"
+    assert captured["root_token"] == "vault-root-SECRET"
+    assert captured["namespace"] == "platform-x", "openbao_namespace must reach the broker"
+    assert captured["pod_label"] == "app.kubernetes.io/name=openbao-x"
+
+
+def test_resolve_gitea_token_accepts_inline_root_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_broker(kube_runner: Any, *, root_token: str, namespace: str, pod_label: str) -> str:
+        captured["root_token"] = root_token
+        return "brokered"
+
+    monkeypatch.setattr("agent_runtime.worker.read_gitea_token", fake_broker)
+    settings = _settings(
+        tmp_path, sandbox_backend="k3s", git_token="", vault_root_token="inline-root"
+    )
+    assert resolve_gitea_token(settings) == "brokered"
+    assert captured["root_token"] == "inline-root"
+
+
+def test_resolve_gitea_token_requires_a_root_source(tmp_path: Path) -> None:
+    settings = _settings(
+        tmp_path,
+        sandbox_backend="k3s",
+        git_token="",
+        vault_root_token="",
+        vault_root_token_path=tmp_path / "missing",
     )
     with pytest.raises(ValueError, match="vault"):
-        build_executor(settings, repo_dir=tmp_path / "repo")
+        resolve_gitea_token(settings)
+
+
+def test_build_executor_k3s_requires_resolved_token(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, sandbox_backend="k3s")
+    with pytest.raises(TypeError):
+        build_executor(settings, repo_dir=tmp_path / "repo")  # type: ignore[call-arg]
+
+
+def test_build_executor_k3s_returns_factory(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, sandbox_backend="k3s")
+    executor = build_executor(settings, repo_dir=tmp_path / "repo", gitea_token="t")
+    assert isinstance(executor, KubeSandboxExecutorFactory)
+
+
+def test_startup_reconciles_orphan_pods(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Worker startup (k3s) sweeps orphaned sandbox objects BEFORE the first claim."""
+    calls: list[str] = []
+
+    def fake_reconcile(*a: Any, **kw: Any) -> int:
+        calls.append(f"reconcile:{kw.get('max_age_seconds')}")
+        return 0
+
+    monkeypatch.setattr("agent_runtime.worker.reconcile_orphans", fake_reconcile)
+    settings = _settings(tmp_path, sandbox_backend="k3s")
+    # The reconcile ride-along: resolving the token is part of startup.
+    monkeypatch.setattr(
+        "agent_runtime.worker.resolve_gitea_token",
+        lambda *a, **kw: "tok",
+    )
+    executor = startup_executor(settings)
+    assert isinstance(executor, KubeSandboxExecutorFactory)
+    assert calls == ["reconcile:600.0"], "2 x lease_ttl_seconds sweep window"
 
 
 async def test_built_k3s_executor_starts_sandbox_per_request(
@@ -159,7 +211,9 @@ async def test_built_k3s_executor_starts_sandbox_per_request(
         sandbox_backend="k3s",
         git_token="explicit-token",
     )
-    executor = build_executor(settings, repo_dir=tmp_path / "repo", kube_runner=fake_kube)
+    executor = build_executor(
+        settings, repo_dir=tmp_path / "repo", gitea_token="explicit-token", kube_runner=fake_kube
+    )
     request = ExecutionRequest(
         run_id=30,
         vertex_id=29,

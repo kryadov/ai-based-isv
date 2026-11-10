@@ -88,10 +88,13 @@ def _pod_list_json(entries: list[dict[str, Any]]) -> str:
     return json.dumps({"items": entries})
 
 
-def _pod_entry(name: str, started: str) -> dict[str, Any]:
+def _pod_entry(name: str, created: str) -> dict[str, Any]:
     return {
-        "metadata": {"name": name, "labels": {"agent-runtime.io/managed": "yes"}},
-        "status": {"startTime": started},
+        "metadata": {
+            "name": name,
+            "labels": {"agent-runtime.io/managed": "yes"},
+            "creationTimestamp": created,
+        }
     }
 
 
@@ -496,3 +499,195 @@ def test_factory_start_sandbox_failure_propagates() -> None:
     )
     with pytest.raises(KubeSandboxError):
         asyncio.run(factory.start(_factory_request()))
+
+
+def test_clone_script_keeps_token_out_of_url_and_argv() -> None:
+    """The agent-readable workspace must never carry the Gitea token."""
+    pod = pod_manifest(
+        image="opencode-git:2.2.0",
+        repo_url="http://127.0.0.1:30080/swarm-lab/target-scratch",
+        base_branch="main",
+        run_id=30,
+        vertex_id=29,
+        secret_name="agent-30-29",
+        config_jsonc="{}\n",
+    )
+    clone_script = " ".join(pod["spec"]["initContainers"][0]["command"])
+    assert "oauth2:" not in clone_script, "token must not travel in the clone URL"
+    assert "$GITEA_TOKEN" in clone_script, "the token is expanded at runtime from env"
+    assert "GIT_CONFIG_KEY_0=http.extraHeader" in clone_script, (
+        "credentials go through git env-based config, like the worker's gitops"
+    )
+    manifest_text = json.dumps(pod)
+    assert "gitea-admin-TOKEN-SECRET" not in manifest_text, (
+        "the real token value must never be baked into the pod manifest"
+    )
+
+
+def test_reconcile_orphans_cleans_service_pod_secret() -> None:
+    kube = FakeKube(
+        [
+            (
+                "get pods",
+                subprocess.CompletedProcess(
+                    [],
+                    0,
+                    stdout=_pod_list_json(
+                        [
+                            {
+                                "metadata": {
+                                    "name": "agent-1-1",
+                                    "labels": {"agent-runtime.io/managed": "yes"},
+                                    "creationTimestamp": "2026-11-09T00:00:00Z",
+                                }
+                            }
+                        ]
+                    ),
+                    stderr="",
+                ),
+            )
+        ]
+    )
+    removed = reconcile_orphans(kube, namespace="agents", max_age_seconds=3600.0)
+    assert removed == 1
+    targets = " ".join(" ".join(argv) for argv, _ in kube.calls_with("delete"))
+    for obj in ("service/agent-1-1", "pod/agent-1-1", "secret/agent-1-1"):
+        assert obj in targets, f"{obj} must be reclaimed with the pod (credentials!)"
+
+
+def test_reconcile_orphans_uses_creation_timestamp_for_pending_pods() -> None:
+    """Pending pods have no status.startTime — they must still be reclaimed."""
+    kube = FakeKube(
+        [
+            (
+                "get pods",
+                subprocess.CompletedProcess(
+                    [],
+                    0,
+                    stdout=_pod_list_json(
+                        [
+                            {
+                                "metadata": {
+                                    "name": "agent-2-2",
+                                    "labels": {"agent-runtime.io/managed": "yes"},
+                                    "creationTimestamp": "2026-11-09T00:00:00Z",
+                                },
+                                "status": {"phase": "Pending"},
+                            }
+                        ]
+                    ),
+                    stderr="",
+                ),
+            )
+        ]
+    )
+    assert reconcile_orphans(kube, namespace="agents", max_age_seconds=3600.0) == 1
+    assert kube.calls_with("delete", "pod/agent-2-2")
+
+
+def test_malformed_pod_status_tears_down() -> None:
+    kube = FakeKube(
+        [
+            ("get pod", subprocess.CompletedProcess([], 0, stdout="NOT-JSON{{", stderr="")),
+        ]
+    )
+    sandbox = KubeSandbox(kube_runner=kube, **_sandbox_args())
+    with pytest.raises(Exception):
+        sandbox.start(timeout_seconds=5.0)
+    targets = " ".join(" ".join(argv) for argv, _ in kube.calls_with("delete"))
+    for obj in ("service/agent-30-29", "pod/agent-30-29", "secret/agent-30-29"):
+        assert obj in targets, f"start failure at any stage must tear down {obj}"
+
+
+def test_teardown_reports_all_delete_failures() -> None:
+    kube = FakeKube(
+        [
+            ("get pod", subprocess.CompletedProcess([], 0, stdout=_ready_pod_json(), stderr="")),
+            (
+                "kubectl -n agents logs",
+                subprocess.CompletedProcess([], 0, stdout="server password tok\n", stderr=""),
+            ),
+            ("delete service", subprocess.CompletedProcess([], 1, stdout="", stderr="e-svc")),
+            ("delete pod", subprocess.CompletedProcess([], 1, stdout="", stderr="e-pod")),
+            ("delete secret", subprocess.CompletedProcess([], 1, stdout="", stderr="e-secret")),
+        ]
+    )
+    sandbox = KubeSandbox(kube_runner=kube, **_sandbox_args())
+    sandbox.start(timeout_seconds=5.0)
+    with pytest.raises(KubeSandboxError) as excinfo:
+        sandbox.stop()
+    message = str(excinfo.value)
+    for detail in ("service", "pod", "secret"):
+        assert detail in message, f"teardown must report the failed {kind_name(detail)} deletion"
+
+
+def kind_name(detail: str) -> str:
+    return detail
+
+
+def test_sandbox_session_stop_tears_down_even_if_inner_stop_raises() -> None:
+    import agent_runtime.kube_sandbox as ks
+
+    kube = FakeKube(
+        [
+            ("get pod", subprocess.CompletedProcess([], 0, stdout=_ready_pod_json(), stderr="")),
+            (
+                "kubectl -n agents logs",
+                subprocess.CompletedProcess([], 0, stdout="server password tok\n", stderr=""),
+            ),
+        ]
+    )
+    factory = ks.KubeSandboxExecutorFactory(
+        gitea_token="t",
+        litellm_api_key="k",
+        litellm_base_url="http://litellm.platform.svc.cluster.local:4000",
+        model="litellm/qwen3",
+        evidence_root=Path("/tmp/ev"),
+        kube_runner=kube,
+        transport=httpx.MockTransport(_opencode_mock),
+    )
+
+    async def drive() -> None:
+        session = await factory.start(_factory_request())
+        assert isinstance(session, ks.SandboxSession)
+        assert session._inner is not None
+
+        async def broken_stop() -> None:
+            raise RuntimeError("inner stop boom")
+
+        session._inner.stop = broken_stop  # type: ignore[method-assign]
+        with pytest.raises(RuntimeError, match="inner stop boom"):
+            await session.stop()
+
+    asyncio.run(drive())
+    assert kube.calls_with("delete", "pod/agent-30-29"), (
+        "sandbox must be stopped despite inner failure"
+    )
+
+
+def test_manifests_honor_custom_namespace() -> None:
+    pod = pod_manifest(
+        image="opencode-git:2.2.0",
+        repo_url="http://127.0.0.1:30080/swarm-lab/target-scratch",
+        base_branch="main",
+        run_id=30,
+        vertex_id=29,
+        secret_name="agent-30-29",
+        config_jsonc="{}\n",
+        namespace="agents-x",
+    )
+    secret = secret_manifest(
+        name="agent-30-29",
+        run_id=30,
+        vertex_id=29,
+        gitea_token="t",
+        litellm_api_key="k",
+        config_jsonc="{}\n",
+        namespace="agents-x",
+    )
+    svc = service_manifest(
+        name="agent-30-29", run_id=30, vertex_id=29, node_port=30100, namespace="agents-x"
+    )
+    assert pod["metadata"]["namespace"] == "agents-x"
+    assert secret["metadata"]["namespace"] == "agents-x"
+    assert svc["metadata"]["namespace"] == "agents-x"
