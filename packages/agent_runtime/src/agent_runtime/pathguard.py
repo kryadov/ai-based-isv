@@ -8,7 +8,7 @@ Fail-closed policy:
 
 * deletions are changed files too — ``--- a/<path>`` headers (their ``+++`` side is
   ``/dev/null``) enter the touched set, so an agent cannot bypass the guard by
-  removing a protected file; renames contribute both sides;
+  removing a protected file; renames and copies contribute both sides;
 * a *non-empty* diff from which no path can be derived raises :class:`DiffUnparseable`
   instead of reading as "no changes" — an unexpected diff shape must never silently
   disable path enforcement. Only a genuinely empty diff means "nothing changed".
@@ -28,7 +28,14 @@ _REMOVED_MARKER = "--- "
 _GIT_HEADER_MARKER = "diff --git "
 _GIT_HEADER_RE = re.compile(r"diff --git a/(\S+) b/(\S+)")
 _GIT_SECTION_RE = re.compile(r"(?m)^(?=diff --git )")
-_METADATA_MARKERS = ("rename from ", "rename to ", "old mode ", "new mode ")
+_METADATA_MARKERS = (
+    "rename from ",
+    "rename to ",
+    "copy from ",
+    "copy to ",
+    "old mode ",
+    "new mode ",
+)
 _DEV_NULL = "/dev/null"
 _EXCERPT_CHARS = 120
 
@@ -57,28 +64,28 @@ def _git_header_paths(line: str) -> tuple[str, str] | None:
 
 
 def diff_files(diff: str) -> list[str]:
-    """Touched paths in diff order, deduplicated, with fail-closed header parsing.
+    """Touched paths in diff order, deduplicated, with per-section fail-closed parsing.
 
     ``+++ b/<path>`` and ``--- a/<path>`` remain the primary source. A recognized
-    rename or mode-only section also contributes both paths from its ``diff --git``
-    header. Headerless sections of any other shape (notably binary patches) make the
-    diff unparseable instead of disappearing from path enforcement.
+    rename, copy, or mode-only section also contributes both paths from its
+    ``diff --git`` header. Every Git section must contribute a path independently,
+    so surplus paths from one section cannot hide an unrecognized binary section.
     """
     if not diff.strip():
         return []
     paths: list[str] = []
     seen: set[str] = set()
-    content_paths: list[str] = []
-    git_header_count = 0
+    head = diff.strip().splitlines()[0][:_EXCERPT_CHARS]
 
     for section in _GIT_SECTION_RE.split(diff):
         lines = section.splitlines()
-        git_paths: tuple[str, str] | None = None
-        section_has_content = False
-        if lines and lines[0].startswith(_GIT_HEADER_MARKER):
-            git_header_count += 1
-            git_paths = _git_header_paths(lines[0])
+        is_git_section = bool(lines and lines[0].startswith(_GIT_HEADER_MARKER))
+        git_paths = _git_header_paths(lines[0]) if is_git_section else None
+        if is_git_section and git_paths is None:
+            raise DiffUnparseable(f"unrecognized git header, first line: {head!r}")
 
+        section_has_content = False
+        section_derives_path = False
         for line in lines:
             if line.startswith(_ADDED_MARKER):
                 path = _header_path(line.removeprefix(_ADDED_MARKER), side_prefix="b/")
@@ -89,23 +96,28 @@ def diff_files(diff: str) -> list[str]:
             else:
                 continue
             if path is not None:
-                content_paths.append(path)
+                section_derives_path = True
                 if path not in seen:
                     seen.add(path)
                     paths.append(path)
 
         has_recognized_metadata = any(line.startswith(_METADATA_MARKERS) for line in lines[1:])
         if git_paths is not None and (section_has_content or has_recognized_metadata):
+            section_derives_path = True
             for path in git_paths:
                 if path not in seen:
                     seen.add(path)
                     paths.append(path)
 
-    if not content_paths or git_header_count > len(paths):
-        head = diff.strip().splitlines()[0][:_EXCERPT_CHARS]
+        if is_git_section and not section_derives_path:
+            raise DiffUnparseable(
+                f"git section contributes no derivable path, first line: {head!r}"
+            )
+
+    if not paths:
         raise DiffUnparseable(
-            "diff contains no usable content path headers or has unrecognized git "
-            f"headers, refusing to read it as 'no changes'; first line: {head!r}"
+            "diff contains no usable path headers, refusing to read it as 'no changes'; "
+            f"first line: {head!r}"
         )
     return paths
 

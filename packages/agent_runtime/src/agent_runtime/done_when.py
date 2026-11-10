@@ -6,8 +6,8 @@ check's paths must be present under the repo working directory. Checks run in
 specification order and the first FAIL stops the evaluation.
 
 In M4a ``cmd`` is the host-side boundary: it runs agent-authored shell code with a
-scrubbed environment and a timeout, never with worker credentials. M4b moves these
-checks into the sandbox pod.
+scrubbed environment (``PATH``/``HOME``/``LANG``/``TMPDIR`` only) and a timeout. The
+host filesystem remains reachable by design; M4b moves these checks into the pod.
 
 Fail-closed policy (spec 2026-11-09-m4-agent-runtime-design.md, §done_when):
 

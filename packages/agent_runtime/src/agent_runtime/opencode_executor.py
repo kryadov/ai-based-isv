@@ -521,6 +521,7 @@ def _password_from_logs(logs: str) -> str:
 
 
 def _dockerfile(base_image: str) -> str:
+    # M4b: root here may create root-owned files in the host bind mount.
     return (
         f"FROM {base_image}\n"
         "USER root\n"

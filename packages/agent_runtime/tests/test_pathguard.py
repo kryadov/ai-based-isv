@@ -44,11 +44,27 @@ _RENAME_ONLY = (
     "rename from old_name.py\n"
     "rename to evil.py\n"
 )
+_COPY_ONLY = (
+    "diff --git a/allowed.txt b/stolen_secret.py\n"
+    "similarity index 100%\n"
+    "copy from allowed.txt\n"
+    "copy to stolen_secret.py\n"
+)
 _MODE_ONLY = "diff --git a/scripts/run.sh b/scripts/run.sh\nold mode 100644\nnew mode 100755\n"
 _BINARY = (
     "diff --git a/assets/logo.png b/assets/logo.png\n"
     "index 1234567..89abcde 100644\n"
     "Binary files a/assets/logo.png and b/assets/logo.png differ\n"
+)
+_GIT_BINARY_PATCH = (
+    "diff --git a/assets/logo.png b/assets/logo.png\n"
+    "index 1234567..89abcde 100644\n"
+    "GIT binary patch\n"
+    "literal 0\n"
+    "HcmV?d00001\n"
+    "\n"
+    "literal 0\n"
+    "HcmV?d00001\n"
 )
 
 
@@ -87,9 +103,11 @@ def test_rename_yields_both_paths() -> None:
     assert diff_files(diff) == ["old_name.py", "new_name.py"]
 
 
-def test_rename_only_diff_fails_closed() -> None:
-    with pytest.raises(DiffUnparseable):
-        diff_files(_RENAME_ONLY)
+def test_rename_only_diff_guards_both_paths() -> None:
+    changed = diff_files(_RENAME_ONLY)
+
+    assert changed == ["old_name.py", "evil.py"]
+    assert filter_violations(changed, ["old_name.py"]) == ["evil.py"]
 
 
 def test_rename_mixed_with_content_guards_both_rename_paths() -> None:
@@ -104,6 +122,32 @@ def test_mode_only_mixed_with_content_guards_mode_path() -> None:
 
     assert changed == ["src/app.py", "scripts/run.sh"]
     assert filter_violations(changed, ["src/**"]) == ["scripts/run.sh"]
+
+
+def test_copy_mixed_with_content_and_rename_guards_both_copy_paths() -> None:
+    changed = diff_files(_MODIFY + _RENAME_ONLY + _COPY_ONLY)
+
+    assert changed == [
+        "src/app.py",
+        "old_name.py",
+        "evil.py",
+        "allowed.txt",
+        "stolen_secret.py",
+    ]
+    allowed = ["src/**", "old_name.py", "evil.py", "allowed.txt"]
+    assert filter_violations(changed, allowed) == ["stolen_secret.py"]
+
+
+def test_copy_only_diff_guards_both_copy_paths() -> None:
+    changed = diff_files(_COPY_ONLY)
+
+    assert changed == ["allowed.txt", "stolen_secret.py"]
+    assert filter_violations(changed, ["allowed.txt"]) == ["stolen_secret.py"]
+
+
+def test_git_binary_patch_cannot_hide_behind_rename_path_surplus() -> None:
+    with pytest.raises(DiffUnparseable):
+        diff_files(_MODIFY + _RENAME_ONLY + _GIT_BINARY_PATCH)
 
 
 def test_binary_mixed_with_content_fails_closed() -> None:
