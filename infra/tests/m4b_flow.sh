@@ -488,23 +488,25 @@ echo "M4b flow: sandbox teardown clean (pod/service/secret removed)"
 # 5f) NetworkPolicy: the agents namespace reaches Gitea and LiteLLM, but NOT
 #     Postgres (cluster service or host NodePort). Positive control proves the
 #     probe pod itself is fine before asserting the denials.
-kubectl -n agents run m4b-netpol-probe --image=alpine:3.20 --restart=Never --command -- \
+PROBE_NAME="m4b-netpol-probe-$RUN_ID"
+kubectl -n agents delete pod "$PROBE_NAME" --force --grace-period=0 --ignore-not-found >/dev/null 2>&1 || true
+kubectl -n agents run "$PROBE_NAME" --image=alpine:3.20 --restart=Never --command -- \
   sh -c 'i=0; until wget -qO- -T 5 http://gitea-http.platform.svc.cluster.local:3000/api/v1/version >/dev/null; do i=$((i+1)); [ $i -ge 5 ] && exit 11; sleep 3; done; \
     i=0; until wget -qO- -T 8 http://litellm.platform.svc.cluster.local:4000/health/liveliness >/dev/null; do i=$((i+1)); [ $i -ge 5 ] && exit 12; sleep 3; done; \
     timeout 5 nc -z postgres-platform-rw.platform.svc.cluster.local 5432 >/dev/null 2>&1 && exit 13; \
     timeout 5 nc -z 192.168.5.2 15432 >/dev/null 2>&1 && exit 14; \
     echo NETPOL_OK'
-kubectl -n agents wait --for=jsonpath='{.status.phase}'=Succeeded pod/m4b-netpol-probe --timeout=120s >/dev/null 2>&1 \
+kubectl -n agents wait --for=jsonpath='{.status.phase}'=Succeeded pod "$PROBE_NAME" --timeout=120s >/dev/null 2>&1 \
   || true
-PROBE_OUT="$(kubectl -n agents logs m4b-netpol-probe 2>/dev/null | tail -1)"
+PROBE_OUT="$(kubectl -n agents logs "$PROBE_NAME" 2>/dev/null | tail -1)"
 for _ in 1 2 3; do
   [ "$PROBE_OUT" = "NETPOL_OK" ] && break
   sleep 2
-  PROBE_OUT="$(kubectl -n agents logs m4b-netpol-probe 2>/dev/null | tail -1)"
+  PROBE_OUT="$(kubectl -n agents logs "$PROBE_NAME" 2>/dev/null | tail -1)"
 done
-kubectl -n agents delete pod m4b-netpol-probe --force --grace-period=0 >/dev/null 2>&1 || true
+kubectl -n agents delete pod "$PROBE_NAME" --force --grace-period=0 >/dev/null 2>&1 || true
 [ "$PROBE_OUT" = "NETPOL_OK" ] \
-  || fail "NetworkPolicy probe failed (out: ${PROBE_OUT:-none}; phase=$(kubectl -n agents get pod m4b-netpol-probe -o jsonpath='{.status.phase}' 2>/dev/null); 11=gitea 12=litellm 13=pg-cluster 14=pg-host)"
+  || fail "NetworkPolicy probe failed (out: ${PROBE_OUT:-none}; phase=$(kubectl -n agents get pod "$PROBE_NAME" -o jsonpath='{.status.phase}' 2>/dev/null); 11=gitea 12=litellm 13=pg-cluster 14=pg-host)"
 echo "M4b flow: NetworkPolicy verified — gitea+litellm reachable, Postgres denied"
 
 echo "M4b flow: PASS — vertex $VERTEX_ID pushed to $BRANCH in $ORG/$REPO"
