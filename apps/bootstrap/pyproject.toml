@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 dependencies = ["typer>=0.15", "pyyaml>=6"]
 
 [dependency-groups]
-dev = ["types-pyyaml>=6"]
+dev = ["types-pyyaml>=6.0.12.20260906"]
 
 [build-system]
 requires = ["hatchling"]
