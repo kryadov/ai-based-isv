@@ -592,7 +592,7 @@ def test_malformed_pod_status_tears_down() -> None:
         ]
     )
     sandbox = KubeSandbox(kube_runner=kube, **_sandbox_args())
-    with pytest.raises(Exception):
+    with pytest.raises((KubeSandboxError, json.JSONDecodeError)):
         sandbox.start(timeout_seconds=5.0)
     targets = " ".join(" ".join(argv) for argv, _ in kube.calls_with("delete"))
     for obj in ("service/agent-30-29", "pod/agent-30-29", "secret/agent-30-29"):
