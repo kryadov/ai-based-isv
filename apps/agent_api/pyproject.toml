@@ -3,7 +3,7 @@ name = "agent_api"
 version = "0.1.0"
 description = "Swarm control plane API: task queue, leases, HITL inbox, audit"
 requires-python = ">=3.12"
-dependencies = ["fastapi>=0.115", "uvicorn>=0.34", "sqlalchemy[asyncio]>=2.0", "asyncpg>=0.30", "pydantic-settings>=2.6"]
+dependencies = ["fastapi>=0.115", "uvicorn>=0.34", "sqlalchemy[asyncio]>=2.0", "asyncpg>=0.30", "pydantic-settings>=2.16.1"]
 
 [dependency-groups]
 dev = ["httpx2>=2.16"]
