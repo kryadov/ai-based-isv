@@ -494,13 +494,13 @@ kubectl -n agents run m4b-netpol-probe --image=alpine:3.20 --restart=Never --com
     nc -zv -w 3 postgres-platform-rw.platform.svc.cluster.local 5432 >/dev/null 2>&1 && exit 13; \
     nc -zv -w 3 192.168.5.2 15432 >/dev/null 2>&1 && exit 14; \
     echo NETPOL_OK'
-kubectl -n agents wait --for=condition=Ready pod/m4b-netpol-probe --timeout=180s >/dev/null 2>&1 \
+kubectl -n agents wait --for=jsonpath='{.status.phase}'=Succeeded pod/m4b-netpol-probe --timeout=120s >/dev/null 2>&1 \
   || true
-PROBE_OUT=""
-for _ in 1 2 3 4 5 6; do
-  PROBE_OUT="$(kubectl -n agents logs m4b-netpol-probe 2>/dev/null | tail -1)"
+PROBE_OUT="$(kubectl -n agents logs m4b-netpol-probe 2>/dev/null | tail -1)"
+for _ in 1 2 3; do
   [ "$PROBE_OUT" = "NETPOL_OK" ] && break
   sleep 2
+  PROBE_OUT="$(kubectl -n agents logs m4b-netpol-probe 2>/dev/null | tail -1)"
 done
 kubectl -n agents delete pod m4b-netpol-probe --force --grace-period=0 >/dev/null 2>&1 || true
 [ "$PROBE_OUT" = "NETPOL_OK" ] \
