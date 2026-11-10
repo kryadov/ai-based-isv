@@ -68,6 +68,7 @@ SECTIONS = (
     "demo",
     "openproject",
     "litellm",
+    "agents",
 )
 
 
@@ -124,7 +125,9 @@ def init(
 
 @app.command()
 def apply(
-    section: str = typer.Option(None, help="single section (vault|cnpg|gitea|...); default: all"),
+    section: str = typer.Option(
+        None, help="single section (vault|cnpg|gitea|...|agents); default: all"
+    ),
 ) -> None:
     """Idempotently apply L0 sections (wrapper over infra/scripts/bootstrap.sh)."""
     script = REPO_ROOT / "infra" / "scripts" / "bootstrap.sh"
