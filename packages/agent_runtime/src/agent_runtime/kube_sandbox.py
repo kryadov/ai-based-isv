@@ -171,6 +171,7 @@ def pod_manifest(
                         },
                     ],
                     "ports": [{"containerPort": 4096}],
+                    "volumeMounts": [{"name": "workspace", "mountPath": "/workspace"}],
                 }
             ],
         },

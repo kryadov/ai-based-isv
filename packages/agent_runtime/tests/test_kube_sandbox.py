@@ -129,6 +129,10 @@ def test_pod_manifest_shape() -> None:
     env_main = {e["name"]: e for e in main["env"]}
     assert env_main["OPENCODE_DB"]["value"] == "/workspace/run-30/.opencode-db-29"
     assert env_main["LITELLM_API_KEY"]["valueFrom"]["secretKeyRef"]["key"] == "litellm-api-key"
+    main_mounts = main["volumeMounts"]
+    assert {"name": "workspace", "mountPath": "/workspace"} in main_mounts, (
+        "the serve container must see the cloned repo on the PVC"
+    )
     volume_names = [v["name"] for v in pod["spec"]["volumes"]]
     assert set(volume_names) == {"workspace", "config"}
 
