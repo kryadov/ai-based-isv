@@ -7,11 +7,15 @@ import json
 import os
 import re
 import subprocess
+import threading
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
+import agent_runtime.worker as worker_module
 import httpx
+import pytest
+from agent_runtime.done_when import DoneWhenSpec, DoneWhenVerdict
 from agent_runtime.executor import (
     ExecutionEvent,
     ExecutionRequest,
@@ -181,6 +185,7 @@ class FakeControlPlane:
         self.audit_calls: list[dict[str, Any]] = []
         self.complete_called = asyncio.Event()
         self.fail_called = asyncio.Event()
+        self.heartbeat_called = asyncio.Event()
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -204,6 +209,7 @@ class FakeControlPlane:
         heartbeat_match = re.match(r"/vertices/(\d+)/heartbeat", path)
         if heartbeat_match:
             self.heartbeat_count += 1
+            self.heartbeat_called.set()
             if self.heartbeat_409_after and self.heartbeat_count >= self.heartbeat_409_after:
                 return httpx.Response(409, json={"detail": "vertex not leased by agent"})
             return httpx.Response(200, json={"ok": True})
@@ -322,6 +328,69 @@ async def test_happy_path_claims_executes_completes(tmp_path: Path) -> None:
     ).stdout.strip()
     assert branch_sha != base_sha
     assert (repo_dir / "greeting.py").exists()
+
+
+async def test_done_when_validation_does_not_block_heartbeats(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bare = _init_bare_repo(tmp_path)
+    diff = (
+        "diff --git a/README.md b/README.md\n"
+        "--- a/README.md\n"
+        "+++ b/README.md\n"
+        "@@ -1 +1,2 @@\n"
+        " # base\n"
+        "+change\n"
+    )
+    executor = FakeExecutor(diff=diff, diff_files=["README.md"])
+    vertex = {
+        "id": 9,
+        "name": "slow-validation",
+        "done_when": json.dumps({"checks": [{"type": "files_exist", "paths": ["README.md"]}]}),
+        "paths_allow": ["*.md"],
+    }
+    plane = FakeControlPlane(vertices=[vertex])
+    settings = _settings(tmp_path, str(bare))
+    settings.lease_ttl_seconds = 1
+    stop = asyncio.Event()
+    validation_started = threading.Event()
+    release_validation = threading.Event()
+    heartbeat_during_validation = asyncio.Event()
+
+    def blocking_validate(spec: DoneWhenSpec, *, cwd: Path) -> DoneWhenVerdict:
+        validation_started.set()
+        assert release_validation.wait(timeout=5.0)
+        return DoneWhenVerdict(passed=True, results=[])
+
+    monkeypatch.setattr(worker_module, "validate_done_when", blocking_validate)
+    release_timer = threading.Timer(2.0, release_validation.set)
+    release_timer.start()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        response = plane.handler(request)
+        if (
+            request.url.path.endswith("/heartbeat")
+            and validation_started.is_set()
+            and not release_validation.is_set()
+        ):
+            heartbeat_during_validation.set()
+        return response
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
+        task = asyncio.create_task(worker_loop(settings, executor, http=http, stop=stop))
+        try:
+            assert await asyncio.to_thread(validation_started.wait, 1.0)
+            await asyncio.wait_for(heartbeat_during_validation.wait(), timeout=1.0)
+            release_validation.set()
+            await asyncio.wait_for(plane.complete_called.wait(), timeout=2.0)
+        finally:
+            release_validation.set()
+            release_timer.cancel()
+            stop.set()
+            await asyncio.wait_for(task, timeout=2.0)
+
+    assert plane.heartbeat_count >= 1
 
 
 async def test_done_when_unparseable_fails_vertex(tmp_path: Path) -> None:
@@ -444,10 +513,7 @@ async def test_heartbeat_conflict_aborts_without_complete(tmp_path: Path) -> Non
         task = asyncio.create_task(worker_loop(settings, executor, http=http, stop=stop))
         # wait for the heartbeat conflict and session teardown
         deadline = asyncio.get_event_loop().time() + 2.0
-        while (
-            plane.heartbeat_count < 1
-            or not executor.sessions[-1].stopped
-        ):
+        while plane.heartbeat_count < 1 or not executor.sessions[-1].stopped:
             await asyncio.sleep(0.01)
             if asyncio.get_event_loop().time() > deadline:
                 raise TimeoutError("heartbeat conflict did not happen")

@@ -158,9 +158,7 @@ def _build_result(
 def _merge_manifest(manifest_path: Path, verdict: dict[str, Any]) -> None:
     if not manifest_path.exists():
         return
-    manifest: dict[str, Any] = json.loads(
-        manifest_path.read_text(encoding="utf-8")
-    )
+    manifest: dict[str, Any] = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["verdict"] = verdict
     write_manifest(manifest_path, manifest)
 
@@ -236,9 +234,7 @@ async def _process_vertex(
 
         # The sandbox works on a disposable copy; the pristine clone is kept clean
         # for validation and push.
-        sandbox_dir = await asyncio.to_thread(
-            _reset_sandbox, repo_dir, _sandbox_dir(settings)
-        )
+        sandbox_dir = await asyncio.to_thread(_reset_sandbox, repo_dir, _sandbox_dir(settings))
 
         request = ExecutionRequest(
             run_id=settings.run_id,
@@ -324,9 +320,7 @@ async def _process_vertex(
             )
         except Exception as exc:
             reason = (
-                "empty_diff"
-                if "empty diff" in str(exc).lower()
-                else f"apply_diff_failed: {exc}"
+                "empty_diff" if "empty diff" in str(exc).lower() else f"apply_diff_failed: {exc}"
             )
             await client.fail(vertex_id, reason=reason)
             await client.audit(
@@ -350,10 +344,8 @@ async def _process_vertex(
             )
             return
 
-        verdict = validate_done_when(spec, cwd=repo_dir)
-        session.session_log.append(
-            "done_when_check", {"verdict": verdict.model_dump()}
-        )
+        verdict = await asyncio.to_thread(validate_done_when, spec, cwd=repo_dir)
+        session.session_log.append("done_when_check", {"verdict": verdict.model_dump()})
         if not verdict.passed:
             await client.fail(vertex_id, reason=verdict.reason or "done_when_failed")
             await client.audit(
@@ -441,9 +433,7 @@ async def worker_loop(
             attempts = int(vertex.get("attempts", 0))
             if attempts >= 3 or vertex_id in blacklisted:
                 if vertex_id not in blacklisted:
-                    await client.fail(
-                        vertex_id, reason="max_attempts_exceeded"
-                    )
+                    await client.fail(vertex_id, reason="max_attempts_exceeded")
                     await client.audit(
                         action="fail",
                         target=f"vertex:{vertex_id}",
