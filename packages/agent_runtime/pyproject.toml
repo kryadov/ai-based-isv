@@ -3,7 +3,7 @@ name = "agent_runtime"
 version = "0.1.0"
 description = "Agent harness: Executor interface, OpenCode adapter, sandbox runtime, session logs"
 requires-python = ">=3.12"
-dependencies = ["httpx>=0.28", "pydantic>=2.9", "pydantic-settings>=2.6"]
+dependencies = ["httpx>=0.28", "pydantic>=2.14.1", "pydantic-settings>=2.6"]
 
 [dependency-groups]
 dev = ["httpx2>=2.16"]
