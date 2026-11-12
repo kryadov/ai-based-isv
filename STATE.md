@@ -3,18 +3,24 @@
 > Read this file FIRST. Then `ARCH.md` (how it works, diagrams), `AGENTS.md` (rules), `TODO.md` (backlog).
 > This file is updated at the end of EVERY increment. If your findings contradict it — verify, then update it.
 
-**Stand location (since 2026-11-12): Windows workstation, WSL2.** The macOS
-stand is gone; the stand was rebuilt from scratch with `org-bootstrap apply`
-on Windows (WSL2 Ubuntu + Rancher Desktop moby, k3d 5.9.0/k3s v1.35.5,
-Ollama native on Windows/RTX 4070 with `OLLAMA_CONTEXT_LENGTH=16384`). All
-seven acceptance flows PASS there (m2a, m2b, m2c, m2d, m3, m4a, m4b). Setup and
-the two silent host traps (inotify limit, Ollama 4k default context) — INSTALL.md
-"Windows (WSL2)". Session context of the macOS era —
-`docs/superpowers/HANDOFF-2026-11-10.md`. **M4c is planned and NOT started**
-(`docs/superpowers/plans/2026-11-11-m4c-mcp-servers.md` — execute INLINE,
-release v0.4.0 closes M4).
+**⚠️ WORKSTATION HANDOFF (2026-11-12, evening):** work moves to ANOTHER Windows
+workstation (no GPU, 32 GB) and the LLM moves to an external model via Ollama.
+Read `docs/superpowers/HANDOFF-2026-11-12.md` BEFORE anything else (session
+context, every ruling from the gitignored ledger, final-review findings, next
+steps); first message = `docs/superpowers/CONTINUE-PROMPT.md`.
+**M4c is implemented on branch `feat/m4c-mcp-servers` (NOT merged):** Tasks 1–6
+done, `m4c_flow.sh` PASS live (run 9); final review: I1 fixed, **I2+I3 open**
+(read-only task-reader for sandboxes, netpol `from:`), then regressions → PR →
+release v0.4.0 (owner approval). The live stand does not transfer — rebuild it
+(INSTALL.md "Windows (WSL2)": `.wslconfig` memory + inotify, then
+`org-bootstrap apply`).
 
-Last updated: 2026-11-12 (stand moved to Windows/WSL2, all regressions PASS; fresh-machine bugs fixed; next M4c)
+Previous stand (2026-11-12, this GPU workstation): Windows/WSL2 + Rancher
+Desktop, k3d 5.9.0/k3s v1.35.5, Ollama on the RTX 4070 (`OLLAMA_CONTEXT_LENGTH=16384`);
+main's seven acceptance flows PASS there; macOS-era context:
+`docs/superpowers/HANDOFF-2026-11-10.md`.
+
+Last updated: 2026-11-12 evening (M4c implemented on feat/m4c-mcp-servers; review I2+I3 open; handoff to a no-GPU workstation + external LLM)
 
 ## What this project is
 
@@ -71,7 +77,7 @@ All six PASS as of this snapshot, plus `m4b_flow.sh` PASS (k3s sandbox vertex, ~
 - ✅ **M3 — control plane (DONE)**: `isv_core` domain + `agent_api` (vertex queue with lease, identities, budgets, HITL inbox, audit journal, merge queue) — merged to main, **m3_flow PASS on live Postgres**, CI green, release **v0.3.0**. Plan: `docs/superpowers/plans/2026-11-09-m3-control-plane.md`.
 - ✅ **M4a — Executor/OpenCode locally (DONE 2026-11-10)**: `agent_runtime` — Executor contract, OpenCode adapter (docker, pin 2.2.0), session log, done_when/paths_allow code validation, run manifest, run-scoped worker; **m4a_flow PASS ×2 live**, regressions m2a–d+m3 PASS, gates green. Plan: `docs/superpowers/plans/2026-11-09-m4a-executor-opencode.md`; design: `docs/superpowers/specs/2026-11-09-m4-agent-runtime-design.md`.
 - ✅ **M4b — sandbox in k3s (DONE 2026-11-10)**: pod/service/secret lifecycle over kubectl seam, NetworkPolicy default-deny + allow (verified live), Vault-brokered read-only token, PVC workspace, per-attempt full clone, `reconcile_orphans`; **m4b_flow PASS live** (vertex → branch → verdict → teardown → netpol negative). Plan: `docs/superpowers/plans/2026-11-10-m4b-k3s-sandbox.md`; spike notes: `docs/superpowers/research/2026-11-10-m4b-*.md`.
-- ⏭️ **Next: M4c** (MCP-серверы task-source/git/llm — FastMCP, streamable HTTP; полный E2E: Gitea issue → run → агент в поде → PR с evidence; петля статусов трекера In Progress → Done; затем release v0.4.0 = закрытие всего M4). Then M5 (gates + review), M6 (canary), M7 (memory), M8 (swarm mode), M9 (polyglot dogfood), M10 (UI panel + Automations).
+- 🔄 **M4c — in progress on `feat/m4c-mcp-servers`** (implemented, m4c_flow PASS, review fixes I2+I3 open; MCP-серверы task-source/git/llm — FastMCP, streamable HTTP; полный E2E: Gitea issue → run → агент в поде → PR с evidence; петля статусов трекера In Progress → Done; затем release v0.4.0 = закрытие всего M4). Then M5 (gates + review), M6 (canary), M7 (memory), M8 (swarm mode), M9 (polyglot dogfood), M10 (UI panel + Automations).
 
 ## Releases / conventions
 
