@@ -185,6 +185,8 @@ section_monitoring() {
 }
 
 section_loki() {
+  helm repo add grafana https://grafana.github.io/helm-charts >/dev/null 2>&1 || true
+  helm repo update grafana >/dev/null
   helm upgrade --install loki grafana/loki \
     --version 7.5.0 \
     --namespace "$NS" \
