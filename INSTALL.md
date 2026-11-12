@@ -15,6 +15,7 @@ Setup of the platform and its infrastructure (L0). Everything runs locally on a 
 | kubectl | 1.37+ | `brew install kubectl` |
 | uv | any recent | `brew install uv` |
 | gh (optional) | 2.x | `brew install gh` |
+| psql (postgresql-client) | 14+ | `brew install libpq` / `apt install postgresql-client` (acceptance flows m3/m4a/m4b) |
 
 Environment check:
 
@@ -24,6 +25,8 @@ k3d version && helm version --short && kubectl version --client | head -1
 ```
 
 Resources: ~12 GB RAM for the full L0 stand, ~20 GB disk. Ports `30080`, `30022`, `30081`, `30082` must be free.
+
+**Windows (WSL2).** The bootstrapper and the acceptance flows are bash: run them inside a WSL2 distro (Ubuntu) against the Windows checkout (`/mnt/c/...`). Verified with Rancher Desktop (moby engine, WSL integration enabled for the distro); k3d, helm, gh, uv, psql installed inside the distro; Ollama runs natively on Windows (GPU) with `OLLAMA_HOST=0.0.0.0:11434` and is reached from the cluster as `host.docker.internal` (a one-line `ollama` shim forwarding to `ollama.exe` satisfies `org-bootstrap check`). Inside WSL use a separate uv environment (`UV_PROJECT_ENVIRONMENT=.venv-linux`) so the Windows `.venv` stays intact, and a stand-local `KUBECONFIG` (Rancher symlinks `~/.kube/config` to the Windows file). Line endings are forced to LF by `.gitattributes`.
 
 ## 2. Platform dev setup (the monorepo itself)
 

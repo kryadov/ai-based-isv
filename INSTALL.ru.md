@@ -15,6 +15,7 @@
 | kubectl | 1.37+ | `brew install kubectl` |
 | uv | любой свежий | `brew install uv` |
 | gh (опционально) | 2.x | `brew install gh` |
+| psql (postgresql-client) | 14+ | `brew install libpq` / `apt install postgresql-client` (acceptance-флоу m3/m4a/m4b) |
 
 Проверка окружения:
 
@@ -24,6 +25,8 @@ k3d version && helm version --short && kubectl version --client | head -1
 ```
 
 Ресурсы: ~12 GB RAM под весь L0-стенд, ~20 GB диска. Порты `30080`, `30022`, `30081`, `30082` должны быть свободны.
+
+**Windows (WSL2).** Бутстрапер и acceptance-флоу — bash: запускайте их внутри WSL2-дистрибутива (Ubuntu) по Windows-чекауту (`/mnt/c/...`). Проверено с Rancher Desktop (движок moby, WSL-интеграция включена для дистрибутива); k3d, helm, gh, uv, psql — внутри дистрибутива; Ollama — нативно на Windows (GPU) с `OLLAMA_HOST=0.0.0.0:11434`, из кластера доступна как `host.docker.internal` (однострочный шим `ollama` → `ollama.exe` закрывает `org-bootstrap check`). В WSL используйте отдельное uv-окружение (`UV_PROJECT_ENVIRONMENT=.venv-linux`), чтобы не затирать Windows-`.venv`, и локальный для стенда `KUBECONFIG` (Rancher симлинкает `~/.kube/config` на Windows-файл). Окончания строк принудительно LF через `.gitattributes`.
 
 ## 2. Platform dev setup (сам монорепо)
 

@@ -80,7 +80,7 @@ def version() -> None:
 
 @app.command()
 def check() -> None:
-    """Check prerequisites (docker, k3d, helm, kubectl, uv, gh, ollama)."""
+    """Check prerequisites (docker, k3d, helm, kubectl, uv, gh, ollama, psql)."""
     results = check_all()
     ok = True
     for r in results:

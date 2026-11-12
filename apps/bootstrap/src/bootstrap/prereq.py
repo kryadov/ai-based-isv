@@ -11,7 +11,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Final
 
-CHECKS: Final[tuple[str, ...]] = ("docker", "k3d", "helm", "kubectl", "uv", "gh", "ollama")
+CHECKS: Final[tuple[str, ...]] = ("docker", "k3d", "helm", "kubectl", "uv", "gh", "ollama", "psql")
 
 
 @dataclass(frozen=True)

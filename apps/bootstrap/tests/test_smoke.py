@@ -18,7 +18,7 @@ def test_version() -> None:
 def test_check_reports_known_tools() -> None:
     result = runner.invoke(app, ["check"])
     output = result.output
-    for tool in ("docker", "k3d", "helm", "kubectl", "uv", "gh", "ollama"):
+    for tool in ("docker", "k3d", "helm", "kubectl", "uv", "gh", "ollama", "psql"):
         assert tool in output
 
 
