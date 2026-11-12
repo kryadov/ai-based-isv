@@ -309,6 +309,7 @@ section_agents() {
 case "${1:-all}" in
   vault)  section_vault ;;
   cnpg)   section_cnpg ;;
+  cluster) bash "$ROOT/scripts/k3d-up.sh" ;;
   gitea)  section_gitea ;;
   runner) section_runner ;;
   argocd) section_argocd ;;
@@ -318,6 +319,7 @@ case "${1:-all}" in
   openproject) section_openproject ;;
   litellm) section_litellm ;;
   agents) section_agents ;;
-  all)    section_vault; section_cnpg; section_gitea; section_runner; section_argocd; section_monitoring; section_loki; section_demo; section_openproject; section_litellm; section_agents ;;
-  *) echo "usage: $0 [vault|cnpg|gitea|runner|argocd|monitoring|loki|demo|openproject|litellm|agents|all]"; exit 2 ;;
+  # `all` brings the k3d cluster up first so `org-bootstrap apply` works on a fresh machine.
+  all)    bash "$ROOT/scripts/k3d-up.sh"; section_vault; section_cnpg; section_gitea; section_runner; section_argocd; section_monitoring; section_loki; section_demo; section_openproject; section_litellm; section_agents ;;
+  *) echo "usage: $0 [cluster|vault|cnpg|gitea|runner|argocd|monitoring|loki|demo|openproject|litellm|agents|all]"; exit 2 ;;
 esac
