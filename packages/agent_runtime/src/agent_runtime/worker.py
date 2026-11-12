@@ -110,6 +110,19 @@ def _git_token(raw: str) -> str | None:
     return raw if raw else None
 
 
+def prepare_settings(settings: WorkerSettings, kube_runner: Any | None = None) -> WorkerSettings:
+    """Return settings whose ``git_token`` is the resolved credential.
+
+    On the k3s backend the token may come from OpenBao only; every host-side
+    git call in the loop (fetch, apply, push) reads ``settings.git_token``, so
+    the brokered value must land there once, at startup. Docker is untouched.
+    """
+    if settings.sandbox_backend != "k3s":
+        return settings
+    token = resolve_gitea_token(settings, kube_runner)
+    return settings.model_copy(update={"git_token": token})
+
+
 def resolve_gitea_token(settings: WorkerSettings, kube_runner: Any | None = None) -> str:
     """Resolve the Gitea credential: explicit env token first, OpenBao second.
 
@@ -555,25 +568,15 @@ def main() -> None:
     if settings.litellm_api_key:
         os.environ["LITELLM_API_KEY"] = settings.litellm_api_key
 
-    run_ws = _run_workspace(settings)
-    if settings.sandbox_backend == "k3s":
-        # The brokered token must exist BEFORE the first host-side git call.
-        gitea_token = resolve_gitea_token(settings)
-        repo_dir = ensure_repo(
-            run_ws,
-            settings.repo_url,
-            settings.base_branch,
-            token=_git_token(gitea_token),
-        )
-        executor = startup_executor(settings, repo_dir=repo_dir)
-    else:
-        repo_dir = ensure_repo(
-            run_ws,
-            settings.repo_url,
-            settings.base_branch,
-            token=_git_token(settings.git_token),
-        )
-        executor = startup_executor(settings, repo_dir=repo_dir)
+    # The brokered token must exist BEFORE the first host-side git call.
+    settings = prepare_settings(settings)
+    repo_dir = ensure_repo(
+        _run_workspace(settings),
+        settings.repo_url,
+        settings.base_branch,
+        token=_git_token(settings.git_token),
+    )
+    executor = startup_executor(settings, repo_dir=repo_dir)
 
     with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(worker_loop(settings, executor))

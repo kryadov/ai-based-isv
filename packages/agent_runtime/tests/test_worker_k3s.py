@@ -11,7 +11,12 @@ from agent_runtime.executor import Executor
 from agent_runtime.kube_sandbox import KubeSandboxExecutorFactory
 from agent_runtime.opencode_executor import OpencodeExecutor
 from agent_runtime.settings import WorkerSettings
-from agent_runtime.worker import build_executor, resolve_gitea_token, startup_executor
+from agent_runtime.worker import (
+    build_executor,
+    prepare_settings,
+    resolve_gitea_token,
+    startup_executor,
+)
 
 Run = Any  # kubectl runner callable shape (argv, stdin) -> CompletedProcess
 
@@ -89,6 +94,35 @@ def test_resolve_gitea_token_brokers_when_unset(
     assert captured["root_token"] == "vault-root-SECRET"
     assert captured["namespace"] == "platform-x", "openbao_namespace must reach the broker"
     assert captured["pod_label"] == "app.kubernetes.io/name=openbao-x"
+
+
+def test_prepare_settings_carries_brokered_token_into_the_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression: the Vault-only path cloned with the brokered token, but the
+    # loop's fetch/apply/push read settings.git_token (empty) -> "could not
+    # read Username" on a host without a git credential helper.
+    monkeypatch.setattr(
+        "agent_runtime.worker.read_gitea_token",
+        lambda *a, **k: "gitea-brokered-TOKEN",
+    )
+    settings = _settings(
+        tmp_path, sandbox_backend="k3s", git_token="", vault_root_token="inline-root"
+    )
+    prepared = prepare_settings(settings)
+    assert prepared.git_token == "gitea-brokered-TOKEN"
+    assert settings.git_token == "", "the input settings must not be mutated"
+
+
+def test_prepare_settings_docker_is_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_broker(*a: Any, **k: Any) -> str:
+        pytest.fail("the docker backend must not broker a token")
+
+    monkeypatch.setattr("agent_runtime.worker.read_gitea_token", no_broker)
+    settings = _settings(tmp_path, sandbox_backend="docker", git_token="")
+    assert prepare_settings(settings).git_token == ""
 
 
 def test_resolve_gitea_token_accepts_inline_root_token(
