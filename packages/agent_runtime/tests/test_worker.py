@@ -665,3 +665,139 @@ async def test_build_vertex_prompt_uses_name_scope_and_done_when() -> None:
     assert "Allowed paths: src/**, tests/**" in prompt
     assert '"checks"' in prompt
     assert "Do not push or commit" in prompt
+
+
+# --- Tracker status loop (M4c Task 5) ------------------------------------------
+
+_GREETING_DIFF = (
+    "diff --git a/greeting.py b/greeting.py\n"
+    "new file mode 100644\n"
+    "index 0000000..d8649da\n"
+    "--- /dev/null\n"
+    "+++ b/greeting.py\n"
+    "@@ -0,0 +1 @@\n"
+    "+print('hello')\n"
+)
+
+
+class FakeTracker:
+    """task-source MCP endpoint: records tools/call requests, can be down."""
+
+    def __init__(self, *, down: bool = False) -> None:
+        self.down = down
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        params = body["params"]
+        self.calls.append((params["name"], params["arguments"]))
+        if self.down:
+            return httpx.Response(503, text="tracker outage")
+        return httpx.Response(
+            200,
+            json={"jsonrpc": "2.0", "id": body["id"], "result": {"content": [], "isError": False}},
+        )
+
+    def statuses(self) -> list[tuple[str, str]]:
+        return [(a["status"], a.get("note", "")) for n, a in self.calls if n == "set_task_status"]
+
+
+async def _run_with_tracker(
+    tmp_path: Path,
+    *,
+    executor: FakeExecutor,
+    vertex: dict[str, Any],
+    tracker: FakeTracker,
+    task_ref: str = "swarm-lab/target-scratch#7",
+    wait_for: str = "complete",
+) -> FakeControlPlane:
+    from agent_runtime.tracker import TrackerClient
+
+    bare = _init_bare_repo(tmp_path)
+    plane = FakeControlPlane(vertices=[vertex])
+    settings = _settings(tmp_path, str(bare)).model_copy(
+        update={"task_ref": task_ref, "task_source_url": "http://tracker.test/mcp"}
+    )
+    stop = asyncio.Event()
+    async with (
+        httpx.AsyncClient(
+            transport=httpx.MockTransport(plane.handler), base_url="http://test"
+        ) as http,
+        httpx.AsyncClient(transport=httpx.MockTransport(tracker.handler)) as tracker_http,
+    ):
+        client = TrackerClient(tracker_http, "http://tracker.test/mcp")
+        task = asyncio.create_task(
+            worker_loop(settings, executor, http=http, stop=stop, tracker=client)
+        )
+        event = plane.complete_called if wait_for == "complete" else plane.fail_called
+        await asyncio.wait_for(event.wait(), timeout=3.0)
+        # Let the post-complete/fail tracker call land before stopping.
+        await asyncio.sleep(0.1)
+        stop.set()
+        await asyncio.wait_for(task, timeout=3.0)
+    return plane
+
+
+def _greet_vertex(vertex_id: int = 1) -> dict[str, Any]:
+    return {
+        "id": vertex_id,
+        "name": "greet",
+        "done_when": json.dumps({"checks": [{"type": "files_exist", "paths": ["greeting.py"]}]}),
+        "paths_allow": ["*.py"],
+    }
+
+
+async def test_tracker_claim_in_progress_then_done_with_branch_and_verdict(
+    tmp_path: Path,
+) -> None:
+    tracker = FakeTracker()
+    executor = FakeExecutor(diff=_GREETING_DIFF, diff_files=["greeting.py"])
+    plane = await _run_with_tracker(
+        tmp_path, executor=executor, vertex=_greet_vertex(), tracker=tracker
+    )
+
+    assert len(plane.complete_calls) == 1
+    statuses = tracker.statuses()
+    assert [s for s, _ in statuses] == ["in-progress", "done"]
+    assert all(a["task_ref"] == "swarm-lab/target-scratch#7" for _, a in tracker.calls)
+    done_note = statuses[1][1]
+    assert "agent/vertex-1" in done_note
+    assert "verdict: PASS" in done_note
+
+
+async def test_tracker_fail_sets_blocked_with_reason(tmp_path: Path) -> None:
+    tracker = FakeTracker()
+    executor = FakeExecutor(diff="", diff_files=[])
+    plane = await _run_with_tracker(
+        tmp_path, executor=executor, vertex=_greet_vertex(6), tracker=tracker, wait_for="fail"
+    )
+    assert plane.fail_calls[0][1]["reason"] == "empty_diff"
+    statuses = tracker.statuses()
+    assert [s for s, _ in statuses] == ["in-progress", "blocked"]
+    assert "empty_diff" in statuses[1][1]
+
+
+async def test_tracker_outage_never_fails_the_vertex(tmp_path: Path) -> None:
+    tracker = FakeTracker(down=True)
+    executor = FakeExecutor(diff=_GREETING_DIFF, diff_files=["greeting.py"])
+    plane = await _run_with_tracker(
+        tmp_path, executor=executor, vertex=_greet_vertex(), tracker=tracker
+    )
+
+    assert len(plane.complete_calls) == 1
+    assert plane.fail_calls == []
+    # The outage is visible: audited, not silent.
+    tracker_errors = [a for a in plane.audit_calls if a["action"] == "tracker_error"]
+    assert len(tracker_errors) == 2  # in-progress and done both failed
+    assert all(a["outcome"] == "error" for a in tracker_errors)
+    assert "in-progress" in json.dumps(tracker_errors[0]["payload"])
+
+
+async def test_empty_task_ref_disables_the_tracker_loop(tmp_path: Path) -> None:
+    tracker = FakeTracker()
+    executor = FakeExecutor(diff=_GREETING_DIFF, diff_files=["greeting.py"])
+    plane = await _run_with_tracker(
+        tmp_path, executor=executor, vertex=_greet_vertex(), tracker=tracker, task_ref=""
+    )
+    assert len(plane.complete_calls) == 1
+    assert tracker.calls == []

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import shutil
 from pathlib import Path
@@ -37,7 +38,10 @@ from agent_runtime.manifest import write_manifest
 from agent_runtime.opencode_executor import OpencodeExecutor
 from agent_runtime.pathguard import DiffUnparseable, diff_files, filter_violations
 from agent_runtime.settings import WorkerSettings
+from agent_runtime.tracker import TrackerClient
 from agent_runtime.vault_broker import read_gitea_token
+
+logger = logging.getLogger(__name__)
 
 
 class ControlPlaneClient:
@@ -104,6 +108,66 @@ class ControlPlaneClient:
         }
         with contextlib.suppress(Exception):
             await self._http.post("/audit", json=body)
+
+
+class TrackedControlPlaneClient(ControlPlaneClient):
+    """ControlPlaneClient that mirrors vertex transitions into the tracker.
+
+    claim -> ``in-progress``, complete -> ``done`` (branch + verdict + evidence),
+    fail -> ``blocked`` (reason). The tracker is observability, not acceptance:
+    a tracker failure is logged and audited (``tracker_error``) and NEVER fails
+    the vertex.
+    """
+
+    def __init__(
+        self,
+        http: httpx.AsyncClient,
+        settings: WorkerSettings,
+        tracker: TrackerClient,
+    ) -> None:
+        super().__init__(http, settings)
+        self._tracker = tracker
+        self._task_ref = settings.task_ref
+
+    async def claim(self) -> dict[str, Any] | None:
+        vertex = await super().claim()
+        if vertex is not None:
+            note = (
+                f"run {self._settings.run_id}: vertex {vertex.get('id')} "
+                f"({vertex.get('name', '')}) claimed by {self._settings.agent}"
+            )
+            await self._track("in-progress", note, vertex.get("id"))
+        return vertex
+
+    async def complete(self, vertex_id: int, result: dict[str, Any]) -> None:
+        await super().complete(vertex_id, result)
+        verdict = result.get("verdict") or {}
+        note = (
+            f"run {self._settings.run_id}: vertex {vertex_id} done\n"
+            f"branch: {result.get('branch', '')}\n"
+            f"verdict: {'PASS' if verdict.get('passed') else 'FAIL'}\n"
+            f"evidence: {result.get('manifest_path', '')}"
+        )
+        await self._track("done", note, vertex_id)
+
+    async def fail(self, vertex_id: int, reason: str | None = None) -> None:
+        await super().fail(vertex_id, reason=reason)
+        note = f"run {self._settings.run_id}: vertex {vertex_id} failed: {reason or 'unknown'}"
+        await self._track("blocked", note, vertex_id)
+
+    async def _track(self, status: str, note: str, vertex_id: Any) -> None:
+        try:
+            await self._tracker.set_status(self._task_ref, status, note)
+        except Exception as exc:
+            logger.warning(
+                "tracker update failed task_ref=%s status=%s: %s", self._task_ref, status, exc
+            )
+            await self.audit(
+                action="tracker_error",
+                target=f"task:{self._task_ref}",
+                outcome="error",
+                payload={"status": status, "vertex_id": vertex_id, "error": str(exc)},
+            )
 
 
 def _git_token(raw: str) -> str | None:
@@ -521,12 +585,26 @@ async def worker_loop(
     *,
     http: httpx.AsyncClient | None = None,
     stop: asyncio.Event | None = None,
+    tracker: TrackerClient | None = None,
 ) -> None:
-    """Claim and execute vertices for ``settings.run_id`` until ``stop`` is set."""
+    """Claim and execute vertices for ``settings.run_id`` until ``stop`` is set.
+
+    With ``settings.task_ref`` set, vertex transitions are mirrored into the
+    tracker (``tracker`` injected, or built from ``settings.task_source_url``);
+    an empty ``task_ref`` disables the loop.
+    """
     stop_event = stop or asyncio.Event()
     own_http = http is None
     http = http or httpx.AsyncClient(base_url=settings.api_url)
-    client = ControlPlaneClient(http, settings)
+    tracker_http: httpx.AsyncClient | None = None
+    if settings.task_ref and tracker is None and settings.task_source_url:
+        tracker_http = httpx.AsyncClient(timeout=30.0)
+        tracker = TrackerClient(tracker_http, settings.task_source_url)
+    client: ControlPlaneClient = (
+        TrackedControlPlaneClient(http, settings, tracker)
+        if settings.task_ref and tracker is not None
+        else ControlPlaneClient(http, settings)
+    )
     blacklisted: set[int] = set()
 
     try:
@@ -567,6 +645,8 @@ async def worker_loop(
     finally:
         if own_http:
             await http.aclose()
+        if tracker_http is not None:
+            await tracker_http.aclose()
 
 
 def main() -> None:

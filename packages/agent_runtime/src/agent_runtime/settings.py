@@ -44,6 +44,9 @@ class WorkerSettings(BaseSettings):
     # --- MCP servers registered into the sandbox harness (M4c; empty = omit) ---
     mcp_task_source_url: str = ""
     mcp_llm_url: str = ""
+    # --- tracker status loop (M4c): task_ref "owner/repo#N"; empty = disabled ---
+    task_ref: str = ""
+    task_source_url: str = ""  # task-source MCP endpoint reachable from the worker host
 
     @model_validator(mode="after")
     def _required_at_runtime(self) -> "WorkerSettings":
