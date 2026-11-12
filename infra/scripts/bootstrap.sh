@@ -250,8 +250,9 @@ section_litellm() {
   mk="$(vcli kv get -field=master-key secret/litellm/master 2>/dev/null || true)"
   [ -n "$mk" ] || { mk="sk-lab-$(openssl rand -hex 12)"; vcli kv put secret/litellm/master "master-key=$mk" >/dev/null; }
   [ -n "$mk" ] || { echo "litellm: пустой master key — прерываю"; exit 1; }
-  hostip="$(docker run --rm alpine getent hosts host.lima.internal | awk '{print $1}')"
-  [ -n "$hostip" ] || { echo "litellm: не удалось определить IP хоста (host.lima.internal)"; exit 1; }
+  # colima/lima -> host.lima.internal; Docker Desktop / Rancher Desktop (Windows) -> host.docker.internal
+  hostip="$(docker run --rm alpine sh -c 'getent hosts host.lima.internal || getent hosts host.docker.internal' | awk 'NR==1{print $1}')"
+  [ -n "$hostip" ] || { echo "litellm: не удалось определить IP хоста (host.lima.internal / host.docker.internal)"; exit 1; }
   # БД для LiteLLM (ключи/teams хранятся там же)
   kubectl apply -f "$ROOT/postgres/litellm-database.yaml"
   kubectl -n "$NS" wait --for=jsonpath='{.status.ready}'=true database/litellm-db --timeout=180s 2>/dev/null || true
