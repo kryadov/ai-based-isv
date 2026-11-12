@@ -41,12 +41,12 @@ import json
 d = json.load(open("/tmp/m2c-last-payload.json"))
 assert d["issues"] and d["issues"][0]["title"].startswith("M2c:"), d
 EOF
-H1="$(md5 -q /tmp/m2c-last-payload.json)"
+H1="$(cksum < /tmp/m2c-last-payload.json)"
 
 # 4) второй прогон — дедупликация (checkpoint): 0 доставок, payload не изменился
 OUT2="$(python3 infra/tests/task_source_poller.py)"
 echo "$OUT2" | grep -q "delivered 0" || fail "поллер повторно доставил те же задачи ($OUT2)"
-H2="$(md5 -q /tmp/m2c-last-payload.json)"
+H2="$(cksum < /tmp/m2c-last-payload.json)"
 [ "$H1" = "$H2" ] || fail "payload изменился на дедуп-прогоне"
 
 # 5) LiteLLM: completion через шлюз
