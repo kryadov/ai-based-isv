@@ -3,17 +3,18 @@
 > Read this file FIRST. Then `ARCH.md` (how it works, diagrams), `AGENTS.md` (rules), `TODO.md` (backlog).
 > This file is updated at the end of EVERY increment. If your findings contradict it — verify, then update it.
 
-**⚠️ WORKSTATION HANDOFF (2026-11-10, evening):** this session ended on a macOS
-laptop; work continues on a **Windows workstation**. Read
-`docs/superpowers/HANDOFF-2026-11-10.md` BEFORE anything else — it carries the
-session rulings, the operational lessons (the live stand does NOT transfer; run
-`org-bootstrap apply` fresh; bash flows need WSL2; openrouter models; deferred
-minors), and the M4c execution notes. Short version: M4a+M4b are DONE and merged
-(PR #7, #21); **M4c is planned and NOT started**
+**Stand location (since 2026-11-12): Windows workstation, WSL2.** The macOS
+stand is gone; the stand was rebuilt from scratch with `org-bootstrap apply`
+on Windows (WSL2 Ubuntu + Rancher Desktop moby, k3d 5.9.0/k3s v1.35.5,
+Ollama native on Windows/RTX 4070 with `OLLAMA_CONTEXT_LENGTH=16384`). All
+seven acceptance flows PASS there (m2a, m2b, m2c, m2d, m3, m4a, m4b). Setup and
+the two silent host traps (inotify limit, Ollama 4k default context) — INSTALL.md
+"Windows (WSL2)". Session context of the macOS era —
+`docs/superpowers/HANDOFF-2026-11-10.md`. **M4c is planned and NOT started**
 (`docs/superpowers/plans/2026-11-11-m4c-mcp-servers.md` — execute INLINE,
 release v0.4.0 closes M4).
 
-Last updated: 2026-11-10 (M4b closed — k3s sandbox executor verified live, next M4c)
+Last updated: 2026-11-12 (stand moved to Windows/WSL2, all regressions PASS; fresh-machine bugs fixed; next M4c)
 
 ## What this project is
 
