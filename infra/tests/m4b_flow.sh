@@ -504,7 +504,10 @@ for spec in "gitea|http://gitea-http.platform.svc.cluster.local:3000/api/v1/vers
   kubectl -n agents exec "$PROBE_NAME" -- wget -qO- -T 8 "$url" >/dev/null 2>&1 \
     || { NP_OK=0; fail "NetworkPolicy: $name must be reachable but wget failed"; }
 done
-for target in "postgres-platform-rw.platform.svc.cluster.local 5432" "192.168.5.2 15432"; do
+# Host IP: colima/lima -> host.lima.internal; Docker/Rancher Desktop -> host.docker.internal.
+HOST_IP="$(docker run --rm alpine sh -c 'getent hosts host.lima.internal || getent hosts host.docker.internal' | awk 'NR==1{print $1}')"
+[ -n "$HOST_IP" ] || fail "could not resolve the host IP for the NodePort denial probe"
+for target in "postgres-platform-rw.platform.svc.cluster.local 5432" "$HOST_IP 15432"; do
   kubectl -n agents exec "$PROBE_NAME" -- timeout 5 nc -z $target >/dev/null 2>&1 \
     && fail "NetworkPolicy: Postgres ($target) must be DENIED but the connection succeeded"
 done

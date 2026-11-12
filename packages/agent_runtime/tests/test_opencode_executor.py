@@ -131,6 +131,9 @@ def test_docker_serve_builds_expected_argv(tmp_path: Path) -> None:
     assert build_input is not None
     assert f"FROM {OPENCODE_IMAGE}" in build_input
     assert "apt-get install -y git" in build_input or "apk add --no-cache git" in build_input
+    # Bind mounts owned by another uid (WSL2 drvfs, uid 1000 vs root in the
+    # container) make git refuse the repo -> the harness diff comes back empty.
+    assert "git config --system --add safe.directory '*'" in build_input
 
     assert run is not None
     run_argv, _, run_env = run

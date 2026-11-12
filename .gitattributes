@@ -1,0 +1,3 @@
+# Force LF in the working tree on every OS: bash flows run from WSL against the
+# Windows checkout, and CRLF breaks them (core.autocrlf=true on Windows hosts).
+* text=auto eol=lf

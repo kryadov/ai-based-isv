@@ -62,3 +62,4 @@ agent-api.db
 # No trailing slash: `git check-ignore` must also match not-yet-created dirs.
 .agent-runtime-workspace
 .agent_runtime
+.venv-*/
