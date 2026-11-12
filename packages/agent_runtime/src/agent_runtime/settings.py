@@ -20,6 +20,7 @@ class WorkerSettings(BaseSettings):
     agent: str = "worker"
     poll_interval_seconds: float = 2.0
     lease_ttl_seconds: int = 300
+    session_timeout_seconds: float = 900.0  # per attempt; a stuck harness fails the attempt
     workspace_dir: Path = Path("./.agent-runtime-workspace")
     repo_url: str = ""
     base_branch: str = "main"

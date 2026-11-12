@@ -34,6 +34,11 @@ from agent_runtime.pathguard import diff_files
 from agent_runtime.session_log import SessionLog
 from agent_runtime.settings import OPENCODE_IMAGE, OPENCODE_PORT
 
+# opencode connects MCP servers lazily at session start: re-read the status
+# until none is "pending" (bounded, ~15 s) before recording the evidence.
+MCP_SETTLE_INTERVAL_SECONDS: float = 1.0
+MCP_SETTLE_ATTEMPTS: int = 15
+
 _DockerRunner = Callable[
     [list[str], str | None, dict[str, str] | None], subprocess.CompletedProcess[str]
 ]
@@ -290,6 +295,11 @@ class OpencodeExecutor:
         # or a transient error must not fail the vertex.
         with contextlib.suppress(Exception):
             servers = await client.mcp_status()
+            for _ in range(MCP_SETTLE_ATTEMPTS):
+                if not any(_mcp_state(s) == "pending" for s in servers):
+                    break
+                await asyncio.sleep(MCP_SETTLE_INTERVAL_SECONDS)
+                servers = await client.mcp_status()
             session_log.append("mcp_status", {"servers": servers})
 
         return OpencodeSession(
@@ -564,6 +574,11 @@ def _dockerfile(base_image: str) -> str:
         # The image exists only to host the sandbox workspace, so trust any path.
         "RUN git config --system --add safe.directory '*'\n"
     )
+
+
+def _mcp_state(server: dict[str, Any]) -> str:
+    status = server.get("status")
+    return str(status.get("status", "")) if isinstance(status, dict) else ""
 
 
 def _split_model(model: str) -> tuple[str, str]:

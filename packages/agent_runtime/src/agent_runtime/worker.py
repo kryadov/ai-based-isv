@@ -310,7 +310,10 @@ def build_vertex_prompt(vertex: dict[str, Any]) -> str:
         f"Allowed paths: {allowed}\n"
         f"Done when: {done_when}\n\n"
         "Work in the current repository directory. Make the requested changes; "
-        "the worker will collect them from the session diff. Do not push or commit."
+        "the worker will collect them from the session diff. Do not push or commit. "
+        "Do not run commands or tests: the sandbox cannot execute them, and "
+        "the platform runs the done-when checks after you finish. "
+        "Write the files, then stop."
     )
 
 
@@ -441,6 +444,7 @@ async def _process_vertex(
         lease_wait = asyncio.create_task(lease_lost.wait())
         done, pending = await asyncio.wait(
             {wait_task, lease_wait},
+            timeout=settings.session_timeout_seconds,
             return_when=asyncio.FIRST_COMPLETED,
         )
         for task in pending:
@@ -451,6 +455,20 @@ async def _process_vertex(
         if lease_lost.is_set():
             # Lease lost: do NOT complete or fail. The control plane will
             # requeue via lease expiry.
+            return
+
+        if not done:
+            # A harness that never finishes (live m4c: a model looping in its
+            # reasoning) must not burn the whole run budget: fail this attempt
+            # so the control plane can requeue it; finally stops the session.
+            reason = "session_timeout"
+            await client.fail(vertex_id, reason=reason)
+            await client.audit(
+                action="fail",
+                target=f"vertex:{vertex_id}",
+                outcome="error",
+                payload={"reason": reason, "timeout_seconds": settings.session_timeout_seconds},
+            )
             return
 
         status = wait_task.result()

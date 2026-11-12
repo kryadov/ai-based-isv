@@ -801,3 +801,34 @@ async def test_empty_task_ref_disables_the_tracker_loop(tmp_path: Path) -> None:
     )
     assert len(plane.complete_calls) == 1
     assert tracker.calls == []
+
+
+# --- Live-run hardening (M4c Task 6) ---------------------------------------------
+
+
+async def test_build_vertex_prompt_tells_the_agent_not_to_run_commands() -> None:
+    # Live m4c: the agent wrote the files, tried to run pytest through a
+    # non-existent shell tool and looped in reasoning for 18 minutes. The
+    # sandbox has no Python; done_when runs on the platform side.
+    prompt = build_vertex_prompt({"name": "x", "paths_allow": ["src/**"], "done_when": "{}"})
+    assert "Do not run commands or tests" in prompt
+    assert "the platform runs the done-when checks after you finish" in prompt
+    assert "stop" in prompt.lower()
+
+
+async def test_session_timeout_fails_the_vertex_and_stops_the_session(tmp_path: Path) -> None:
+    bare = _init_bare_repo(tmp_path)
+    executor = FakeExecutor(diff=_GREETING_DIFF, diff_files=["greeting.py"], block_until_stop=True)
+    plane = FakeControlPlane(vertices=[_greet_vertex(9)])
+    settings = _settings(tmp_path, str(bare)).model_copy(update={"session_timeout_seconds": 0.3})
+    stop = asyncio.Event()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(plane.handler), base_url="http://test"
+    ) as http:
+        task = asyncio.create_task(worker_loop(settings, executor, http=http, stop=stop))
+        await asyncio.wait_for(plane.fail_called.wait(), timeout=3.0)
+        stop.set()
+        await asyncio.wait_for(task, timeout=3.0)
+    assert plane.fail_calls[0] == (9, {"agent": "test-worker", "reason": "session_timeout"})
+    assert plane.complete_calls == []
+    assert executor.sessions[0].stopped is True

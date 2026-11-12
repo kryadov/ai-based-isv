@@ -627,6 +627,47 @@ async def test_start_records_harness_mcp_status_in_the_session_log(tmp_path: Pat
     assert statuses[0]["payload"]["servers"] == mcp
 
 
+async def test_mcp_status_waits_out_pending_servers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Live m4c: servers connect lazily; one read right after the prompt saw
+    # "llm" still pending. The executor re-reads (bounded) until none pend.
+    import httpx
+    import agent_runtime.opencode_executor as oe
+
+    monkeypatch.setattr(oe, "MCP_SETTLE_INTERVAL_SECONDS", 0.01)
+    terminal = {"id": "e", "type": "session.execution.succeeded", "data": {"sessionID": "ses_test"}}
+    inner = _handler(events=[terminal], diff_items=[], status_tokens=None)
+    reads = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/mcp":
+            reads["n"] += 1
+            state = "pending" if reads["n"] < 3 else "connected"
+            return httpx.Response(
+                200, json={"data": [{"name": "llm", "status": {"status": state}}]}
+            )
+        return inner(request)
+
+    executor = oe.OpencodeExecutor(
+        base_url="http://127.0.0.1:30100",
+        workspace=tmp_path,
+        evidence_root=tmp_path,
+        model="litellm/qwen3",
+        llm_endpoint="http://l:4000/v1",
+        transport=httpx.MockTransport(handler),
+    )
+    session = await executor.start(_request())
+    await session.wait_done()
+    records = [
+        json.loads(line)
+        for line in session.session_log.path.read_text(encoding="utf-8").splitlines()
+    ]
+    [status] = [r for r in records if r["type"] == "mcp_status"]
+    assert status["payload"]["servers"][0]["status"]["status"] == "connected"
+    assert reads["n"] == 3
+
+
 async def test_start_tolerates_a_harness_without_mcp_endpoint(tmp_path: Path) -> None:
     import httpx
     from agent_runtime.opencode_executor import OpencodeExecutor
