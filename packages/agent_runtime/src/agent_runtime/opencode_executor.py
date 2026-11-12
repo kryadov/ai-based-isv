@@ -539,6 +539,10 @@ def _dockerfile(base_image: str) -> str:
         "elif command -v apk >/dev/null 2>&1; then "
         "apk add --no-cache git; "
         "else echo 'No supported package manager found' && exit 1; fi\n"
+        # The workspace mount may be owned by another uid (WSL2 drvfs: uid 1000
+        # vs root here); git then refuses the repo and the harness diff is empty.
+        # The image exists only to host the sandbox workspace, so trust any path.
+        "RUN git config --system --add safe.directory '*'\n"
     )
 
 
