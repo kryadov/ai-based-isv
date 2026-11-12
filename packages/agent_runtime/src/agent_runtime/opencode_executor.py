@@ -285,6 +285,13 @@ class OpencodeExecutor:
                 await asyncio.to_thread(self._serve.stop)
             raise
 
+        # Evidence that the harness registered and reached its MCP servers
+        # (M4c, Review Focus #3). Best effort: a harness without the endpoint
+        # or a transient error must not fail the vertex.
+        with contextlib.suppress(Exception):
+            servers = await client.mcp_status()
+            session_log.append("mcp_status", {"servers": servers})
+
         return OpencodeSession(
             client=client,
             session_id=session_id,
