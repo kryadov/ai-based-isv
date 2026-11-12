@@ -184,7 +184,10 @@ uv run ruff check . && uv run mypy packages apps && uv run pytest   # код п�
 ./infra/tests/m2b_deploy_flow.sh    # GitOps → prod + метрики + логи
 ./infra/tests/m2c_flow.sh           # задачи трекера → poller + LLM-шлюз
 ./infra/tests/m2d_flow.sh           # бутстреппер-CLI end-to-end
-./infra/tests/m3_flow.sh            # control plane на живом Postgres (M3, в работе)
+./infra/tests/m3_flow.sh            # control plane на живом Postgres (M3)
+./infra/tests/m4a_flow.sh           # M4a: вершина-исполнитель, opencode serve в docker → session log + manifest + ветка в Gitea
+./infra/tests/m4b_flow.sh           # M4b: вершина в k3s-поде-песочнице: NetworkPolicy + Secret на прогон + NodePort, Postgres закрыт
+./infra/tests/m4c_flow.sh           # M4c: полный цикл — issue в Gitea → поллер через task-source MCP (дедуп) → run → агент в k3s с MCP (tracker, llm) → ветка → issue закрыт с вердиктом
 ```
 
 Перекрёстные ссылки: полный дизайн §7.2 (конвейер), §7.3 (оркестрация), §7.4 (память),

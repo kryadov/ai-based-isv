@@ -181,9 +181,10 @@ uv run ruff check . && uv run mypy packages apps && uv run pytest   # platform c
 ./infra/tests/m2b_deploy_flow.sh    # GitOps → prod + metrics + logs
 ./infra/tests/m2c_flow.sh           # tracker issues → poller + LLM gateway
 ./infra/tests/m2d_flow.sh           # bootstrap CLI end-to-end
-./infra/tests/m3_flow.sh            # control plane on live Postgres (M3, in progress)
+./infra/tests/m3_flow.sh            # control plane on live Postgres (M3)
 ./infra/tests/m4a_flow.sh           # M4a executor vertex: opencode serve in docker → session log + manifest + branch in Gitea
 ./infra/tests/m4b_flow.sh           # M4b executor vertex in a k3s sandbox pod: NetworkPolicy + per-run Secret + NodePort, Postgres denied
+./infra/tests/m4c_flow.sh           # M4c full cycle: Gitea issue → poller via task-source MCP (dedup) → run → k3s agent with MCP (tracker, llm) → branch → issue closed with verdict
 ```
 
 Cross-references: full design §7.2 (pipeline), §7.3 (orchestration), §7.4 (memory),
