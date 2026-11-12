@@ -1,0 +1,20 @@
+# Ingress to the MCP servers (component=mcp-server) on their port 8000: sandbox
+# pods (in-namespace) and the host worker's tracker loop (NodePort 30085). Scoped
+# to MCP pods so sandbox pods never accept connections on 8000.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-mcp-ingress
+  namespace: agents
+  labels:
+    app.kubernetes.io/part-of: agent-runtime
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: mcp-server
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8000

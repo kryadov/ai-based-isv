@@ -200,6 +200,25 @@ def test_start_happy_path_returns_handle() -> None:
     assert kube.calls_with("delete") == [], "happy path must not tear anything down"
 
 
+def test_start_registers_mcp_servers_in_the_pod_config() -> None:
+    kube = FakeKube(
+        [
+            ("get svc", subprocess.CompletedProcess([], 0, stdout='{"items": []}', stderr="")),
+            ("get pod", subprocess.CompletedProcess([], 0, stdout=_ready_pod_json(), stderr="")),
+            (
+                "kubectl -n agents logs",
+                subprocess.CompletedProcess([], 0, stdout="server password p\n", stderr=""),
+            ),
+        ]
+    )
+    url = "http://task-source.agents.svc.cluster.local:8000/mcp"
+    sandbox = KubeSandbox(kube_runner=kube, mcp_servers={"tracker": url}, **_sandbox_args())
+    sandbox.start(timeout_seconds=5.0)
+    secret = kube.first_stdin("apply", "Secret")
+    config = json.loads(secret["stringData"]["opencode.jsonc"])
+    assert config["mcp"]["servers"]["tracker"] == {"type": "remote", "url": url}
+
+
 def test_nodeport_allocation_skips_used() -> None:
     used = json.dumps(
         {

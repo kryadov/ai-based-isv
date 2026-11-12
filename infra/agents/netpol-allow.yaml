@@ -1,7 +1,11 @@
-# Namespace-wide allowances (verified by the M4b spike, 2026-11-10):
-# egress — kube-dns, Gitea git-http (3000), LiteLLM (4000); ingress — the
-# opencode serve port 4096 so the host worker can drive the sandbox via a
-# NodePort. Everything else (including Postgres) stays denied.
+# Namespace-wide allowances (verified by the M4b spike, 2026-11-10, and the
+# M4c MCP spike, 2026-11-12):
+# egress — kube-dns, Gitea git-http (3000), LiteLLM (4000), and the in-namespace
+# MCP servers (pods labelled component=mcp-server, port 8000); ingress — the
+# opencode serve port 4096 (host worker drives the sandbox via a NodePort).
+# Ingress to the MCP port is scoped to MCP pods only (netpol-mcp.yaml), so a
+# sandbox cannot expose a listener on 8000. Everything else (including
+# Postgres) stays denied.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -33,6 +37,13 @@ spec:
           port: 3000
         - protocol: TCP
           port: 4000
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: mcp-server
+      ports:
+        - protocol: TCP
+          port: 8000
   ingress:
     - ports:
         - protocol: TCP

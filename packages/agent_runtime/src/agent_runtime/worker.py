@@ -150,6 +150,12 @@ def resolve_gitea_token(settings: WorkerSettings, kube_runner: Any | None = None
     )
 
 
+def _mcp_servers(settings: WorkerSettings) -> dict[str, str]:
+    """Harness MCP registrations: server name -> URL, configured ones only."""
+    configured = {"tracker": settings.mcp_task_source_url, "llm": settings.mcp_llm_url}
+    return {name: url for name, url in configured.items() if url}
+
+
 def build_executor(
     settings: WorkerSettings,
     *,
@@ -172,6 +178,7 @@ def build_executor(
             namespace=settings.k8s_namespace,
             nodeport_range=(settings.nodeport_range_low, settings.nodeport_range_high),
             kube_runner=kube_runner,
+            mcp_servers=_mcp_servers(settings),
         )
     sandbox_dir = _reset_sandbox(repo_dir, _sandbox_dir(settings))
     return OpencodeExecutor(

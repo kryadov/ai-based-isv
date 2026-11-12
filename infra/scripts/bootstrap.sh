@@ -308,6 +308,43 @@ section_agents() {
   echo "agents: namespace, agent-scratch PVC, network policies Ready"
 }
 
+section_mcp() {
+  # MCP servers (M4c): task-source (Gitea Issues) + llm (LiteLLM proxy) in `agents`.
+  # The image is built on the host and imported into k3d: `agents` is
+  # default-deny, so pods cannot pip-install at boot.
+  local img="mcp-servers:0.1.0" gt mk
+  docker build -q -f "$ROOT/mcp/Dockerfile" -t "$img" "$ROOT/../packages/mcp_servers" >/dev/null
+  k3d image import "$img" -c swarm-lab >/dev/null
+  # Credentials: OpenBao -> per-server k8s Secrets (values never echoed).
+  gt="$(vcli kv get -field=token secret/gitea/admin 2>/dev/null || true)"
+  [ -n "$gt" ] || { echo "mcp: no Gitea token at secret/gitea/admin (OpenBao sealed?)"; exit 1; }
+  mk="$(vcli kv get -field=master-key secret/litellm/master 2>/dev/null || true)"
+  [ -n "$mk" ] || { echo "mcp: no LiteLLM key at secret/litellm/master"; exit 1; }
+  kubectl -n agents create secret generic mcp-task-source --from-literal="gitea-token=$gt"     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  kubectl -n agents create secret generic mcp-llm --from-literal="api-key=$mk"     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  kubectl apply -f "$ROOT/agents/netpol-allow.yaml"
+  kubectl apply -f "$ROOT/agents/netpol-mcp.yaml"
+  kubectl apply -f "$ROOT/mcp/task-source.yaml"
+  kubectl apply -f "$ROOT/mcp/llm.yaml"
+  # Same tag re-imported: restart so the pods pick up the fresh image.
+  kubectl -n agents rollout restart deploy/task-source deploy/llm >/dev/null
+  kubectl -n agents rollout status deploy/task-source --timeout=180s
+  kubectl -n agents rollout status deploy/llm --timeout=180s
+  # Host access for the worker's tracker loop: map NodePort 30085 once.
+  if ! docker port k3d-swarm-lab-serverlb 2>/dev/null | grep -q "30085/tcp"; then
+    k3d cluster edit swarm-lab --port-add "30085:30085@loadbalancer"       && echo "mcp: added k3d NodePort 30085"
+  fi
+  local code i
+  code=""
+  for i in $(seq 1 20); do
+    code="$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:30085/mcp       -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream'       -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' || true)"
+    [ "$code" = "200" ] && break
+    sleep 3
+  done
+  [ "$code" = "200" ] || { echo "mcp: task-source not answering on :30085 ($code)"; exit 1; }
+  echo "mcp: task-source (:30085, task-source.agents.svc:8000) and llm (llm.agents.svc:8000) Ready"
+}
+
 case "${1:-all}" in
   vault)  section_vault ;;
   cnpg)   section_cnpg ;;
@@ -321,7 +358,8 @@ case "${1:-all}" in
   openproject) section_openproject ;;
   litellm) section_litellm ;;
   agents) section_agents ;;
+  mcp)    section_mcp ;;
   # `all` brings the k3d cluster up first so `org-bootstrap apply` works on a fresh machine.
-  all)    bash "$ROOT/scripts/k3d-up.sh"; section_vault; section_cnpg; section_gitea; section_runner; section_argocd; section_monitoring; section_loki; section_demo; section_openproject; section_litellm; section_agents ;;
-  *) echo "usage: $0 [cluster|vault|cnpg|gitea|runner|argocd|monitoring|loki|demo|openproject|litellm|agents|all]"; exit 2 ;;
+  all)    bash "$ROOT/scripts/k3d-up.sh"; section_vault; section_cnpg; section_gitea; section_runner; section_argocd; section_monitoring; section_loki; section_demo; section_openproject; section_litellm; section_agents; section_mcp ;;
+  *) echo "usage: $0 [cluster|vault|cnpg|gitea|runner|argocd|monitoring|loki|demo|openproject|litellm|agents|mcp|all]"; exit 2 ;;
 esac

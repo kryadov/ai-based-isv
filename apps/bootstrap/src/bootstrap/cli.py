@@ -126,7 +126,7 @@ def init(
 @app.command()
 def apply(
     section: str = typer.Option(
-        None, help="single section (vault|cnpg|gitea|...|agents); default: all"
+        None, help="single section (cluster|vault|cnpg|gitea|...|agents|mcp); default: all"
     ),
 ) -> None:
     """Idempotently apply L0 sections (wrapper over infra/scripts/bootstrap.sh)."""

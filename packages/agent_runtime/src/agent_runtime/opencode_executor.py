@@ -14,7 +14,7 @@ import json
 import os
 import subprocess
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -39,10 +39,17 @@ _DockerRunner = Callable[
 ]
 
 
-def opencode_config_text(*, model: str, llm_endpoint: str) -> str:
-    """Render the opencode.jsonc content shared by docker and k3s sandboxes."""
+def opencode_config_text(
+    *, model: str, llm_endpoint: str, mcp_servers: Mapping[str, str] | None = None
+) -> str:
+    """Render the opencode.jsonc content shared by docker and k3s sandboxes.
+
+    ``mcp_servers`` maps a server name to its streamable-HTTP URL; each becomes
+    a ``remote`` entry under ``mcp.servers`` (shape verified live against
+    opencode 2.2.0, see the M4c spike note). Empty or None omits the block.
+    """
     provider_id, model_id = _split_model(model)
-    config = {
+    config: dict[str, Any] = {
         "$schema": "https://opencode.ai/config.json",
         "model": f"{provider_id}/{model_id}",
         "permissions": [{"action": "*", "resource": "*", "effect": "allow"}],
@@ -64,6 +71,12 @@ def opencode_config_text(*, model: str, llm_endpoint: str) -> str:
             }
         },
     }
+    if mcp_servers:
+        config["mcp"] = {
+            "servers": {
+                name: {"type": "remote", "url": url} for name, url in sorted(mcp_servers.items())
+            }
+        }
     return f"{json.dumps(config, indent=2, ensure_ascii=False)}\n"
 
 

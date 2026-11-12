@@ -41,6 +41,9 @@ class WorkerSettings(BaseSettings):
     openbao_pod_label: str = "app.kubernetes.io/name=openbao"
     openbao_namespace: str = "platform"
     vault_root_token: str = ""  # explicit override; otherwise read from vault_root_token_path
+    # --- MCP servers registered into the sandbox harness (M4c; empty = omit) ---
+    mcp_task_source_url: str = ""
+    mcp_llm_url: str = ""
 
     @model_validator(mode="after")
     def _required_at_runtime(self) -> "WorkerSettings":

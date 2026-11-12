@@ -1,0 +1,63 @@
+# llm MCP server: one `complete` tool proxying the LiteLLM gateway. Cluster-only
+# (llm.agents.svc:8000/mcp). The gateway key comes from Secret mcp-llm (created
+# by section_mcp from OpenBao secret/litellm/master).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm
+  namespace: agents
+  labels: &labels
+    app.kubernetes.io/name: llm
+    app.kubernetes.io/component: mcp-server
+    app.kubernetes.io/part-of: agent-runtime
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: llm
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: server
+          image: mcp-servers:0.1.0
+          imagePullPolicy: Never
+          command: ["python", "-m", "mcp_servers.llm_server"]
+          env:
+            - name: LITELLM_BASE_URL
+              value: http://litellm.platform.svc.cluster.local:4000
+            - name: LITELLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-llm
+                  key: api-key
+            - name: LLM_DEFAULT_MODEL
+              value: qwen3
+            - name: PORT
+              value: "8000"
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 20m, memory: 96Mi}
+            limits: {memory: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm
+  namespace: agents
+  labels:
+    app.kubernetes.io/name: llm
+    app.kubernetes.io/component: mcp-server
+spec:
+  selector:
+    app.kubernetes.io/name: llm
+  ports:
+    - port: 8000
+      targetPort: 8000

@@ -578,6 +578,36 @@ def test_opencode_config_text_renders_provider_and_permissions() -> None:
     assert text.startswith("{") and text.endswith("\n")
 
 
+def test_opencode_config_text_registers_remote_mcp_servers() -> None:
+    import json
+
+    from agent_runtime.opencode_executor import opencode_config_text
+
+    text = opencode_config_text(
+        model="litellm/qwen3",
+        llm_endpoint="http://litellm.internal:4000",
+        mcp_servers={"tracker": "http://task-source.agents.svc:8000/mcp"},
+    )
+    config = json.loads(text)
+    # Shape verified live against opencode 2.2.0 (`opencode mcp add --url`).
+    assert config["mcp"] == {
+        "servers": {"tracker": {"type": "remote", "url": "http://task-source.agents.svc:8000/mcp"}}
+    }
+
+
+def test_opencode_config_text_omits_mcp_when_none_or_empty() -> None:
+    import json
+
+    from agent_runtime.opencode_executor import opencode_config_text
+
+    empty: dict[str, str] = {}
+    for servers in (None, empty):
+        text = opencode_config_text(
+            model="litellm/qwen3", llm_endpoint="http://l:4000", mcp_servers=servers
+        )
+        assert "mcp" not in json.loads(text)
+
+
 async def test_attached_mode_sends_basic_auth(tmp_path: Path) -> None:
     """k3s sandboxes attach with Basic auth scraped from the pod logs."""
     import base64

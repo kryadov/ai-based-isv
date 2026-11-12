@@ -160,6 +160,21 @@ def test_build_executor_k3s_requires_resolved_token(tmp_path: Path) -> None:
         build_executor(settings, repo_dir=tmp_path / "repo")  # type: ignore[call-arg]
 
 
+def test_build_executor_k3s_passes_configured_mcp_servers(tmp_path: Path) -> None:
+    settings = _settings(
+        tmp_path,
+        sandbox_backend="k3s",
+        mcp_task_source_url="http://task-source.agents.svc.cluster.local:8000/mcp",
+        mcp_llm_url="",
+    )
+    executor = build_executor(settings, repo_dir=tmp_path, gitea_token="t")
+    assert isinstance(executor, KubeSandboxExecutorFactory)
+    # Only configured servers are registered; an empty URL omits the server.
+    assert executor.mcp_servers == {
+        "tracker": "http://task-source.agents.svc.cluster.local:8000/mcp"
+    }
+
+
 def test_build_executor_k3s_returns_factory(tmp_path: Path) -> None:
     settings = _settings(tmp_path, sandbox_backend="k3s")
     executor = build_executor(settings, repo_dir=tmp_path / "repo", gitea_token="t")
