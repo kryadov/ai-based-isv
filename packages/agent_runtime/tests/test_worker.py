@@ -832,3 +832,43 @@ async def test_session_timeout_fails_the_vertex_and_stops_the_session(tmp_path: 
     assert plane.fail_calls[0] == (9, {"agent": "test-worker", "reason": "session_timeout"})
     assert plane.complete_calls == []
     assert executor.sessions[0].stopped is True
+
+
+async def test_exhausted_vertex_is_never_reported_in_progress_again(tmp_path: Path) -> None:
+    # Review I1: agent_api requeues a failed vertex; a vertex past its attempt
+    # budget is re-claimed every lease. The tracker must end on `blocked`, not
+    # flip back to `in-progress` on every re-claim.
+    from agent_runtime.tracker import TrackerClient
+
+    bare = _init_bare_repo(tmp_path)
+    exhausted = {**_greet_vertex(4), "attempts": 3}
+    plane = FakeControlPlane(vertices=[exhausted, exhausted, exhausted])
+    tracker = FakeTracker()
+    settings = _settings(tmp_path, str(bare)).model_copy(
+        update={"task_ref": "o/r#4", "task_source_url": "http://tracker.test/mcp"}
+    )
+    executor = FakeExecutor(diff=_GREETING_DIFF, diff_files=["greeting.py"])
+    stop = asyncio.Event()
+    async with (
+        httpx.AsyncClient(
+            transport=httpx.MockTransport(plane.handler), base_url="http://test"
+        ) as http,
+        httpx.AsyncClient(transport=httpx.MockTransport(tracker.handler)) as tracker_http,
+    ):
+        task = asyncio.create_task(
+            worker_loop(
+                settings,
+                executor,
+                http=http,
+                stop=stop,
+                tracker=TrackerClient(tracker_http, "http://tracker.test/mcp"),
+            )
+        )
+        for _ in range(100):
+            if plane.claim_calls >= 4:
+                break
+            await asyncio.sleep(0.02)
+        stop.set()
+        await asyncio.wait_for(task, timeout=3.0)
+    assert executor.calls == []
+    assert [s for s, _ in tracker.statuses()] == ["blocked"]

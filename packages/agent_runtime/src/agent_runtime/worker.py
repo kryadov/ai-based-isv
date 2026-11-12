@@ -43,6 +43,9 @@ from agent_runtime.vault_broker import read_gitea_token
 
 logger = logging.getLogger(__name__)
 
+# Attempt budget per vertex; a vertex claimed at or past it is failed, not run.
+MAX_ATTEMPTS = 3
+
 
 class ControlPlaneClient:
     """Thin async client for the agent_api vertex lifecycle endpoints."""
@@ -131,7 +134,9 @@ class TrackedControlPlaneClient(ControlPlaneClient):
 
     async def claim(self) -> dict[str, Any] | None:
         vertex = await super().claim()
-        if vertex is not None:
+        # An exhausted vertex is re-claimed only to be failed (agent_api has no
+        # terminal failed state): never report it in progress again.
+        if vertex is not None and int(vertex.get("attempts", 0)) < MAX_ATTEMPTS:
             note = (
                 f"run {self._settings.run_id}: vertex {vertex.get('id')} "
                 f"({vertex.get('name', '')}) claimed by {self._settings.agent}"
@@ -646,7 +651,7 @@ async def worker_loop(
 
             vertex_id: int = vertex["id"]
             attempts = int(vertex.get("attempts", 0))
-            if attempts >= 3 or vertex_id in blacklisted:
+            if attempts >= MAX_ATTEMPTS or vertex_id in blacklisted:
                 if vertex_id not in blacklisted:
                     await client.fail(vertex_id, reason="max_attempts_exceeded")
                     await client.audit(
