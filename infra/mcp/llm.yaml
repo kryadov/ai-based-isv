@@ -1,5 +1,5 @@
 # llm MCP server: one `complete` tool proxying the LiteLLM gateway. Cluster-only
-# (llm.agents.svc:8000/mcp). The gateway key comes from Secret mcp-llm (created
+# (llm.agents.svc:8000/mcp), sandbox-accessible. The gateway key comes from Secret mcp-llm (created
 # by section_mcp from OpenBao secret/litellm/master).
 apiVersion: apps/v1
 kind: Deployment
@@ -10,6 +10,7 @@ metadata:
     app.kubernetes.io/name: llm
     app.kubernetes.io/component: mcp-server
     app.kubernetes.io/part-of: agent-runtime
+    agent-runtime.io/sandbox-access: "yes"
 spec:
   replicas: 1
   selector:

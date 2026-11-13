@@ -76,6 +76,11 @@ cleanup() {
   if [ -n "${RUN_ID:-}" ]; then
     kubectl -n agents delete pod,service,secret -l "agent-runtime.io/run-id=$RUN_ID"       --ignore-not-found --wait=false >/dev/null 2>&1 || true
   fi
+  # netpol probe pods (sleep 300) — a failing assertion must not leave them behind
+  if [ -n "${RUN_ID:-}" ]; then
+    kubectl -n agents delete pod "m4c-netpol-probe-$RUN_ID" --force --grace-period=0 --ignore-not-found >/dev/null 2>&1 || true
+    kubectl -n default delete pod "m4c-outside-probe-$RUN_ID" --force --grace-period=0 --ignore-not-found >/dev/null 2>&1 || true
+  fi
   rm -rf "$TMP"
 }
 trap cleanup EXIT
@@ -121,7 +126,11 @@ uv run org-bootstrap apply --section mcp > "$TMP/section-mcp.log" 2>&1 \
   || { tail -20 "$TMP/section-mcp.log"; fail "section_mcp failed to apply"; }
 cluster_nodeport_published 30085 \
   || fail "the cluster does not publish NodePort 30085 (section_mcp should add it)"
+# The host worker writes through task-source (NodePort); the sandbox harness only
+# ever sees the read-only task-reader (review I3). The write server's in-cluster
+# URL is used below solely to prove pods are DENIED (review I2).
 TASK_SOURCE_HOST_URL="http://localhost:30085/mcp"
+TASK_READER_POD_URL="http://task-reader.agents.svc.cluster.local:8000/mcp"
 TASK_SOURCE_POD_URL="http://task-source.agents.svc.cluster.local:8000/mcp"
 LLM_POD_URL="http://llm.agents.svc.cluster.local:8000/mcp"
 
@@ -431,7 +440,7 @@ env \
   AGENT_RUNTIME_LITELLM_API_KEY="$MK" \
   AGENT_RUNTIME_MODEL="$MODEL" \
   AGENT_RUNTIME_SESSION_TIMEOUT_SECONDS="$SESSION_TIMEOUT_SECONDS" \
-  AGENT_RUNTIME_MCP_TASK_SOURCE_URL="$TASK_SOURCE_POD_URL" \
+  AGENT_RUNTIME_MCP_TASK_SOURCE_URL="$TASK_READER_POD_URL" \
   AGENT_RUNTIME_MCP_LLM_URL="$LLM_POD_URL" \
   AGENT_RUNTIME_TASK_REF="$TASK_REF" \
   AGENT_RUNTIME_TASK_SOURCE_URL="$TASK_SOURCE_HOST_URL" \
@@ -601,20 +610,50 @@ kubectl -n agents delete pod "$PROBE_NAME" --force --grace-period=0 --ignore-not
 kubectl -n agents run "$PROBE_NAME" --image=alpine:3.20 --restart=Never --command -- sleep 300
 kubectl -n agents wait --for=condition=Ready pod "$PROBE_NAME" --timeout=120s >/dev/null 2>&1 \
   || fail "the netpol probe pod never became Ready"
-NP_OK=1
 for spec in "gitea|http://gitea-http.platform.svc.cluster.local:3000/api/v1/version|0" \
             "litellm|http://litellm.platform.svc.cluster.local:4000/health/liveliness|0"; do
   name="${spec%%|*}"; rest="${spec#*|}"; url="${rest%%|*}"
   kubectl -n agents exec "$PROBE_NAME" -- wget -qO- -T 8 "$url" >/dev/null 2>&1 \
-    || { NP_OK=0; fail "NetworkPolicy: $name must be reachable but wget failed"; }
+    || fail "NetworkPolicy: $name must be reachable but wget failed"
 done
-# sandbox -> MCP servers (in-namespace allow on :8000)
-for url in "$TASK_SOURCE_POD_URL" "$LLM_POD_URL"; do
-  kubectl -n agents exec "$PROBE_NAME" -- wget -qO- -T 8 \
+# MCP tools/list over streamable HTTP from pod $2 in namespace $1 to URL $3.
+mcp_tools_list() {
+  kubectl -n "$1" exec "$2" -- wget -qO- -T 8 \
     --header 'Content-Type: application/json' --header 'Accept: application/json, text/event-stream' \
-    --post-data '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$url" >/dev/null 2>&1 \
+    --post-data '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$3"
+}
+# sandbox -> sandbox-access MCP servers (task-reader, llm) allowed on :8000
+for url in "$TASK_READER_POD_URL" "$LLM_POD_URL"; do
+  mcp_tools_list agents "$PROBE_NAME" "$url" >/dev/null 2>&1 \
     || fail "NetworkPolicy: MCP server $url must be reachable from the agents namespace"
 done
+# review I3: the sandbox-facing tracker has NO write tools
+READER_TOOLS="$(mcp_tools_list agents "$PROBE_NAME" "$TASK_READER_POD_URL" 2>/dev/null || true)"
+echo "$READER_TOOLS" | grep -q '"get_task"' || fail "task-reader does not list get_task: $READER_TOOLS"
+if echo "$READER_TOOLS" | grep -Eq '"(set_task_status|add_task_comment)"'; then
+  fail "task-reader exposes write tools to sandboxes: $READER_TOOLS"
+fi
+# review I2: NO pod reaches the write-capable task-source — not a sandbox in
+# `agents`, not a pod in another namespace (only the host via NodePort 30085).
+mcp_tools_list agents "$PROBE_NAME" "$TASK_SOURCE_POD_URL" >/dev/null 2>&1 \
+  && fail "NetworkPolicy: task-source (write) must be DENIED from the agents namespace"
+OUTSIDE_PROBE="m4c-outside-probe-$RUN_ID"
+kubectl -n default delete pod "$OUTSIDE_PROBE" --force --grace-period=0 --ignore-not-found >/dev/null 2>&1 || true
+kubectl -n default run "$OUTSIDE_PROBE" --image=alpine:3.20 --restart=Never --command -- sleep 300 >/dev/null
+kubectl -n default wait --for=condition=Ready pod "$OUTSIDE_PROBE" --timeout=120s >/dev/null 2>&1 \
+  || fail "the outside-namespace probe pod never became Ready"
+# positive control first: the outside pod has working egress (Gitea answers)
+kubectl -n default exec "$OUTSIDE_PROBE" -- wget -qO- -T 8 \
+  http://gitea-http.platform.svc.cluster.local:3000/api/v1/version >/dev/null 2>&1 \
+  || fail "outside probe: Gitea positive control failed (probe pod broken?)"
+mcp_tools_list default "$OUTSIDE_PROBE" "$TASK_SOURCE_POD_URL" >/dev/null 2>&1 \
+  && fail "NetworkPolicy: task-source (write) must be DENIED from another namespace"
+kubectl -n default delete pod "$OUTSIDE_PROBE" --force --grace-period=0 >/dev/null 2>&1 || true
+# ...while the host worker's path (NodePort 30085) still works
+curl -fsS -m 10 -X POST "$TASK_SOURCE_HOST_URL" \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | grep -q '"set_task_status"' \
+  || fail "task-source is not reachable from the host on NodePort 30085"
 # Host IP: colima/lima -> host.lima.internal; Docker/Rancher Desktop -> host.docker.internal.
 HOST_IP="$(docker run --rm alpine sh -c 'getent hosts host.lima.internal || getent hosts host.docker.internal' | awk 'NR==1{print $1}')"
 [ -n "$HOST_IP" ] || fail "could not resolve the host IP for the NodePort denial probe"
@@ -623,7 +662,6 @@ for target in "postgres-platform-rw.platform.svc.cluster.local 5432" "$HOST_IP 1
     && fail "NetworkPolicy: Postgres ($target) must be DENIED but the connection succeeded"
 done
 kubectl -n agents delete pod "$PROBE_NAME" --force --grace-period=0 >/dev/null 2>&1 || true
-NP_OK=1
 
 echo "M4c flow: PASS — $TASK_REF -> run $RUN_ID -> vertex $VERTEX_ID -> $BRANCH; issue closed with verdict"
 echo "M4c flow: evidence kept in $EVIDENCE_DIR (worker log: $WORKER_LOG)"

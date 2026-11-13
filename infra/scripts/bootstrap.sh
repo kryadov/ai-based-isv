@@ -302,7 +302,8 @@ section_agents() {
 }
 
 section_mcp() {
-  # MCP servers (M4c): task-source (Gitea Issues) + llm (LiteLLM proxy) in `agents`.
+  # MCP servers (M4c): task-source (Gitea Issues, write, host-only), task-reader
+  # (read-only, for sandboxes) + llm (LiteLLM proxy) in `agents`.
   # The image is built on the host and made visible to the cluster: `agents` is
   # default-deny, so pods cannot pip-install at boot.
   local img="mcp-servers:0.1.0" gt mk
@@ -318,10 +319,12 @@ section_mcp() {
   kubectl apply -f "$ROOT/agents/netpol-allow.yaml"
   kubectl apply -f "$ROOT/agents/netpol-mcp.yaml"
   kubectl apply -f "$ROOT/mcp/task-source.yaml"
+  kubectl apply -f "$ROOT/mcp/task-reader.yaml"
   kubectl apply -f "$ROOT/mcp/llm.yaml"
   # Same tag re-imported: restart so the pods pick up the fresh image.
-  kubectl -n agents rollout restart deploy/task-source deploy/llm >/dev/null
+  kubectl -n agents rollout restart deploy/task-source deploy/task-reader deploy/llm >/dev/null
   kubectl -n agents rollout status deploy/task-source --timeout=180s
+  kubectl -n agents rollout status deploy/task-reader --timeout=180s
   kubectl -n agents rollout status deploy/llm --timeout=180s
   # Host access for the worker's tracker loop: publish NodePort 30085 once.
   cluster_publish_nodeport 30085
@@ -333,7 +336,7 @@ section_mcp() {
     sleep 3
   done
   [ "$code" = "200" ] || { echo "mcp: task-source not answering on :30085 ($code)"; exit 1; }
-  echo "mcp: task-source (:30085, task-source.agents.svc:8000) and llm (llm.agents.svc:8000) Ready"
+  echo "mcp: task-source (write, host-only :30085), task-reader + llm (sandbox, *.agents.svc:8000) Ready"
 }
 
 case "${1:-all}" in

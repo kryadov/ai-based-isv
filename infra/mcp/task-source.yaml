@@ -1,7 +1,8 @@
-# task-source MCP server (tracker = Gitea Issues, v0). In-cluster for sandbox
-# pods (task-source.agents.svc:8000/mcp) and NodePort 30085 for the host worker's
-# tracker status loop. The Gitea token comes from Secret mcp-task-source
-# (created by section_mcp from OpenBao secret/gitea/admin).
+# task-source MCP server (tracker = Gitea Issues, v0) — the WRITE-capable variant.
+# Reached ONLY by the host worker's tracker status loop via NodePort 30085: its
+# ingress policy (netpol-mcp.yaml, allow-task-source-ingress) admits no pod, and
+# it carries no sandbox-access label. Sandboxes read tasks through task-reader.
+# The Gitea token comes from Secret mcp-task-source (section_mcp, from OpenBao).
 apiVersion: apps/v1
 kind: Deployment
 metadata:

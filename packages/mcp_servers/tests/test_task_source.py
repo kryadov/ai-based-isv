@@ -161,3 +161,44 @@ async def test_tool_calls_are_logged_without_token(
     assert "set_task_status" in text
     assert "o/r#5" in text
     assert TOKEN not in text
+
+
+# --- Review I3: sandboxes get a read-only tracker ---------------------------
+
+
+@pytest.fixture
+def reader(gitea: FakeGitea) -> Any:
+    http = httpx.AsyncClient(transport=httpx.MockTransport(gitea.handler))
+    return create_task_source_app(base_url=BASE, token=TOKEN, http=http, read_only=True)
+
+
+async def test_read_only_server_exposes_only_read_tools(reader: Any) -> None:
+    async with Client(reader) as client:
+        names = {tool.name for tool in await client.list_tools()}
+    assert names == {"get_task", "list_tasks"}
+
+
+async def test_read_only_server_cannot_write(reader: Any, gitea: FakeGitea) -> None:
+    async with Client(reader) as client:
+        for tool, args in (
+            ("set_task_status", {"task_ref": "o/r#5", "status": "done"}),
+            ("add_task_comment", {"task_ref": "o/r#5", "body": "x"}),
+        ):
+            with pytest.raises(ToolError):
+                await client.call_tool(tool, args)
+        ok = await client.call_tool("get_task", {"task_ref": "o/r#5"})
+    assert ok.structured_content is not None
+    assert [r.method for r in gitea.requests] == ["GET"]
+    assert gitea.issues[5]["state"] == "open"
+    assert gitea.comments == []
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("1", True), ("true", True), ("yes", True), ("", False), ("0", False), ("false", False)],
+)
+def test_read_only_flag_from_env(value: str, expected: bool) -> None:
+    from mcp_servers.task_source import read_only_from_env
+
+    assert read_only_from_env({"TASK_SOURCE_READ_ONLY": value}) is expected
+    assert read_only_from_env({}) is False

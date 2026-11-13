@@ -9,6 +9,10 @@ the platform's own transitions without inventing labels.
 The admin token is held in memory only: it is never logged, and every error
 that reaches a tool result comes from :class:`GiteaError`, whose message is
 already redacted.
+
+``read_only=True`` (env ``TASK_SOURCE_READ_ONLY=1``) builds the sandbox-facing
+variant: only ``get_task`` / ``list_tasks`` exist, so an agent in a sandbox can
+read its task but never close or comment on any issue (M4c review I3).
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from collections.abc import Mapping
 from typing import Any, Literal
 
 import httpx
@@ -45,20 +50,30 @@ def status_comment(status: str, note: str = "") -> str:
     return f"{body}\n\n{note}" if note else body
 
 
+def read_only_from_env(env: Mapping[str, str]) -> bool:
+    """Whether ``TASK_SOURCE_READ_ONLY`` asks for the read-only variant."""
+    return env.get("TASK_SOURCE_READ_ONLY", "").strip().lower() in {"1", "true", "yes"}
+
+
 def create_task_source_app(
-    *, base_url: str, token: str, http: httpx.AsyncClient | None = None
+    *,
+    base_url: str,
+    token: str,
+    http: httpx.AsyncClient | None = None,
+    read_only: bool = False,
 ) -> FastMCP:
     """Build the task-source server over one Gitea instance.
 
     ``http`` is an injection seam for tests (``httpx.MockTransport``); by
-    default the server owns a client with a 30 s timeout.
+    default the server owns a client with a 30 s timeout. ``read_only`` omits
+    the write tools entirely (they are not registered, not merely refused).
     """
     gitea = GiteaIssuesClient(
         http if http is not None else httpx.AsyncClient(timeout=30.0),
         base_url=base_url,
         token=token,
     )
-    mcp: FastMCP = FastMCP("task-source")
+    mcp: FastMCP = FastMCP("task-reader" if read_only else "task-source")
 
     def _ref(task_ref: str) -> tuple[str, str, int]:
         try:
@@ -96,6 +111,9 @@ def create_task_source_app(
         _audit("list_tasks", task_ref_prefix, "ok")
         return [_with_ref(owner, repo, issue) for issue in issues]
 
+    if read_only:
+        return mcp
+
     @mcp.tool
     async def set_task_status(task_ref: str, status: TaskStatus, note: str = "") -> dict[str, Any]:
         """Record a platform status: done closes the issue, others keep it open."""
@@ -130,10 +148,15 @@ def _with_ref(owner: str, repo: str, issue: IssueSummary) -> dict[str, Any]:
 
 
 def main() -> None:
-    """Serve over streamable HTTP; config from env (GITEA_BASE_URL, GITEA_TOKEN, PORT)."""
+    """Serve over streamable HTTP.
+
+    Config from env: GITEA_BASE_URL, GITEA_TOKEN, PORT, TASK_SOURCE_READ_ONLY.
+    """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     app = create_task_source_app(
-        base_url=os.environ["GITEA_BASE_URL"], token=os.environ["GITEA_TOKEN"]
+        base_url=os.environ["GITEA_BASE_URL"],
+        token=os.environ["GITEA_TOKEN"],
+        read_only=read_only_from_env(os.environ),
     )
     app.run(
         transport="http",
