@@ -83,7 +83,7 @@ trap cleanup EXIT
 # ---------------------------------------------------------------------------
 echo "M4a flow: preflight — live stand"
 
-kubectl get nodes >/dev/null 2>&1 || fail "k3d cluster swarm-lab is not reachable"
+kubectl get nodes >/dev/null 2>&1 || fail "stand cluster is not reachable"
 docker info >/dev/null 2>&1 || fail "docker is not reachable on the host"
 
 # The worker writes a full clone of the target repo plus the run evidence under the
