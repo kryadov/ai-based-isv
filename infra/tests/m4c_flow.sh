@@ -14,7 +14,7 @@
 #      teardown, and the NetworkPolicy (MCP reachable, Postgres denied).
 #
 # Live dependencies (preflight below): everything m4b needs plus `section_mcp`
-# (task-source/llm deployments, NodePort 30085 mapped on the k3d LB).
+# (task-source/llm deployments, NodePort 30085 published on the host).
 #
 # Usage: ./infra/tests/m4c_flow.sh   (M4C_API_PORT overrides the agent_api port)
 set -euo pipefail
@@ -85,7 +85,9 @@ trap cleanup EXIT
 # ---------------------------------------------------------------------------
 echo "M4c flow: preflight — live stand"
 
-kubectl get nodes >/dev/null 2>&1 || fail "k3d cluster swarm-lab is not reachable"
+# shellcheck source=../scripts/cluster-lib.sh
+. infra/scripts/cluster-lib.sh
+kubectl get nodes >/dev/null 2>&1 || fail "stand cluster ($(swarm_cluster)) is not reachable"
 docker info >/dev/null 2>&1 || fail "docker is not reachable on the host"
 
 # The worker writes a full clone of the target repo plus the run evidence under the
@@ -108,17 +110,17 @@ uv run org-bootstrap apply --section agents >/dev/null 2>&1 \
   || fail "section_agents failed to apply (namespace/PVC/NetworkPolicy)"
 kubectl -n agents get pvc agent-scratch >/dev/null 2>&1 \
   || fail "PVC agent-scratch missing in namespace agents"
-docker port k3d-swarm-lab-serverlb 2>/dev/null | grep -q "30100/tcp" \
-  || fail "k3d does not publish the 30100-30110 NodePort range (section_agents should add it)"
-# The derived image must be visible to k3s pods (import is idempotent).
-k3d image import "$DERIVED_IMAGE" -c swarm-lab >/dev/null 2>&1 \
-  || fail "could not import $DERIVED_IMAGE into the k3d cluster"
+cluster_nodeport_published 30100 \
+  || fail "the cluster does not publish the 30100-30110 NodePort range (section_agents should add it)"
+# The derived image must be visible to k3s pods (import is idempotent; no-op on Rancher Desktop).
+cluster_image_import "$DERIVED_IMAGE" >/dev/null 2>&1 \
+  || fail "could not make $DERIVED_IMAGE available to the cluster"
 
 # --- MCP servers (section_mcp): task-source + llm in `agents`, NodePort 30085 ---
 uv run org-bootstrap apply --section mcp > "$TMP/section-mcp.log" 2>&1 \
   || { tail -20 "$TMP/section-mcp.log"; fail "section_mcp failed to apply"; }
-docker port k3d-swarm-lab-serverlb 2>/dev/null | grep -q "30085/tcp" \
-  || fail "k3d does not publish NodePort 30085 (section_mcp should add it)"
+cluster_nodeport_published 30085 \
+  || fail "the cluster does not publish NodePort 30085 (section_mcp should add it)"
 TASK_SOURCE_HOST_URL="http://localhost:30085/mcp"
 TASK_SOURCE_POD_URL="http://task-source.agents.svc.cluster.local:8000/mcp"
 LLM_POD_URL="http://llm.agents.svc.cluster.local:8000/mcp"

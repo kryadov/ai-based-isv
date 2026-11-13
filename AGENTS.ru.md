@@ -37,3 +37,7 @@ Python ≥3.12, src-layout, hatchling; mypy --strict без подавлений
 
 ## 10. Карта проекта
 `STATE.md` — состояние и следующий шаг (обновлять после каждого инкремента) · `ARCH.md`/`ARCH.ru.md` — архитектура со схемами · `TODO.md` — бэклог · спека + аддендумы — полный дизайн.
+
+## 11. Окружение стенда (директива владельца, 2026-11-14)
+
+Живой стенд работает на **встроенном Kubernetes Rancher Desktop** (k3s, движок moby) на Windows-машине — НЕ создавать k3d-кластер и НЕ поднимать отдельный WSL-дистрибутив. Все команды бутстрапа/флоу/гейтов — через toolbox-контейнер из Git Bash: `./infra/scripts/toolbox.sh <cmd>` (выставляет `SWARM_CLUSTER=rancher-desktop`). Подробности — INSTALL.ru.md «Windows (Rancher Desktop + toolbox)».

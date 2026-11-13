@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Top-level idempotent L0 bootstrap: k3d → all sections → env manifest.
+# Top-level idempotent L0 bootstrap: stand cluster (k3d / Rancher Desktop) → all sections → env manifest.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 
-"$ROOT/scripts/k3d-up.sh"
+# shellcheck source=scripts/cluster-lib.sh
+. "$ROOT/scripts/cluster-lib.sh"
+cluster_up
 "$ROOT/scripts/bootstrap.sh" vault
 "$ROOT/scripts/bootstrap.sh" cnpg
 "$ROOT/scripts/bootstrap.sh" gitea

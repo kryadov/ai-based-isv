@@ -4,6 +4,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 NS=platform
+# shellcheck source=cluster-lib.sh
+. "$ROOT/scripts/cluster-lib.sh"
 
 # CLI-хелперы OpenBao через exec в под (под выбирается по лейблу — имя меняется с чартом).
 # Рут-токен: infra/.vault-root-token (gitignored, создаётся section_vault при инициализации).
@@ -293,28 +295,19 @@ section_agents() {
   kubectl apply -f "$ROOT/agents/netpol-allow.yaml"
   # k3d publishes only individually mapped host ports; add the sandbox
   # NodePort range to the load balancer once (live serverlb swap, no cluster
-  # recreation). Guarded: skip when the range is already mapped.
-  if command -v k3d >/dev/null 2>&1 && command -v docker >/dev/null 2>&1; then
-    if ! docker port k3d-swarm-lab-serverlb 2>/dev/null | grep -q "30100/tcp"; then
-      k3d cluster edit swarm-lab --port-add "30100-30110:30100-30110@loadbalancer" \
-        && echo "agents: added k3d NodePort range 30100-30110"
-    else
-      echo "agents: k3d NodePort range 30100-30110 already mapped"
-    fi
-  else
-    echo "agents: k3d/docker not found — skipping NodePort range mapping" >&2
-  fi
+  # recreation). No-op on Rancher Desktop (it forwards every NodePort).
+  cluster_publish_nodeport 30100-30110
   kubectl -n agents get pvc agent-scratch >/dev/null
   echo "agents: namespace, agent-scratch PVC, network policies Ready"
 }
 
 section_mcp() {
   # MCP servers (M4c): task-source (Gitea Issues) + llm (LiteLLM proxy) in `agents`.
-  # The image is built on the host and imported into k3d: `agents` is
+  # The image is built on the host and made visible to the cluster: `agents` is
   # default-deny, so pods cannot pip-install at boot.
   local img="mcp-servers:0.1.0" gt mk
   docker build -q -f "$ROOT/mcp/Dockerfile" -t "$img" "$ROOT/../packages/mcp_servers" >/dev/null
-  k3d image import "$img" -c swarm-lab >/dev/null
+  cluster_image_import "$img"
   # Credentials: OpenBao -> per-server k8s Secrets (values never echoed).
   gt="$(vcli kv get -field=token secret/gitea/admin 2>/dev/null || true)"
   [ -n "$gt" ] || { echo "mcp: no Gitea token at secret/gitea/admin (OpenBao sealed?)"; exit 1; }
@@ -330,10 +323,8 @@ section_mcp() {
   kubectl -n agents rollout restart deploy/task-source deploy/llm >/dev/null
   kubectl -n agents rollout status deploy/task-source --timeout=180s
   kubectl -n agents rollout status deploy/llm --timeout=180s
-  # Host access for the worker's tracker loop: map NodePort 30085 once.
-  if ! docker port k3d-swarm-lab-serverlb 2>/dev/null | grep -q "30085/tcp"; then
-    k3d cluster edit swarm-lab --port-add "30085:30085@loadbalancer"       && echo "mcp: added k3d NodePort 30085"
-  fi
+  # Host access for the worker's tracker loop: publish NodePort 30085 once.
+  cluster_publish_nodeport 30085
   local code i
   code=""
   for i in $(seq 1 20); do
@@ -348,7 +339,7 @@ section_mcp() {
 case "${1:-all}" in
   vault)  section_vault ;;
   cnpg)   section_cnpg ;;
-  cluster) bash "$ROOT/scripts/k3d-up.sh" ;;
+  cluster) cluster_up ;;
   gitea)  section_gitea ;;
   runner) section_runner ;;
   argocd) section_argocd ;;
@@ -359,7 +350,7 @@ case "${1:-all}" in
   litellm) section_litellm ;;
   agents) section_agents ;;
   mcp)    section_mcp ;;
-  # `all` brings the k3d cluster up first so `org-bootstrap apply` works on a fresh machine.
-  all)    bash "$ROOT/scripts/k3d-up.sh"; section_vault; section_cnpg; section_gitea; section_runner; section_argocd; section_monitoring; section_loki; section_demo; section_openproject; section_litellm; section_agents; section_mcp ;;
+  # `all` brings the stand cluster (k3d / Rancher Desktop) up first so `org-bootstrap apply` works on a fresh machine.
+  all)    cluster_up; section_vault; section_cnpg; section_gitea; section_runner; section_argocd; section_monitoring; section_loki; section_demo; section_openproject; section_litellm; section_agents; section_mcp ;;
   *) echo "usage: $0 [cluster|vault|cnpg|gitea|runner|argocd|monitoring|loki|demo|openproject|litellm|agents|mcp|all]"; exit 2 ;;
 esac

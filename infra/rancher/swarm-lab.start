@@ -1,0 +1,18 @@
+#!/bin/sh
+# Rancher Desktop provisioning script for the swarm-lab stand.
+# Installed into %LOCALAPPDATA%\rancher-desktop\provisioning\ by
+# infra/scripts/rancher-up.sh; Rancher Desktop runs *.start scripts inside its
+# WSL distro BEFORE k3s starts, so the k3s config below applies on every boot.
+set -eu
+
+# k3s: widen the NodePort range (the stand publishes Postgres on 15432) —
+# the same flag the k3d config passes.
+mkdir -p /etc/rancher/k3s
+cat > /etc/rancher/k3s/config.yaml <<'K3S'
+service-node-port-range: "10000-32767"
+K3S
+
+# The shared WSL2 kernel default of 128 inotify instances is exhausted by the
+# cluster; the sandbox opencode server then hangs silently (INSTALL.md).
+sysctl -w fs.inotify.max_user_instances=1024 >/dev/null
+sysctl -w fs.inotify.max_user_watches=1048576 >/dev/null

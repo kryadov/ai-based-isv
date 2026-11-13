@@ -632,8 +632,8 @@ async def test_mcp_status_waits_out_pending_servers(
 ) -> None:
     # Live m4c: servers connect lazily; one read right after the prompt saw
     # "llm" still pending. The executor re-reads (bounded) until none pend.
-    import httpx
     import agent_runtime.opencode_executor as oe
+    import httpx
 
     monkeypatch.setattr(oe, "MCP_SETTLE_INTERVAL_SECONDS", 0.01)
     terminal = {"id": "e", "type": "session.execution.succeeded", "data": {"sessionID": "ses_test"}}
