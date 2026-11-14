@@ -20,8 +20,10 @@ def test_check_reports_known_tools(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SWARM_CLUSTER", raising=False)
     result = runner.invoke(app, ["check"])
     output = result.output
-    for tool in ("docker", "k3d", "helm", "kubectl", "uv", "gh", "ollama", "psql"):
+    for tool in ("docker", "k3d", "helm", "kubectl", "uv", "gh", "psql"):
         assert tool in output
+    # No GPU on the stand: models come from an external API, not host Ollama.
+    assert "ollama" not in output
 
 
 def test_check_all_returns_results() -> None:
@@ -48,8 +50,9 @@ def test_required_tools_rancher_desktop_drops_k3d() -> None:
 
     tools = required_tools("rancher-desktop")
     assert "k3d" not in tools
-    for tool in ("docker", "helm", "kubectl", "uv", "gh", "ollama", "psql"):
+    for tool in ("docker", "helm", "kubectl", "uv", "gh", "psql"):
         assert tool in tools
+    assert "ollama" not in tools
 
 
 def test_check_follows_swarm_cluster_env(monkeypatch: pytest.MonkeyPatch) -> None:

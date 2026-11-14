@@ -12,7 +12,8 @@ import subprocess
 from dataclasses import dataclass
 from typing import Final
 
-CHECKS: Final[tuple[str, ...]] = ("docker", "k3d", "helm", "kubectl", "uv", "gh", "ollama", "psql")
+# No host model server: the stand has no GPU, LiteLLM routes to an external API.
+CHECKS: Final[tuple[str, ...]] = ("docker", "k3d", "helm", "kubectl", "uv", "gh", "psql")
 
 
 def required_tools(cluster: str) -> tuple[str, ...]:

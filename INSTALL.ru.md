@@ -63,7 +63,7 @@ Python 3.12 подхватится автоматически (`.python-version`
 | OpenBao UI/API | port-forward 8200 | unseal/init ключи: `infra/.vault-unseal-keys.json`; root token: `infra/.vault-root-token` |
 | Postgres | внутри кластера `postgres-platform-rw.platform:5432` | БД `gitea`, `openproject` (user `gitea`, secret `postgres-platform-app`) |
 | OpenProject UI | http://localhost:30083 | `op-admin` (пароль в Vault `secret/openproject/admin`) ⚠ password-login сломан в v17-slim — см. TODO |
-| LiteLLM API | http://localhost:30084/v1 | Bearer master key (Vault `secret/litellm/master`); модели: qwen-coder, qwen3 |
+| LiteLLM API | http://localhost:30084/v1 | Bearer master key (Vault `secret/litellm/master`); модели: qwen-coder, qwen3 (OpenRouter; ключ в Vault `secret/litellm/openrouter`, задаётся `bootstrap.sh llm-key`) |
 | Argo CD UI | http://localhost:30081 | `admin` / пароль из secret `argocd-initial-admin-secret` |
 | Grafana | http://localhost:30082 | `admin` / пароль в Vault `secret/grafana/admin` |
 

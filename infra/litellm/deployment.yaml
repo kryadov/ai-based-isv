@@ -1,5 +1,11 @@
 # LiteLLM gateway — single entry point for agent model access (spec §7.8).
-# Model v0: local Ollama on the host (host.lima.internal — colima/lima DNS; for Docker Desktop — host.docker.internal).
+# Models: an external metered API (OpenRouter) — the stand has no GPU, so no
+# local inference. The alias names are historical and kept stable: the
+# acceptance flows (`litellm/qwen3`) and the llm MCP server address them.
+#   qwen3      — the executor/agent model: must emit real OpenAI tool_calls.
+#   qwen-coder — cheap light model (gateway pings, short completions).
+# The key never lives in git: OpenBao `secret/litellm/openrouter` → Secret
+# `litellm-provider` (synced by section_litellm) → env OPENROUTER_API_KEY.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -10,14 +16,12 @@ data:
     model_list:
       - model_name: qwen-coder
         litellm_params:
-          model: openai/qwen2.5-coder:7b
-          api_base: http://host.lima.internal:11434/v1
-          api_key: ollama
+          model: openrouter/deepseek/deepseek-v4.1-flash
+          api_key: os.environ/OPENROUTER_API_KEY
       - model_name: qwen3
         litellm_params:
-          model: openai/qwen3:latest
-          api_base: http://host.lima.internal:11434/v1
-          api_key: ollama
+          model: openrouter/z-ai/glm-5.3
+          api_key: os.environ/OPENROUTER_API_KEY
     general_settings:
       master_key: os.environ/LITELLM_MASTER_KEY
     litellm_settings:
@@ -50,6 +54,11 @@ spec:
                 secretKeyRef:
                   name: litellm-master
                   key: master-key
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-provider
+                  key: openrouter-api-key
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

@@ -39,7 +39,7 @@ if [ -n "${LOCALAPPDATA:-}" ]; then
 fi
 
 # Image tag follows the toolbox sources, so edits rebuild it automatically.
-tag="$(cat "$ROOT/infra/toolbox/Dockerfile" "$ROOT/infra/toolbox/ollama-shim.sh" | sha256sum | cut -c1-12)"
+tag="$(sha256sum < "$ROOT/infra/toolbox/Dockerfile" | cut -c1-12)"
 img="swarm-toolbox:$tag"
 if ! docker image inspect "$img" >/dev/null 2>&1; then
   echo "toolbox: building $img" >&2
@@ -64,6 +64,5 @@ MSYS_NO_PATHCONV=1 exec docker run --rm "${tty_flags[@]}" \
   -v swarm-toolbox-uv-python:/opt/uv-python \
   -e UV_PROJECT_ENVIRONMENT=/opt/venv \
   -e SWARM_CLUSTER=rancher-desktop \
-  -e OLLAMA_HOST="${OLLAMA_HOST:-http://host.docker.internal:11434}" \
   -e GITHUB_TOKEN="${GITHUB_TOKEN:-}" \
   "$img" "$@"

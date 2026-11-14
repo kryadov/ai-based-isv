@@ -248,15 +248,18 @@ section_openproject() {
 }
 
 section_litellm() {
-  # Шлюз моделей. Master key → Vault + secret; конфиг — model_list над хостовой Ollama.
-  # Ollama на хосте: litellm-под резолвит хост через hostAliases (IP lima-хоста определяется динамически).
-  local mk hostip
+  # Model gateway. Master key → OpenBao + Secret; models come from an external
+  # API (OpenRouter, no GPU on the stand). The provider key is put into OpenBao
+  # by the owner (`bootstrap.sh llm-key`) and synced here into a Secret.
+  local mk okey
   mk="$(vcli kv get -field=master-key secret/litellm/master 2>/dev/null || true)"
   [ -n "$mk" ] || { mk="sk-lab-$(openssl rand -hex 12)"; vcli kv put secret/litellm/master "master-key=$mk" >/dev/null; }
   [ -n "$mk" ] || { echo "litellm: пустой master key — прерываю"; exit 1; }
-  # colima/lima -> host.lima.internal; Docker Desktop / Rancher Desktop (Windows) -> host.docker.internal
-  hostip="$(docker run --rm alpine sh -c 'getent hosts host.lima.internal || getent hosts host.docker.internal' | awk 'NR==1{print $1}')"
-  [ -n "$hostip" ] || { echo "litellm: не удалось определить IP хоста (host.lima.internal / host.docker.internal)"; exit 1; }
+  okey="$(vcli kv get -field=api-key secret/litellm/openrouter 2>/dev/null || true)"
+  [ -n "$okey" ] || { echo "litellm: no OpenRouter key at secret/litellm/openrouter — run: ./infra/scripts/toolbox.sh bash infra/scripts/bootstrap.sh llm-key"; exit 1; }
+  kubectl -n "$NS" create secret generic litellm-provider \
+    --from-literal="openrouter-api-key=$okey" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   # БД для LiteLLM (ключи/teams хранятся там же)
   kubectl apply -f "$ROOT/postgres/litellm-database.yaml"
   kubectl -n "$NS" wait --for=jsonpath='{.status.ready}'=true database/litellm-db --timeout=180s 2>/dev/null || true
@@ -270,8 +273,9 @@ section_litellm() {
     --from-literal="master-key=$mk" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   kubectl apply -f "$ROOT/litellm/deployment.yaml"
-  kubectl -n "$NS" patch deploy litellm --type=strategic \
-    -p "{\"spec\":{\"template\":{\"spec\":{\"hostAliases\":[{\"ip\":\"$hostip\",\"hostnames\":[\"host.lima.internal\"]}]}}}}" >/dev/null
+  # Drop the host-alias pin left by the former host-Ollama setup (no-op if absent).
+  kubectl -n "$NS" patch deploy litellm --type=json \
+    -p '[{"op":"remove","path":"/spec/template/spec/hostAliases"}]' >/dev/null 2>&1 || true
   kubectl -n "$NS" rollout restart deploy/litellm
   kubectl -n "$NS" wait --for=condition=Available deployment/litellm --timeout=600s
   local code i
@@ -285,6 +289,27 @@ section_litellm() {
   done
   [ "$code" = "200" ] || { echo "litellm: completion failed ($code)"; exit 1; }
   echo "litellm: ready (api http://localhost:30084/v1)"
+}
+
+section_llm_key() {
+  # Owner-only: store the OpenRouter API key in OpenBao. Read silently from
+  # the terminal (or stdin when piped) so it never lands in argv, shell
+  # history, git or a transcript. Re-run `litellm` afterwards to sync it.
+  local key
+  if [ -t 0 ]; then
+    read -rsp "OpenRouter API key: " key; echo
+  else
+    IFS= read -r key || true
+  fi
+  [ -n "$key" ] || { echo "llm-key: empty key — nothing stored"; exit 1; }
+  local POD RTOK
+  POD="$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=openbao -o jsonpath='{.items[0].metadata.name}')"
+  RTOK="$(cat "$ROOT/.vault-root-token" 2>/dev/null || true)"
+  [ -n "$RTOK" ] || { echo "openbao: нет root-токена ($ROOT/.vault-root-token)"; exit 2; }
+  # `api-key=-` makes bao read the value from stdin (exec -i), never from argv.
+  printf '%s' "$key" | kubectl -n "$NS" exec -i "$POD" -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$RTOK" \
+    bao kv put secret/litellm/openrouter api-key=- >/dev/null
+  echo "llm-key: stored at secret/litellm/openrouter (now: bootstrap.sh litellm)"
 }
 
 section_agents() {
@@ -351,9 +376,10 @@ case "${1:-all}" in
   demo)   section_demo ;;
   openproject) section_openproject ;;
   litellm) section_litellm ;;
+  llm-key) section_llm_key ;;
   agents) section_agents ;;
   mcp)    section_mcp ;;
   # `all` brings the stand cluster (k3d / Rancher Desktop) up first so `org-bootstrap apply` works on a fresh machine.
   all)    cluster_up; section_vault; section_cnpg; section_gitea; section_runner; section_argocd; section_monitoring; section_loki; section_demo; section_openproject; section_litellm; section_agents; section_mcp ;;
-  *) echo "usage: $0 [cluster|vault|cnpg|gitea|runner|argocd|monitoring|loki|demo|openproject|litellm|agents|mcp|all]"; exit 2 ;;
+  *) echo "usage: $0 [cluster|vault|cnpg|gitea|runner|argocd|monitoring|loki|demo|openproject|litellm|llm-key|agents|mcp|all]"; exit 2 ;;
 esac

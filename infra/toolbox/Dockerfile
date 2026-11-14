@@ -37,7 +37,5 @@ COPY --from=uv /uv /uvx /usr/local/bin/
 # The repo is bind-mounted from Windows (different owner) — trust it.
 RUN git config --system safe.directory '*'
 
-COPY ollama-shim.sh /usr/local/bin/ollama
-
 ENV UV_LINK_MODE=copy \
     UV_PYTHON_INSTALL_DIR=/opt/uv-python
