@@ -3,16 +3,16 @@
 > Read this file FIRST. Then `ARCH.md` (how it works, diagrams), `AGENTS.md` (rules), `TODO.md` (backlog).
 > This file is updated at the end of EVERY increment. If your findings contradict it — verify, then update it.
 
-**Current (2026-11-15): M4c is on branch `feat/m4c-mcp-servers`, PR to main, awaiting the owner's merge.**
+**Current (2026-11-15): M4 is CLOSED — release [v0.4.0](https://github.com/kryadov/ai-based-isv/releases/tag/v0.4.0).** PR #25 is merged to main as `d2d6969`.
+**Next step: M5 (gates + review).** Start it with `brainstorming` → `writing-plans` (AGENTS.md §1) against spec §7 and the M4 design. The deferred M4c minors and the security follow-ups (MCP auth token, scoped LiteLLM virtual keys) are in TODO.md.
 Work moved to a no-GPU Windows workstation:
 - **Stand:** Rancher Desktop's built-in k3s plus the toolbox container (AGENTS.md §10; INSTALL.md "Windows (Rancher Desktop + toolbox)").
 - **LLM:** external. The z.ai GLM Coding Plan comes first, OpenRouter is the fallback on plan limits, and keys go `.env` → OpenBao (AGENTS.md §10).
 - **Final-review findings:** I1–I3 fixed. For I2+I3, sandboxes read tasks through the read-only `task-reader`, and NetworkPolicy keeps the write-capable `task-source` host-only.
 - **Acceptance on the new stand:** see "Verified acceptance flows".
-- **After merge:** `./infra/scripts/release.sh v0.4.0` closes M4, only with owner approval.
 - **Previous move:** `docs/superpowers/HANDOFF-2026-11-12.md`.
 
-Last updated: 2026-11-15 (M4c review fixes, Rancher/toolbox stand, z.ai + OpenRouter LLM, flows re-verified live)
+Last updated: 2026-11-15 (M4c merged, v0.4.0 released — M4 closed; next M5)
 
 ## What this project is
 
@@ -100,16 +100,12 @@ The worker drives the tracker status loop (In Progress → Done/Blocked with evi
 - ✅ **M3 — control plane (DONE)**: `isv_core` domain + `agent_api` (vertex queue with lease, identities, budgets, HITL inbox, audit journal, merge queue) — merged to main, **m3_flow PASS on live Postgres**, CI green, release **v0.3.0**. Plan: `docs/superpowers/plans/2026-11-09-m3-control-plane.md`.
 - ✅ **M4a — Executor/OpenCode locally (DONE 2026-11-10)**. Plan: `docs/superpowers/plans/2026-11-09-m4a-executor-opencode.md`; design: `docs/superpowers/specs/2026-11-09-m4-agent-runtime-design.md`.
 - ✅ **M4b — sandbox in k3s (DONE 2026-11-10)**. Plan: `docs/superpowers/plans/2026-11-10-m4b-k3s-sandbox.md`; spike notes: `docs/superpowers/research/2026-11-10-m4b-*.md`.
-- 🔄 **M4c — MCP servers + tracker status loop**:
-  - implemented; final review: 0 Critical, I1–I3 fixed, minors in TODO.md;
-  - live acceptance on the new stand: all eight flows PASS (see above);
-  - PR `feat/m4c-mcp-servers` → main;
-  - after merge, release **v0.4.0** closes M4 (owner approval).
-  - Then M5 (gates + review), M6 (canary), M7 (memory), M8 (swarm mode), M9 (polyglot dogfood), M10 (UI panel + Automations).
+- ✅ **M4c — MCP servers + tracker status loop (DONE 2026-11-15)**: final review 0 Critical, I1–I3 fixed, minors in TODO.md; all eight flows PASS live on the Rancher stand; PR #25 merged; release **v0.4.0** closes M4. Plan: `docs/superpowers/plans/2026-11-11-m4c-mcp-servers.md`.
+- ⏭️ **Next: M5 (gates + review)**, then M6 (canary), M7 (memory), M8 (swarm mode), M9 (polyglot dogfood), M10 (UI panel + Automations).
 
 ## Releases / conventions
 
-- Tags/releases per milestone, changelog from merged PRs: `./infra/scripts/release.sh v0.x.y` (spec §13.8). Published: **v0.1.0** (M1), **v0.2.0** (M2 close), **v0.3.0** (M3 close). Next: v0.4.0 at M4 close.
+- Tags/releases per milestone, changelog from merged PRs: `./infra/scripts/release.sh v0.x.y` (spec §13.8). Published: **v0.1.0** (M1), **v0.2.0** (M2 close), **v0.3.0** (M3 close), **v0.4.0** (M4 close, 2026-11-15). Next: v0.5.0 at M5 close.
 - Recursive self-development (platform builds itself): spec §13.7 — level 1 (meta-automations on our own logs) after M3, level 2 (this repo as a target project via tracker+pipeline) after M5/M6. Model/subscription routing research for that path: `docs/superpowers/research/2026-11-14-model-subscriptions-routing.md`.
 - External projects deliver tested release artifacts / Docker images to the org registry (spec §13.5); offboarding in v0 via `org-bootstrap offboard` (spec §13.6).
 - Onboarding per project kind (§13.1): per-kind repo templates + tutorials planned (TODO), wizard v0 in CLI, Projects UI in M10 — confirmed by owner.
