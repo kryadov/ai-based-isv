@@ -228,10 +228,34 @@ curl -s "http://127.0.0.1:8472/memory/slice?project=swarm-lab/isv-product&paths=
 
 This opens a PR in org memory for review. Agents never write org memory.
 
-## 10. What is not there yet
+## 10. Swarm mode: one task, several agents in parallel (M8)
+
+A larger task is split by the **coordinator** into a vertex graph. Independent vertices run **in parallel** on several workers; dependent ones start once their deps are merged and get a **handoff** (files, PR, review of each dep). Every vertex goes through the corridor as its own PR. At the end the **judge** checks that the merged `main` passes the done command.
+
+```bash
+./infra/scripts/toolbox.sh bash infra/tests/m8_flow.sh   # issue → plan → 3 workers → corridor ×N → judge
+```
+
+Parts, all on the same worker env as `selfdev_flow.sh`:
+
+```bash
+uv run python -m agent_runtime.swarm plan --run-id N --title "..." --body "..." \
+  --allowed "src/**,tests/**,docs/**" --done-cmd "uv sync --quiet --all-groups && uv run --quiet pytest -q"
+uv run python -m agent_runtime.swarm run --workers 3          # until every vertex is done/failed
+uv run python -m agent_runtime.swarm judge --run-id N --done-cmd "..." --project swarm-lab/<repo>
+curl -s http://127.0.0.1:8472/metrics                          # swarm_vertices / swarm_hitl_pending / swarm_runs
+```
+
+Guarantees:
+- The planner cannot widen scope or run commands.
+- Parallel vertices never share files.
+- A bad plan degrades to a single vertex.
+- Workers pause taking new work while merges wait for you (backpressure, default 3).
+
+## 11. What is not there yet
 
 - Embeddings and code indexing: retrieval is lexical for now.
-- Swarm parallelism: M8.
+- Baseline invalidation, specialist consult roles, workers on several hosts.
 - A web panel: M10.
 
 See [STATE.md](STATE.md) and [TODO.md](TODO.md).

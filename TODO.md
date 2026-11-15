@@ -78,3 +78,12 @@
 - [ ] Memory outages are logged, not audited (`memory_skipped`): the fail-open client cannot tell an outage from an empty slice.
 - [ ] Episode TTL / consolidation job (drift and poisoning guard).
 - [ ] A same-image deploy with a config change (fault env) gets a postmortem that only names the image (`rolled back to <same image>`): include the env/config diff.
+
+## M8 follow-ups (2026-11-16)
+
+- [ ] Tracker status for multi-vertex runs: every vertex mirrors into the same issue (a finished vertex closes it while others still run) — aggregate per run.
+- [ ] Baseline invalidation and coordinator reset (spec §7.3): vertices are not re-planned when main moves under them.
+- [ ] Specialist consult roles (architecture/security/tests) beyond the bot reviewer; judge as an LLM role for non-test criteria.
+- [ ] Working-memory scratchpad for the coordinator (today: deps' results are the handoff).
+- [ ] Workers on several hosts (today: one host, N processes); NodePort pool 30100–30110 caps concurrent sandboxes at 11.
+- [ ] Scrape the control-plane `/metrics` when agent_api runs in-cluster (today it runs on the host in flows).
