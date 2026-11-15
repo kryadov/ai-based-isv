@@ -68,6 +68,9 @@ class WorkerSettings(BaseSettings):
     deploy_namespace: str = "prod"
     prometheus_url: str = "http://localhost:30090"  # host-reachable (NodePort)
     deploy_timeout_s: float = 900.0
+    # --- project memory (M7): slice into the prompt, episodes on close ---
+    memory_enabled: bool = True
+    extractor_model: str = "qwen-coder"  # light LiteLLM alias (memory-extractor)
 
     @model_validator(mode="after")
     def _required_at_runtime(self) -> "WorkerSettings":

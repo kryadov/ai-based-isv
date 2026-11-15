@@ -15,8 +15,9 @@ import json
 import logging
 import os
 import shutil
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 import httpx
 
@@ -36,6 +37,12 @@ from agent_runtime.kube_sandbox import (
     kubectl_runner as _kubectl_runner,
 )
 from agent_runtime.manifest import write_manifest
+from agent_runtime.memory import (
+    MemoryClient,
+    extract_lessons,
+    memory_prompt_section,
+    project_of,
+)
 from agent_runtime.merge_policy import touches_protected
 from agent_runtime.opencode_executor import OpencodeExecutor
 from agent_runtime.pathguard import DiffUnparseable, diff_files, filter_violations
@@ -49,6 +56,7 @@ from agent_runtime.worker_gates import (
     default_gate_runner,
     fix_attempt,
     read_policy,
+    reviewer_base,
 )
 
 logger = logging.getLogger(__name__)
@@ -345,6 +353,30 @@ def _reset_sandbox(repo_dir: Path, sandbox_dir: Path) -> Path:
     return clone_local(repo_dir, sandbox_dir)
 
 
+class MemoryPort(Protocol):
+    """Project episodic memory (M7): fail-open slice/add (see agent_runtime.memory)."""
+
+    async def slice(
+        self, project: str, paths: list[str], text: str, limit: int = 5
+    ) -> list[dict[str, Any]]: ...
+
+    async def add(
+        self,
+        project: str,
+        kind: str,
+        title: str,
+        body: str,
+        paths: list[str],
+        *,
+        run_id: int | None = None,
+        vertex_id: int | None = None,
+        tags: list[str] | None = None,
+    ) -> int | None: ...
+
+
+Extractor = Callable[[str, list[str], str], Awaitable[list[dict[str, str]]]]
+
+
 def build_vertex_prompt(vertex: dict[str, Any]) -> str:
     """Assemble the prompt the sandbox receives from the vertex metadata."""
     name = vertex.get("name") or "unnamed"
@@ -433,8 +465,18 @@ async def _process_vertex(
     stop: asyncio.Event,
     gate_runner: GateRunner | None = None,
     deploy_runner: DeployRunner | None = None,
+    memory: MemoryPort | None = None,
+    extractor: Extractor | None = None,
 ) -> None:
     vertex_id: int = vertex["id"]
+    project = project_of(settings.task_ref, settings.repo_url)
+
+    async def remember(kind: str, title: str, body: str, paths: list[str]) -> None:
+        if memory is not None:
+            await memory.add(
+                project, kind, title, body, paths, run_id=settings.run_id, vertex_id=vertex_id
+            )
+
     session: ExecutionSession | None = None
     heartbeat_task: asyncio.Task[None] | None = None
 
@@ -469,11 +511,23 @@ async def _process_vertex(
         # for validation and push.
         sandbox_dir = await asyncio.to_thread(_reset_sandbox, repo_dir, _sandbox_dir(settings))
 
+        # Project memory slice (M7): lessons of earlier tasks on the same project,
+        # ranked by path overlap and task words; fail-open (empty on any error).
+        paths_allow = [str(p) for p in vertex.get("paths_allow", [])]
+        memory_slice = (
+            await memory.slice(project, paths_allow, str(vertex.get("name", "")))
+            if memory is not None
+            else []
+        )
+        prompt = build_vertex_prompt(vertex)
+        section = memory_prompt_section(memory_slice)
+        if section:
+            prompt = f"{prompt}\n\n{section}"
         request = ExecutionRequest(
             run_id=settings.run_id,
             vertex_id=vertex_id,
             name=vertex["name"],
-            prompt=build_vertex_prompt(vertex),
+            prompt=prompt,
             paths_allow=list(vertex.get("paths_allow", [])),
             done_when=vertex.get("done_when", ""),
             repo_url=settings.repo_url,
@@ -486,6 +540,10 @@ async def _process_vertex(
         # and is validated by integration tests.
         _ = sandbox_dir
         session = await executor.start(request)
+        if memory_slice:
+            session.session_log.append(
+                "memory_slice", {"episodes": [e.get("id") for e in memory_slice]}
+            )
 
         wait_task = asyncio.create_task(session.wait_done())
         lease_wait = asyncio.create_task(lease_lost.wait())
@@ -664,9 +722,15 @@ async def _process_vertex(
                         {"pr_url": outcome.pr_url, "vertex_id": vertex_id, "reason": reason},
                     )
                 # A human rejection is final: retrying would ask the human again.
-                await client.fail(
-                    vertex_id, reason=reason, terminal=outcome.reason == "hitl_rejected"
-                )
+                terminal = outcome.reason == "hitl_rejected"
+                await client.fail(vertex_id, reason=reason, terminal=terminal)
+                if terminal:
+                    await remember(
+                        "failure",
+                        f"{vertex.get('name', '')}: {reason}",
+                        f"PR {outcome.pr_url} was rejected by the human reviewer.",
+                        paths_allow,
+                    )
                 await client.audit(
                     action="fail",
                     target=f"vertex:{vertex_id}",
@@ -684,6 +748,20 @@ async def _process_vertex(
                 session.session_log.append("deploy", deployed.model_dump())
                 result["deploy_verdict"] = deployed.model_dump(exclude={"postmortem"})
                 await client.note(f"deployed {deployed.image} to prod: {deployed.status}")
+                if deployed.status == "succeeded":
+                    await remember(
+                        "deploy",
+                        f"deployed {deployed.image}: succeeded (revision {deployed.revision})",
+                        f"Canary passed analysis; previous {deployed.previous_image}.",
+                        changed,
+                    )
+                elif deployed.postmortem:
+                    await remember(
+                        "postmortem",
+                        f"canary {deployed.image} rolled back",
+                        deployed.postmortem,
+                        changed,
+                    )
                 if deployed.postmortem:
                     manifest = result.get("manifest_path")
                     evidence = (
@@ -700,6 +778,10 @@ async def _process_vertex(
                     # transient error: re-running the agent would not change it.
                     reason = f"deploy:{deployed.status}"
                     await client.fail(vertex_id, reason=reason, terminal=True)
+                    if not deployed.postmortem:
+                        await remember(
+                            "failure", f"{vertex.get('name', '')}: {reason}", reason, changed
+                        )
                     await client.audit(
                         action="fail",
                         target=f"vertex:{vertex_id}",
@@ -708,6 +790,11 @@ async def _process_vertex(
                     )
                     return
 
+        if extractor is not None and memory is not None:
+            for lesson in await extractor(
+                str(vertex.get("name", "")), changed, str(result.get("review_summary", ""))
+            ):
+                await remember("lesson", lesson["title"], lesson["body"], changed)
         await client.complete(vertex_id, result)
         await client.audit(
             action="complete",
@@ -746,6 +833,8 @@ async def worker_loop(
     tracker: TrackerClient | None = None,
     gate_runner: GateRunner | None = None,
     deploy_runner: DeployRunner | None = None,
+    memory: MemoryPort | None = None,
+    extractor: Extractor | None = None,
 ) -> None:
     """Claim and execute vertices for ``settings.run_id`` until ``stop`` is set.
 
@@ -766,6 +855,12 @@ async def worker_loop(
         else ControlPlaneClient(http, settings)
     )
     blacklisted: set[int] = set()
+    llm_http: httpx.AsyncClient | None = None
+    if settings.memory_enabled and memory is None:
+        memory = MemoryClient(http, settings.api_url)
+    if settings.memory_enabled and extractor is None:
+        llm_http = httpx.AsyncClient(timeout=120.0)
+        extractor = _default_extractor(settings, llm_http)
 
     try:
         while not stop_event.is_set():
@@ -797,18 +892,55 @@ async def worker_loop(
                         outcome="error",
                         payload={"reason": "max_attempts_exceeded"},
                     )
+                    if memory is not None:
+                        await memory.add(
+                            project_of(settings.task_ref, settings.repo_url),
+                            "failure",
+                            f"{vertex.get('name', '')}: max_attempts_exceeded",
+                            f"The vertex failed {attempts} attempts and was given up.",
+                            [str(p) for p in vertex.get("paths_allow", [])],
+                            run_id=settings.run_id,
+                            vertex_id=vertex_id,
+                        )
                     blacklisted.add(vertex_id)
                 await _sleep_or_stop(stop_event, settings.poll_interval_seconds)
                 continue
 
             await _process_vertex(
-                settings, executor, client, vertex, stop_event, gate_runner, deploy_runner
+                settings,
+                executor,
+                client,
+                vertex,
+                stop_event,
+                gate_runner,
+                deploy_runner,
+                memory,
+                extractor,
             )
     finally:
         if own_http:
             await http.aclose()
+        if llm_http is not None:
+            await llm_http.aclose()
         if tracker_http is not None:
             await tracker_http.aclose()
+
+
+def _default_extractor(settings: WorkerSettings, http: httpx.AsyncClient) -> Extractor:
+    """memory-extractor via the host-reachable LiteLLM light alias (fail-open)."""
+
+    async def extract(task: str, changed: list[str], review: str) -> list[dict[str, str]]:
+        return await extract_lessons(
+            http,
+            base_url=f"{reviewer_base(settings)}/v1",
+            api_key=settings.litellm_api_key,
+            model=settings.extractor_model,
+            task=task,
+            changed=changed,
+            review_summary=review,
+        )
+
+    return extract
 
 
 def main() -> None:

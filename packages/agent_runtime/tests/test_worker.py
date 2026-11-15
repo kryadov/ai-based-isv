@@ -252,6 +252,7 @@ def _settings(tmp_path: Path, repo_url: str) -> WorkerSettings:
         base_branch="main",
         litellm_base_url="http://litellm.test/v1",
         model="litellm/qwen-coder",
+        memory_enabled=False,  # memory tests inject a FakeMemory explicitly
     )
 
 
@@ -907,6 +908,8 @@ async def _run_gated(
     gates_enabled: bool = True,
     tracker: FakeTracker | None = None,
     deploy_runner: Any = None,
+    memory: Any = None,
+    extractor: Any = None,
 ) -> tuple[FakeControlPlane, Path]:
     from agent_runtime.tracker import TrackerClient
 
@@ -936,6 +939,8 @@ async def _run_gated(
                 tracker=TrackerClient(tracker_http, "http://tracker.test/mcp") if tracker else None,
                 gate_runner=runner,
                 deploy_runner=deploy_runner,
+                memory=memory,
+                extractor=extractor,
             )
         )
         done = asyncio.ensure_future(plane.complete_called.wait())
@@ -1217,3 +1222,155 @@ async def test_deploy_disabled_by_default(tmp_path: Path) -> None:
     plane, _ = await _run_gated(tmp_path, runner=_merged)
     result = plane.complete_calls[0][1]["result"]
     assert "deploy_verdict" not in result
+
+
+# --- project memory (M7) --------------------------------------------------------
+
+
+class FakeMemory:
+    def __init__(self, episodes: list[dict[str, Any]] | None = None) -> None:
+        self.episodes = episodes or []
+        self.slices: list[tuple[str, list[str], str]] = []
+        self.added: list[dict[str, Any]] = []
+
+    async def slice(
+        self, project: str, paths: list[str], text: str, limit: int = 5
+    ) -> list[dict[str, Any]]:
+        self.slices.append((project, paths, text))
+        return self.episodes
+
+    async def add(
+        self,
+        project: str,
+        kind: str,
+        title: str,
+        body: str,
+        paths: list[str],
+        *,
+        run_id: int | None = None,
+        vertex_id: int | None = None,
+        tags: list[str] | None = None,
+    ) -> int | None:
+        self.added.append(
+            {
+                "project": project,
+                "kind": kind,
+                "title": title,
+                "body": body,
+                "paths": paths,
+                "run_id": run_id,
+                "vertex_id": vertex_id,
+            }
+        )
+        return len(self.added)
+
+
+def _postmortem_episode() -> dict[str, Any]:
+    return {"id": 41, "kind": "postmortem", "title": "canary rolled back", "body": "x" * 900}
+
+
+async def test_memory_slice_is_injected_into_the_prompt(tmp_path: Path) -> None:
+    memory = FakeMemory([_postmortem_episode()])
+    executor = FakeExecutor(diff=_GREET_DIFF, diff_files=["greeting.py"])
+    await _run_gated(tmp_path, runner=_merged, executor=executor, memory=memory)
+    prompt = executor.calls[0].prompt
+    assert "Project memory (lessons from earlier tasks — follow them):" in prompt
+    assert "[postmortem] canary rolled back:" in prompt and "x" * 401 not in prompt
+    project, paths, text = memory.slices[0]
+    assert paths == _greet_vertex()["paths_allow"]
+    assert text == _greet_vertex()["name"]
+    log = executor.sessions[0].session_log
+    assert any(r["payload"] == {"episodes": [41]} for r in log.iter_type("memory_slice"))
+
+
+async def test_memory_down_leaves_prompt_unchanged(tmp_path: Path) -> None:
+    executor = FakeExecutor(diff=_GREET_DIFF, diff_files=["greeting.py"])
+    plane, _ = await _run_gated(tmp_path, runner=_merged, executor=executor, memory=FakeMemory())
+    assert "Project memory" not in executor.calls[0].prompt
+    assert plane.complete_calls
+
+
+async def test_success_writes_deploy_and_lessons(tmp_path: Path) -> None:
+    memory = FakeMemory()
+    seen: list[tuple[str, list[str], str]] = []
+
+    async def extractor(task: str, changed: list[str], review: str) -> list[dict[str, str]]:
+        seen.append((task, changed, review))
+        return [{"title": "keep greetings pure", "body": "no I/O in greeting.py"}]
+
+    async def deployer(changed: list[str]) -> Any:
+        return _verdict("succeeded")
+
+    await _run_gated(
+        tmp_path, runner=_merged, deploy_runner=deployer, memory=memory, extractor=extractor
+    )
+    kinds = [a["kind"] for a in memory.added]
+    assert kinds == ["deploy", "lesson"]
+    assert memory.added[0]["title"].startswith("deployed isv-product:abc1234")
+    assert memory.added[1]["title"] == "keep greetings pure"
+    assert memory.added[1]["paths"] == ["greeting.py"] and memory.added[1]["vertex_id"] == 1
+    assert seen and seen[0][1] == ["greeting.py"]
+
+
+async def test_rollback_writes_postmortem_episode(tmp_path: Path) -> None:
+    memory = FakeMemory()
+
+    async def deployer(changed: list[str]) -> Any:
+        return _verdict("rolled_back")
+
+    await _run_gated(tmp_path, runner=_merged, deploy_runner=deployer, memory=memory)
+    post = [a for a in memory.added if a["kind"] == "postmortem"]
+    assert post and post[0]["body"].startswith("# Postmortem")
+
+
+async def test_terminal_fail_writes_failure_episode(tmp_path: Path) -> None:
+    memory = FakeMemory()
+
+    async def runner(ctx: Any, stop: asyncio.Event) -> Any:
+        return _outcome("blocked", "hitl_rejected")
+
+    await _run_gated(tmp_path, runner=runner, memory=memory)
+    assert [a["kind"] for a in memory.added] == ["failure"]
+    assert "gate:hitl_rejected" in memory.added[0]["title"]
+
+
+async def test_transient_fail_writes_no_episode(tmp_path: Path) -> None:
+    memory = FakeMemory()
+
+    async def runner(ctx: Any, stop: asyncio.Event) -> Any:
+        return _outcome("blocked", "ci_timeout")
+
+    await _run_gated(tmp_path, runner=runner, memory=memory)
+    assert memory.added == []
+
+
+async def test_exhausted_attempts_write_one_failure_episode(tmp_path: Path) -> None:
+    bare = _init_bare_repo(tmp_path)
+    vertex = {
+        "id": 8,
+        "name": "tired",
+        "done_when": json.dumps({"checks": [{"type": "files_exist", "paths": ["README.md"]}]}),
+        "paths_allow": ["*.md"],
+        "attempts": 3,
+    }
+    plane = FakeControlPlane(vertices=[vertex, vertex])
+    memory = FakeMemory()
+    stop = asyncio.Event()
+    transport = httpx.MockTransport(plane.handler)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
+        task = asyncio.create_task(
+            worker_loop(
+                _settings(tmp_path, str(bare)),
+                FakeExecutor(diff="", diff_files=[]),
+                http=http,
+                stop=stop,
+                memory=memory,
+            )
+        )
+        await asyncio.wait_for(plane.fail_called.wait(), timeout=2.0)
+        await asyncio.sleep(0.15)
+        stop.set()
+        await asyncio.wait_for(task, timeout=2.0)
+    assert [(a["kind"], a["vertex_id"]) for a in memory.added] == [("failure", 8)]
+    assert "max_attempts_exceeded" in memory.added[0]["title"]
+    assert memory.added[0]["paths"] == ["*.md"]
