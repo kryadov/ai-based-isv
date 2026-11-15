@@ -3,6 +3,8 @@
 > Read this file FIRST. Then `ARCH.md` (how it works, diagrams), `AGENTS.md` (rules), `TODO.md` (backlog).
 > This file is updated at the end of EVERY increment. If your findings contradict it — verify, then update it.
 
+**In progress (2026-11-16): M10 panel + Automations on branch `feat/m10-panel`** — done: Task 1 panel (login with signed sessions, all tabs, EN/RU, Inbox decisions as the user), Task 2 automation runs + definitions in the control plane, Task 3 automation engine + vuln-scan (semgrep + gitleaks → Inbox card → issues only after approval; unit-tested). Left: Task 4 — `m10_flow.sh` live acceptance (vuln-demo repo), docs (TUTORIAL panel section, README, ARCH), release v1.0.0. Plan: `docs/superpowers/plans/2026-11-16-m10-ui-automations.md`.
+
 **Current (2026-11-16): M9 is CLOSED — polyglot dogfood; release v0.10.0.** The corridor is stack-agnostic: a `typescript` check profile (npm ci, tsc, eslint, node:test + the shared gitleaks/semgrep job) and a `ts-service` template (node:http, no framework) under `infra/templates/{check-profiles,projects}`; `org-bootstrap onboard --stack typescript --template ts-service` seeds the code before protection. Acceptance `infra/tests/m9_flow.sh` PASS live: `swarm-lab/ts-greeter` onboarded (seed CI green) → agent adds GET /api/time with a node:test test (done_when = node in docker) → PR #2 merged after CI + review + HITL → merged main green in a clean node container.
 - Design `docs/superpowers/specs/2026-11-16-m9-polyglot-design.md`, plan `docs/superpowers/plans/2026-11-16-m9-polyglot.md`. Deferred: Java and React profiles, assistant eval profile, per-kind tutorials (TODO "M9 follow-ups").
 - **Next: M10 (organization UI panel + Automations).** Usage: TUTORIAL.md §5.
