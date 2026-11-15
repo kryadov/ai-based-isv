@@ -7,6 +7,7 @@ its output — `check_all` then reports the tool as NOT FOUND.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from typing import Any
 
@@ -41,8 +42,10 @@ class _FakeRun:
 def _patch_probe(
     monkeypatch: pytest.MonkeyPatch, run: _FakeRun, exe: str | None = "/usr/bin/tool"
 ) -> None:
-    monkeypatch.setattr(prereq.shutil, "which", lambda _binary: exe)
-    monkeypatch.setattr(prereq.subprocess, "run", run)
+    # Patch on the home modules: `prereq.shutil` is the global `shutil`
+    # module, and `prereq` does not re-export it (implicit reexport off).
+    monkeypatch.setattr(shutil, "which", lambda _binary: exe)
+    monkeypatch.setattr(subprocess, "run", run)
 
 
 def test_success_returns_first_stdout_line(monkeypatch: pytest.MonkeyPatch) -> None:
