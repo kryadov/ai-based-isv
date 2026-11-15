@@ -92,3 +92,21 @@ def test_mcp_ingress_policies_have_sources() -> None:
                 assert POD_CIDR in block.get("except", [])
             else:
                 assert block["cidr"].endswith("/32")
+
+
+def test_ci_is_sandbox_accessible_and_cluster_internal() -> None:
+    docs = _docs("mcp/ci.yaml")
+    deploy = _one(docs, "Deployment", "ci")
+    assert _pod_labels(deploy).get("agent-runtime.io/sandbox-access") == "yes"
+    assert deploy["spec"]["template"]["spec"]["containers"][0]["command"][-1] == (
+        "mcp_servers.ci_server"
+    )
+    assert _one(docs, "Service", "ci")["spec"]["type"] == "ClusterIP"
+
+
+def test_section_mcp_applies_ci() -> None:
+    text = (Path(__file__).resolve().parents[3] / "infra/scripts/bootstrap.sh").read_text(
+        encoding="utf-8"
+    )
+    assert '"$ROOT/mcp/ci.yaml"' in text
+    assert "deploy/ci " in text or "deploy/ci\n" in text

@@ -129,7 +129,9 @@ section_runner() {
     --from-literal="token=$rtok" \
     --dry-run=client -o yaml | kubectl apply -f -
   kubectl apply -f "$ROOT/gitea/act-runner.yaml"
-  kubectl -n "$NS" wait --for=condition=Available deployment/act-runner --timeout=300s
+  # Labels/instance URL live in a ConfigMap: restart so a changed config is picked up.
+  kubectl -n "$NS" rollout restart deploy/act-runner >/dev/null
+  kubectl -n "$NS" rollout status deploy/act-runner --timeout=300s
   n="$(curl -sf -H "Authorization: token $atok" http://localhost:30080/api/v1/admin/actions/runners | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')"
   [ "$n" -ge 1 ] || { echo "runner: not registered"; exit 1; }
   echo "runner: registered ($n)"
@@ -391,11 +393,13 @@ section_mcp() {
   kubectl apply -f "$ROOT/mcp/task-source.yaml"
   kubectl apply -f "$ROOT/mcp/task-reader.yaml"
   kubectl apply -f "$ROOT/mcp/llm.yaml"
+  kubectl apply -f "$ROOT/mcp/ci.yaml"
   # Same tag re-imported: restart so the pods pick up the fresh image.
-  kubectl -n agents rollout restart deploy/task-source deploy/task-reader deploy/llm >/dev/null
+  kubectl -n agents rollout restart deploy/task-source deploy/task-reader deploy/llm deploy/ci >/dev/null
   kubectl -n agents rollout status deploy/task-source --timeout=180s
   kubectl -n agents rollout status deploy/task-reader --timeout=180s
   kubectl -n agents rollout status deploy/llm --timeout=180s
+  kubectl -n agents rollout status deploy/ci --timeout=180s
   # Host access for the worker's tracker loop: publish NodePort 30085 once.
   cluster_publish_nodeport 30085
   local code i
@@ -406,7 +410,7 @@ section_mcp() {
     sleep 3
   done
   [ "$code" = "200" ] || { echo "mcp: task-source not answering on :30085 ($code)"; exit 1; }
-  echo "mcp: task-source (write, host-only :30085), task-reader + llm (sandbox, *.agents.svc:8000) Ready"
+  echo "mcp: task-source (write, host-only :30085), task-reader + llm + ci (sandbox, *.agents.svc:8000) Ready"
 }
 
 case "${1:-all}" in

@@ -48,6 +48,17 @@ class WorkerSettings(BaseSettings):
     # --- tracker status loop (M4c): task_ref "owner/repo#N"; empty = disabled ---
     task_ref: str = ""
     task_source_url: str = ""  # task-source MCP endpoint reachable from the worker host
+    # --- gate corridor (M5): PR → CI → review → fix rounds → HITL → merge ---
+    gates_enabled: bool = False  # False keeps the M4 behaviour (complete on push)
+    max_fix_rounds: int = 2
+    ci_timeout_s: float = 1200.0
+    hitl_poll_s: float = 15.0
+    reviewer_model: str = "reviewer"  # LiteLLM alias (cross-family vs the implementer)
+    # Host-reachable LiteLLM for the reviewer (the worker runs on the host; the
+    # sandbox's litellm_base_url may be in-cluster). Empty = litellm_base_url.
+    reviewer_base_url: str = ""
+    gitea_url: str = ""  # Gitea API base when it differs from the repo_url host
+    platform_repo: bool = False  # this platform's own repo: never auto-merge (§13.7)
 
     @model_validator(mode="after")
     def _required_at_runtime(self) -> "WorkerSettings":

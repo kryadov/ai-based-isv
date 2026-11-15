@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import logging
 import os
@@ -35,11 +36,19 @@ from agent_runtime.kube_sandbox import (
     kubectl_runner as _kubectl_runner,
 )
 from agent_runtime.manifest import write_manifest
+from agent_runtime.merge_policy import touches_protected
 from agent_runtime.opencode_executor import OpencodeExecutor
 from agent_runtime.pathguard import DiffUnparseable, diff_files, filter_violations
 from agent_runtime.settings import WorkerSettings
 from agent_runtime.tracker import TrackerClient
 from agent_runtime.vault_broker import read_gitea_token
+from agent_runtime.worker_gates import (
+    GateContext,
+    GateRunner,
+    default_gate_runner,
+    fix_attempt,
+    read_policy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +121,17 @@ class ControlPlaneClient:
         with contextlib.suppress(Exception):
             await self._http.post("/audit", json=body)
 
+    async def note(self, text: str) -> None:
+        """A pipeline stage note for the tracker; no tracker means nothing to do."""
+        return None
+
+    async def escalate(self, subject: str, context: dict[str, Any]) -> None:
+        """File a HITL ``escalation`` (a dispute the agent could not settle)."""
+        with contextlib.suppress(Exception):
+            await self._http.post(
+                "/hitl", json={"kind": "escalation", "subject": subject, "context": context}
+            )
+
 
 class TrackedControlPlaneClient(ControlPlaneClient):
     """ControlPlaneClient that mirrors vertex transitions into the tracker.
@@ -153,12 +173,21 @@ class TrackedControlPlaneClient(ControlPlaneClient):
             f"verdict: {'PASS' if verdict.get('passed') else 'FAIL'}\n"
             f"evidence: {result.get('manifest_path', '')}"
         )
+        if result.get("pr_url"):
+            note += f"\nPR: {result['pr_url']}"
         await self._track("done", note, vertex_id)
 
     async def fail(self, vertex_id: int, reason: str | None = None) -> None:
         await super().fail(vertex_id, reason=reason)
         note = f"run {self._settings.run_id}: vertex {vertex_id} failed: {reason or 'unknown'}"
         await self._track("blocked", note, vertex_id)
+
+    async def note(self, text: str) -> None:
+        # Gate stage comments (PR opened, CI, review, fix round, merged).
+        try:
+            await self._tracker.add_comment(self._task_ref, f"[platform] {text}")
+        except Exception as exc:
+            logger.warning("tracker comment failed task_ref=%s: %s", self._task_ref, exc)
 
     async def _track(self, status: str, note: str, vertex_id: Any) -> None:
         try:
@@ -391,6 +420,7 @@ async def _process_vertex(
     client: ControlPlaneClient,
     vertex: dict[str, Any],
     stop: asyncio.Event,
+    gate_runner: GateRunner | None = None,
 ) -> None:
     vertex_id: int = vertex["id"]
     session: ExecutionSession | None = None
@@ -504,7 +534,8 @@ async def _process_vertex(
             )
             return
 
-        violations = filter_violations(changed, request.paths_allow)
+        # Gate paths (.gitea/**, .platform/**) are never an implementer's to change.
+        violations = filter_violations(changed, request.paths_allow) + touches_protected(changed)
         if violations:
             reason = f"paths_violation: {violations}"
             await client.fail(vertex_id, reason=reason)
@@ -573,6 +604,65 @@ async def _process_vertex(
 
         result = _build_result(session, changed, verdict, branch)
         session.session_log.append("result", result)
+
+        if settings.gates_enabled:
+            # M5: the vertex is done only when its PR is merged. The implementer
+            # sandbox is done: tear it down first — a fix attempt starts a sandbox
+            # with the same name (agent-<run>-<vertex>).
+            with contextlib.suppress(Exception):
+                await session.stop()
+            token = _git_token(settings.git_token)
+            runner = gate_runner or default_gate_runner(settings, token or "")
+
+            async def fix(req: Any) -> Any:
+                return await fix_attempt(
+                    settings=settings,
+                    executor=executor,
+                    vertex=vertex,
+                    req=req,
+                    repo_dir=repo_dir,
+                    branch=branch,
+                    token=token,
+                )
+
+            ctx = GateContext(
+                vertex=vertex,
+                branch=branch,
+                title=f"agent: {request.name} (vertex {vertex_id})",
+                body=(
+                    f"Run {settings.run_id}, vertex {vertex_id}: {request.name}\n\n"
+                    f"verdict: {'PASS' if verdict.passed else 'FAIL'}\n"
+                    f"files: {', '.join(changed)}\n"
+                    f"evidence: {result.get('manifest_path', '')}"
+                ),
+                goal=build_vertex_prompt(vertex),
+                policy_text=await asyncio.to_thread(read_policy, repo_dir, settings.base_branch),
+                fix=fix,
+                notify=client.note,
+            )
+            outcome = await runner(ctx, stop)
+            session.session_log.append("gates", dataclasses.asdict(outcome))
+            if outcome.status == "stopped":
+                return  # the lease expires; the PR stays open for the next attempt
+            if outcome.status != "merged":
+                reason = f"gate:{outcome.reason}"
+                if outcome.reason == "fix_rounds_exhausted":
+                    await client.escalate(
+                        outcome.pr_url,
+                        {"pr_url": outcome.pr_url, "vertex_id": vertex_id, "reason": reason},
+                    )
+                await client.fail(vertex_id, reason=reason)
+                await client.audit(
+                    action="fail",
+                    target=f"vertex:{vertex_id}",
+                    outcome="error",
+                    payload={"reason": reason, "pr_url": outcome.pr_url},
+                )
+                return
+            result["pr_url"] = outcome.pr_url
+            result["auto_merged"] = outcome.auto_merged
+            result["review_summary"] = outcome.review_summary
+
         await client.complete(vertex_id, result)
         await client.audit(
             action="complete",
@@ -609,6 +699,7 @@ async def worker_loop(
     http: httpx.AsyncClient | None = None,
     stop: asyncio.Event | None = None,
     tracker: TrackerClient | None = None,
+    gate_runner: GateRunner | None = None,
 ) -> None:
     """Claim and execute vertices for ``settings.run_id`` until ``stop`` is set.
 
@@ -664,7 +755,7 @@ async def worker_loop(
                 await _sleep_or_stop(stop_event, settings.poll_interval_seconds)
                 continue
 
-            await _process_vertex(settings, executor, client, vertex, stop_event)
+            await _process_vertex(settings, executor, client, vertex, stop_event, gate_runner)
     finally:
         if own_http:
             await http.aclose()

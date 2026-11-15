@@ -88,3 +88,32 @@ class GiteaClient:
             payload["sha"] = sha
         method = "PUT" if sha else "POST"
         self._request(method, f"/repos/{self.owner}/{repo}/contents/{path}", payload)
+
+    def apply_check_profile(self, repo: str, *, stack: str, git_url: str) -> None:
+        """Seed the stack's CI corridor + merge policy and protect ``main`` (M5).
+
+        Order matters: files first, then the PLATFORM_GIT_URL variable (in-cluster
+        Gitea for CI checkout), then branch protection — afterwards ``main``
+        accepts no direct commits and merges only with every CI context green.
+        """
+        from bootstrap.profiles import REQUIRED_CONTEXTS, profile_files
+
+        for path, content in profile_files(stack).items():
+            self.put_file(repo, path, content)
+        var_path = f"/repos/{self.owner}/{repo}/actions/variables/PLATFORM_GIT_URL"
+        code, _ = self._request("POST", var_path, {"value": git_url})
+        if code == 409:
+            code, _ = self._request("PUT", var_path, {"value": git_url})
+        if code >= 400:
+            raise RuntimeError(f"gitea: could not set PLATFORM_GIT_URL on {repo} ({code})")
+        protection: dict[str, object] = {
+            "branch_name": "main",
+            "enable_status_check": True,
+            "status_check_contexts": list(REQUIRED_CONTEXTS),
+        }
+        base = f"/repos/{self.owner}/{repo}/branch_protections"
+        code, _ = self._request("POST", base, protection)
+        if code in (409, 422):  # already protected: update it
+            code, _ = self._request("PATCH", f"{base}/main", protection)
+        if code >= 400:
+            raise RuntimeError(f"gitea: could not protect main on {repo} ({code})")
