@@ -72,7 +72,11 @@ async def test_get_rollout_from_controller_metrics() -> None:
         "isv-product-abc-2": "Successful",
         "isv-product-abc-2-5": "Running",
     }
-    assert any('rollout="isv-product"' in q or 'name="isv-product"' in q for q in fake.queries)
+    # the controller runs in `platform`: the Rollout's namespace is exported_namespace (live)
+    rollout_q = next(q for q in fake.queries if q.startswith("rollout_info"))
+    assert 'exported_namespace="prod"' in rollout_q and 'name="isv-product"' in rollout_q
+    runs_q = next(q for q in fake.queries if q.startswith("analysis_run_info"))
+    assert 'exported_namespace="prod"' in runs_q and 'name=~"isv-product-.*"' in runs_q
 
 
 async def test_service_slo() -> None:

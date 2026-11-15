@@ -68,10 +68,11 @@ def create_observability_app(
         name = _name(app, "app")
         ns = _name(namespace, "namespace")
         logger.info("get_rollout %s/%s", ns, name)
-        info = await prom.vector(f'rollout_info{{namespace="{ns}",name="{name}"}}')
+        # The controller lives in `platform`; Prometheus keeps the Rollout's own
+        # namespace as `exported_namespace` (live lesson, M6).
+        info = await prom.vector(f'rollout_info{{exported_namespace="{ns}",name="{name}"}}')
         runs = await prom.vector(
-            f'analysis_run_info{{namespace="{ns}",rollout="{name}"}} == 1'
-            f' or analysis_run_info{{namespace="{ns}",name=~"{name}-.*"}}'
+            f'analysis_run_info{{exported_namespace="{ns}",name=~"{name}-.*"}}'
         )
         return {
             "app": name,
