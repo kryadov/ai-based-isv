@@ -58,6 +58,7 @@ Acceptance flows for the L0 stand: `./infra/tests/m2a_pr_flow.sh`,
 | [STATE.md](STATE.md) | **ground truth: current state, milestones, next steps** — read first in every session |
 | [ARCH.md](ARCH.md) | architecture with diagrams: topology, pipeline, swarm, memory, control plane |
 | [AGENTS.md](AGENTS.md) | agent rules (Superpowers mandate, standards) |
+| [TUTORIAL.md](TUTORIAL.md) | **start here**: use the platform on the stand — watch a task end to end, approve HITL, onboard your project, give tasks to agents |
 | [INSTALL.md](INSTALL.md) | setup: prerequisites, dev env, L0 bootstrap |
 | [TODO.md](TODO.md) | backlog and feedback loops |
 | [docs/superpowers/specs/](docs/superpowers/specs/) | full platform design + addenda |
