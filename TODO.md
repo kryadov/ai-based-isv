@@ -68,3 +68,12 @@
 - [ ] Postmortem drafts stay in the evidence: write them back to episodic project memory (M7).
 - [ ] Operator changes to `deploy/**` are manual Gitea PRs: add `org-bootstrap deploy-config` (or a HITL-gated agent role).
 - [ ] Canary analysis thresholds are hard-coded in the template: per-service SLO file (spec §7.2.6).
+
+## M7 follow-ups (2026-11-16)
+
+- [ ] Embeddings (pgvector) for retrieval — needs an embedding model through LiteLLM; the z.ai Coding Plan serves chat only (ADR-0003 revisit trigger: retrieval quality on the dogfood corpus).
+- [ ] Code indexing (context_engine) and spec self-evals (spec §8 M7) — separate subsystems.
+- [ ] Automatic lesson promotion after ~10 dogfood tasks with eval on historical tasks (ADR-0003).
+- [ ] Read-only `memory` MCP server for on-demand search by agents (today: slice in the prompt only).
+- [ ] Memory outages are logged, not audited (`memory_skipped`): the fail-open client cannot tell an outage from an empty slice.
+- [ ] Episode TTL / consolidation job (drift and poisoning guard).

@@ -205,9 +205,32 @@ Deploy a commit by hand, or show a rollback with an injected fault:
 
 Agents see rollouts and metrics through the read-only `observability` MCP server (`get_rollout`, `service_slo`, `query_metric`).
 
-## 9. What is not there yet
+## 9. Project memory (M7)
 
-- Project memory: M7. The rollback postmortem is a draft in the evidence for now.
+Every finished task leaves a trace in **project episodic memory**:
+- deploy verdicts;
+- rollback postmortems;
+- terminal failures;
+- up to two lessons written by the light-model **memory-extractor**.
+
+The next task on the same project gets the most relevant episodes (by overlapping paths and shared words) appended to its prompt, so agents do not repeat a rolled-back mistake. The episode ids are recorded in the session log (`memory_slice`).
+
+```bash
+./infra/scripts/toolbox.sh bash infra/tests/m7_flow.sh      # rollback → postmortem → next task sees it → promotion PR
+curl -s "http://127.0.0.1:8472/memory/slice?project=swarm-lab/isv-product&paths=src/**&q=canary"   # while a flow runs
+```
+
+**Org memory** is the Gitea repo `swarm-lab/org-memory`: `lessons/` plus `reuse-catalog.yaml`, the catalog of components to reuse. A human promotes a useful episode with:
+
+```bash
+./infra/scripts/toolbox.sh uv run org-bootstrap memory promote --episode <id> --api http://127.0.0.1:8472
+```
+
+This opens a PR in org memory for review. Agents never write org memory.
+
+## 10. What is not there yet
+
+- Embeddings and code indexing: retrieval is lexical for now.
 - Swarm parallelism: M8.
 - A web panel: M10.
 

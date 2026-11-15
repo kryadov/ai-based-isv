@@ -204,6 +204,20 @@ flowchart TB
 Write rights by role; semantic changes only via PR; "published" ≠ "improves results"
 (eval-gated). TTL/consolidation guards against drift and poisoning.
 
+**Implemented in M7 (v0.8.0):**
+- **Episodic store:** table `memory_episodes` in the control-plane DB, API `/memory/episodes`, `/memory/slice`.
+  - Ranking: path overlap +3, shared task words up to +5, last 7 days +1, postmortem/failure +2.
+  - No path and no word overlap means the episode is never returned.
+- **Write-back** by the worker on vertex close, fail-open:
+  - `deploy` (success marker) or `postmortem` (rollback);
+  - `failure` (terminal fail, exhausted attempts);
+  - `lesson` from the **memory-extractor** (light model, at most 2 per task).
+- **Retrieval at vertex start:** the slice goes into the agent prompt ("Project memory (lessons from earlier tasks — follow them)"), and its ids into the session log (`memory_slice`).
+- **Org memory:** the Gitea repo `swarm-lab/org-memory` holds `lessons/` and `reuse-catalog.yaml` (reuse catalog v1), under the docs check profile.
+  - `org-bootstrap memory promote --episode N` opens a human-reviewed PR.
+  - Agents never write org memory.
+- **Deferred** (TODO): working memory (M8), embeddings, code indexing, spec self-evals, automatic promotion.
+
 ## 6. Control plane internals (current state, M3)
 
 `agent_api` (FastAPI + SQLAlchemy async):
