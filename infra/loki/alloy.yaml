@@ -4,6 +4,8 @@ controller:
 alloy:
   mounts:
     varlog: true
+    # moby runtime (Rancher Desktop): /var/log/pods/*/N.log → /var/lib/docker/containers/*-json.log
+    dockercontainers: true
   resources:
     requests:
       cpu: 50m
