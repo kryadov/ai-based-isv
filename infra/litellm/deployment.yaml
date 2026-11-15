@@ -27,6 +27,11 @@ data:
           model: openai/glm-5.3-flash
           api_base: https://api.z.ai/api/coding/paas/v4
           api_key: os.environ/ZAI_API_KEY
+          # Light alias answers directly: with thinking on, short completions
+          # (max_tokens=16 gateway checks) are spent on reasoning and come back empty.
+          extra_body:
+            thinking:
+              type: disabled
       - model_name: qwen3-openrouter
         litellm_params:
           model: openrouter/z-ai/glm-5.3

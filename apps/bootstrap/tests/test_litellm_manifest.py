@@ -101,3 +101,19 @@ def test_dotenv_is_gitignored_but_example_is_not() -> None:
     ignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert ".env" in ignore
     assert "!.env.example" in ignore
+
+
+def test_light_alias_disables_reasoning() -> None:
+    # glm-5.3-flash thinks by default: a short completion (m2c gateway check,
+    # max_tokens=16) is spent entirely on reasoning and comes back empty.
+    params = _models()["qwen-coder"]
+    assert params["extra_body"]["thinking"] == {"type": "disabled"}
+
+
+def test_bootstrap_waits_for_the_new_litellm_rollout() -> None:
+    # `wait --for=condition=Available` right after `rollout restart` is
+    # satisfied by the OLD pod; the readiness ping then hits it and the gateway
+    # vanishes seconds later while the new pod starts (m2c/m4c 2026-11-15).
+    text = BOOTSTRAP.read_text(encoding="utf-8")
+    assert "rollout status deploy/litellm" in text
+    assert "wait --for=condition=Available deployment/litellm" not in text

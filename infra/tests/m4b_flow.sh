@@ -481,9 +481,11 @@ PY
 
 # 5e) sandbox teardown: pod, service and secret must be gone after the vertex
 SANDBOX_NAME="agent-$RUN_ID-$VERTEX_ID"
+# Deletion is asynchronous (the pod terminates within its grace period), so
+# wait for each object to disappear rather than racing a terminating pod.
 for kind in pod service secret; do
-  kubectl -n agents get "$kind/$SANDBOX_NAME" >/dev/null 2>&1 \
-    && fail "$kind/$SANDBOX_NAME survived the vertex (teardown leak)"
+  kubectl -n agents wait --for=delete "$kind/$SANDBOX_NAME" --timeout=90s >/dev/null 2>&1 \
+    || fail "$kind/$SANDBOX_NAME survived the vertex (teardown leak)"
 done
 echo "M4b flow: sandbox teardown clean (pod/service/secret removed)"
 

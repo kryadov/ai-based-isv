@@ -21,3 +21,20 @@
 - [ ] agent_api GUI panel (currently CLI/API) — after M3 stabilizes. Includes the 📁 Projects tab + onboarding wizard (see spec §13).
 - [ ] Vault: migrate from dev-mode to raft/file backend — when real secrets appear (M3).
 - [ ] Taint tracking for untrusted content — post-v0 (trigger: content sources beyond the tracker).
+
+## M4c follow-ups (deferred minors from the final review, 2026-11-15)
+
+- [ ] Control-plane `complete/fail` raising → tracker never updated and nothing audited: post a best-effort note / audit `tracker_skipped`.
+- [ ] `set_task_status` does PATCH then comment (non-atomic): comment first.
+- [ ] in-progress/blocked reopen an issue a human closed: skip the PATCH when the issue is closed and status != done.
+- [ ] Raw failure text (exception messages) is posted to issue comments: truncate, or post reason codes.
+- [ ] Secrets on command lines (`--from-literal`, `curl -H "Authorization…"`, python argv) in `section_mcp`, `section_litellm` and `m4c_flow`: use stdin, env or header files.
+- [ ] Collapsed line continuations (long space runs) in `bootstrap.sh` `section_mcp` and `m4c_flow.sh`: cosmetic.
+- [ ] Poller checkpoint written after the loop, in `$TMP`; no server-side uniqueness on `task_ref` (fine for acceptance, not for a real poller).
+- [ ] `list_issues` has a fixed `limit=50` and no pagination.
+- [ ] MCP Dockerfile: unpinned pip install (not from `uv.lock`), no `.dockerignore`.
+- [ ] Worker `attempts >= 3` is checked after the claim increment, so only 2 real executions happen (pre-existing).
+- [ ] `llm.complete` bypasses token budgets (M5); the git MCP server is built but not wired (M5 scoped tokens).
+- [ ] MCP servers have no auth token; sandboxes use the LiteLLM master key: add an MCP auth token and a scoped LiteLLM virtual key per run/role.
+- [ ] `org-bootstrap check` marks a tool `[ok]` even when `--version` fails: check the exit code.
+- [ ] LLM: set `OPENROUTER_API_KEY` in `.env`, so the fallback works when the z.ai Coding Plan limit is hit. z.ai ToS lists supported tools only (LiteLLM is not listed): if the plan gets restricted, route z.ai only through the OpenCode provider.

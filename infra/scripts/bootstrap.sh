@@ -284,7 +284,7 @@ section_litellm() {
   kubectl -n "$NS" patch deploy litellm --type=json \
     -p '[{"op":"remove","path":"/spec/template/spec/hostAliases"}]' >/dev/null 2>&1 || true
   kubectl -n "$NS" rollout restart deploy/litellm
-  kubectl -n "$NS" wait --for=condition=Available deployment/litellm --timeout=600s
+  kubectl -n "$NS" rollout status deploy/litellm --timeout=600s
   local code i
   code=""
   for i in $(seq 1 12); do
