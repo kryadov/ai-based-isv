@@ -1080,6 +1080,36 @@ def test_build_fix_prompt_contains_findings_and_log() -> None:
     assert ".gitea/" in prompt
 
 
+async def test_implementer_session_stopped_before_gates(tmp_path: Path) -> None:
+    # A fix attempt starts a sandbox with the SAME name (agent-<run>-<vertex>):
+    # the implementer's sandbox must be gone first (m5 live run 2: KubeSandboxError).
+    executor = FakeExecutor(diff=_GREET_DIFF, diff_files=["greeting.py"])
+    stopped_at_gates: list[bool] = []
+
+    async def runner(ctx: Any, stop: asyncio.Event) -> Any:
+        stopped_at_gates.append(executor.sessions[0].stopped)
+        return _outcome("merged")
+
+    await _run_gated(tmp_path, runner=runner, executor=executor)
+    assert stopped_at_gates == [True]
+
+
+async def test_fix_failure_reason_carries_the_error_text(tmp_path: Path) -> None:
+    from agent_runtime.gates import FixRequest
+
+    executor = FakeExecutor(diff=_GREET_DIFF, diff_files=["greeting.py"])
+    fixes: list[Any] = []
+
+    async def runner(ctx: Any, stop: asyncio.Event) -> Any:
+        executor.exception = RuntimeError("pod agent-42-1 not Ready within 180s")
+        fixes.append(await ctx.fix(FixRequest(round=1, ci_state="failure", ci_log_tail="")))
+        return _outcome("blocked", "fix_failed")
+
+    await _run_gated(tmp_path, runner=runner, executor=executor)
+    assert fixes[0].pushed is False
+    assert "not Ready within 180s" in fixes[0].reason
+
+
 def test_reviewer_base_prefers_the_host_reachable_url(tmp_path: Path) -> None:
     # The worker runs on the host: the sandbox's in-cluster LiteLLM URL is not
     # reachable from there, so the reviewer has its own base URL.

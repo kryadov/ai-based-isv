@@ -142,7 +142,9 @@ async def fix_attempt(
             push_head, repo_dir, branch, message=f"agent: fix round {req.round}", token=token
         )
     except Exception as exc:
-        return FixResult(pushed=False, replies={}, reason=f"fix_failed: {type(exc).__name__}")
+        return FixResult(
+            pushed=False, replies={}, reason=f"fix_failed: {type(exc).__name__}: {str(exc)[:300]}"
+        )
     finally:
         if session is not None:
             with contextlib.suppress(Exception):

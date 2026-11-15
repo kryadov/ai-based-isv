@@ -606,7 +606,11 @@ async def _process_vertex(
         session.session_log.append("result", result)
 
         if settings.gates_enabled:
-            # M5: the vertex is done only when its PR is merged.
+            # M5: the vertex is done only when its PR is merged. The implementer
+            # sandbox is done: tear it down first — a fix attempt starts a sandbox
+            # with the same name (agent-<run>-<vertex>).
+            with contextlib.suppress(Exception):
+                await session.stop()
             token = _git_token(settings.git_token)
             runner = gate_runner or default_gate_runner(settings, token or "")
 

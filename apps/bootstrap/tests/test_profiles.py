@@ -63,3 +63,9 @@ def test_checkout_uses_the_platform_git_url() -> None:
             s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/checkout")
         )
         assert "vars.PLATFORM_GIT_URL" in checkout["with"]["github-server-url"]
+
+
+def test_semgrep_runs_with_a_compatible_pydantic() -> None:
+    # semgrep 1.140.0 crashes on import with pydantic>=2.12 (m5 live run 2).
+    raw = profile_files("python")[".gitea/workflows/ci.yml"]
+    assert '--with "pydantic<2.12"' in raw

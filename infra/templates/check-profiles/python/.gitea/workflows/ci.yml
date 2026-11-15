@@ -52,4 +52,4 @@ jobs:
           curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | tar -xz -C /usr/local/bin gitleaks
           gitleaks detect --no-git --redact --source .
       - name: semgrep (SAST)
-        run: uvx "semgrep==${SEMGREP_VERSION}" scan --config p/ci --error --metrics off .
+        run: uvx --with "pydantic<2.12" "semgrep==${SEMGREP_VERSION}" scan --config p/ci --error --metrics off .
