@@ -65,7 +65,7 @@ Destructive actions (prod deploys, DB migrations, direct pushes to main, rights/
 
 ## 7. Localization
 
-Source code, docs and comments — **English only**. Russian texts live exclusively in `*.ru.md` files (README.ru.md, INSTALL.ru.md, TODO.ru.md, ARCH.ru.md, AGENTS.ru.md).
+Source code, docs and comments — **English only**. Russian texts live exclusively in `*.ru.md` files (README.ru.md, INSTALL.ru.md, TUTORIAL.ru.md, TODO.ru.md, ARCH.ru.md, AGENTS.ru.md).
 
 ## 8. Verification Commands
 

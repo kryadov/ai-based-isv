@@ -157,3 +157,22 @@ def test_onboard_passes_push_whitelist(monkeypatch: pytest.MonkeyPatch) -> None:
     result = CliRunner().invoke(cli.app, args)
     assert result.exit_code == 0, result.output
     assert seen == [("swarm-admin",)]
+
+
+def test_create_repo_in_org_uses_org_endpoint() -> None:
+    # Agents (team `agents` in org swarm-lab) can only reach org repos.
+    rec = Recorder({("POST", "/orgs/o/repos"): 201})
+    assert rec.create_repo("demo") is True
+    assert ("POST", "/orgs/o/repos") in [(m, p) for m, p, _ in rec.calls]
+    assert "/user/repos" not in _paths(rec, "POST")
+
+
+def test_create_repo_falls_back_to_user_when_owner_is_not_an_org() -> None:
+    rec = Recorder({("POST", "/orgs/o/repos"): 404, ("POST", "/user/repos"): 201})
+    assert rec.create_repo("demo") is True
+    assert _paths(rec, "POST") == ["/orgs/o/repos", "/user/repos"]
+
+
+def test_create_repo_existing_is_false() -> None:
+    rec = Recorder({("POST", "/orgs/o/repos"): 409})
+    assert rec.create_repo("demo") is False

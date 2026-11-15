@@ -56,12 +56,16 @@ class GiteaClient:
         return code == 200
 
     def create_repo(self, repo: str, private: bool = True) -> bool:
-        """Create a repo with auto-init; True if created, False if it already exists."""
-        code, _ = self._request(
-            "POST",
-            "/user/repos",
-            {"name": repo, "private": private, "auto_init": True},
-        )
+        """Create a repo with auto-init under ``owner``; True if created, False if it exists.
+
+        ``owner`` is normally an org (``swarm-lab``: the agents' team reaches
+        only org repos); a 404 from the org endpoint means ``owner`` is the
+        token's own user, so the repo goes to ``/user/repos``.
+        """
+        payload: dict[str, object] = {"name": repo, "private": private, "auto_init": True}
+        code, _ = self._request("POST", f"/orgs/{self.owner}/repos", payload)
+        if code == 404:
+            code, _ = self._request("POST", "/user/repos", payload)
         if code == 201:
             return True
         if code == 409:  # already exists

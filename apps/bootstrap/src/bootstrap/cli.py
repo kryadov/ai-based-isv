@@ -165,7 +165,9 @@ def seed_demo() -> None:
 def onboard(
     project: str = typer.Option(..., help="имя проекта (repo slug)"),
     kind: str = typer.Option("service", help="тип: product | service | tool | assistant"),
-    owner: str = typer.Option("swarm-admin", help="владелец проекта"),
+    owner: str = typer.Option(
+        "swarm-lab", help="Gitea org (or user) that owns the repo; agents reach swarm-lab repos"
+    ),
     reason: str = typer.Option("new project", help="зачем создается"),
     stack: str = typer.Option("python", help="check profile (CI corridor) for the repo"),
     push_whitelist: list[str] = typer.Option(  # noqa: B008 - typer option factory

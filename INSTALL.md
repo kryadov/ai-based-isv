@@ -66,7 +66,7 @@ Stand facts are recorded in `infra/env.yaml` (auto-generated — a VET artifact,
 |---|---|---|
 | Gitea Web/API | http://localhost:30080 | admin `swarm-admin` (password — in Vault) |
 | Gitea SSH | localhost:30022 | git over ssh |
-| Vault | port-forward 8200 | root token: `kubectl -n platform exec vault-0 -- vault print token` |
+| OpenBao (Vault API) | in-cluster `vault-openbao.platform:8200` | unseal keys `infra/.vault-unseal-keys.json`, root token `infra/.vault-root-token` (both gitignored); reading a secret — TUTORIAL.md §2 |
 | Postgres | in-cluster `postgres-platform-rw.platform:5432` | DBs `gitea`, `openproject` (user `gitea`, secret `postgres-platform-app`) |
 | OpenProject UI | http://localhost:30083 | `op-admin` (password in Vault `secret/openproject/admin`) ⚠ password login broken in v17-slim — see TODO |
 | LiteLLM API | http://localhost:30084/v1 | Bearer master key (Vault `secret/litellm/master`); models: qwen-coder, qwen3, reviewer (z.ai Coding Plan; OpenRouter only on the z.ai plan limit; keys from `.env` into Vault `secret/litellm/{zai,openrouter}`) |
