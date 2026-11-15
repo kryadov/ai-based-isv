@@ -19,7 +19,9 @@ from sqlalchemy.ext.asyncio import (
 
 from agent_api import store
 from agent_api.models import AuditRow, Base, HITLRow, RunRow, VertexRow
-from agent_api.settings import settings
+from agent_api.settings import Settings, settings
+from agent_api.ui import register_ui
+from agent_api.ui_auth import parse_users
 
 
 def create_engine_session() -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
@@ -43,6 +45,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="agent_api", lifespan=lifespan)
+    current = Settings()
+    app.state.ui_users = parse_users(current.ui_users)
+    app.state.session_secret = current.session_secret
+    app.state.projects_file = current.projects_file
+    app.state.automations_dir = current.automations_dir
+    register_ui(app)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:

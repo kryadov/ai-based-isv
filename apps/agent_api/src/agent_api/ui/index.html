@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI-Native ISV — panel</title>
+  <link rel="stylesheet" href="/ui/static/styles.css">
+  <script type="module" src="/ui/static/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">AI-Native ISV</div>
+    <div id="badges" class="badges"></div>
+    <div class="right">
+      <select id="lang" aria-label="language">
+        <option value="en">EN</option>
+        <option value="ru">RU</option>
+      </select>
+      <span id="who" class="who"></span>
+      <form method="post" action="/ui/logout"><button id="logout" type="submit" data-i18n="top.logout">Logout</button></form>
+    </div>
+  </header>
+  <nav class="tabs">
+    <button data-tab="inbox" data-i18n="tab.inbox">Inbox</button>
+    <button data-tab="projects" data-i18n="tab.projects">Projects</button>
+    <button data-tab="swarm" data-i18n="tab.swarm">Swarm</button>
+    <button data-tab="pipeline" data-i18n="tab.pipeline">Pipeline</button>
+    <button data-tab="automations" data-i18n="tab.automations">Automations</button>
+    <button data-tab="metrics" data-i18n="tab.metrics">Metrics</button>
+    <button data-tab="memory" data-i18n="tab.memory">Memory</button>
+    <button data-tab="settings" data-i18n="tab.settings">Settings</button>
+  </nav>
+  <main id="view" aria-live="polite"></main>
+  <footer id="health" class="health"></footer>
+</body>
+</html>
