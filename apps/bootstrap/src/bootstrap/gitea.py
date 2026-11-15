@@ -137,7 +137,7 @@ class GiteaClient:
             )
         base = f"/repos/{self.owner}/{repo}/branch_protections"
         code, _ = self._request("POST", base, protection)
-        if code in (409, 422):  # already protected: update it
+        if code in (403, 409, 422):  # already protected (Gitea: 403 "already exist")
             code, _ = self._request("PATCH", f"{base}/main", protection)
         if code >= 400:
             raise RuntimeError(f"gitea: could not protect main on {repo} ({code})")

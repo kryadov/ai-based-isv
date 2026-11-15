@@ -8,7 +8,7 @@ from pathlib import Path
 import typer
 
 from bootstrap import __version__
-from bootstrap.gitea import README_CONTENT, REPO_NAME, GiteaClient
+from bootstrap.gitea import REPO_NAME, GiteaClient
 from bootstrap.prereq import check_all
 from bootstrap.profile import Profile, save
 from bootstrap.registry import ProjectRecord, offboard_project, register_or_update
@@ -151,13 +151,21 @@ def apply(
 
 @app.command()
 def seed_demo() -> None:
-    """Seed the isv-product demo repo in Gitea (idempotent)."""
+    """Seed swarm-lab/isv-product: service code + deploy/ + check profile (idempotent)."""
+    import tempfile
+
+    from bootstrap.seed import push_seed
+
     token = _gitea_token()
-    client = GiteaClient(base_url="http://localhost:30080", token=token, owner="swarm-admin")
+    client = GiteaClient(base_url="http://localhost:30080", token=token, owner="swarm-lab")
     status = client.ensure_repo(REPO_NAME)
-    client.put_file(REPO_NAME, "README.md", README_CONTENT)
-    client.apply_check_profile(REPO_NAME, stack="python", git_url=PLATFORM_GIT_URL)
     url = f"{client.base_url}/{client.owner}/{REPO_NAME}"
+    if status == "created":
+        with tempfile.TemporaryDirectory() as tmp:
+            push_seed(f"{url}.git", token, Path(tmp), message="seed: isv-product service + deploy")
+    else:
+        typer.secho("Repo exists: seed not re-applied (re-seed is explicit)", fg="yellow")
+    client.apply_check_profile(REPO_NAME, stack="python", git_url=PLATFORM_GIT_URL)
     typer.secho(f"Demo repo: {status} → {url}", fg=typer.colors.GREEN)
 
 

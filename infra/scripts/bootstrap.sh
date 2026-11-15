@@ -268,16 +268,53 @@ section_loki() {
   echo "loki: ready; alloy: $(kubectl -n "$NS" get ds alloy -o jsonpath='{.status.numberReady}') ready"
 }
 
+section_rollouts() {
+  # Argo Rollouts (M6): canary controller + CRDs (Rollout, AnalysisTemplate/Run).
+  helm repo add argo https://argoproj.github.io/argo-helm >/dev/null 2>&1 || true
+  helm repo update argo >/dev/null
+  helm upgrade --install argo-rollouts argo/argo-rollouts \
+    --version 2.43.8 \
+    --namespace "$NS" --wait --timeout 5m
+  kubectl -n "$NS" rollout status deploy/argo-rollouts --timeout=300s
+  echo "rollouts: argo-rollouts controller ready"
+}
+
 section_demo() {
-  # Окружения + GitOps: AppProject (граница prod/staging) + Application demo-prod (auto-sync).
-  # ВАЖНО: Application смотрит targetRevision=main — запускать после merge инкремента в main.
+  # The demo service isv-product (M6): seeded into Gitea swarm-lab/isv-product
+  # (code + deploy/ + check profile), deployed to prod by Argo CD as an Argo
+  # Rollouts canary. The seed image isv-product:seed is the first stable
+  # version — bootstrapping it is the operator's HITL #3 (first prod rollout).
+  local atok tok code i phase
   kubectl create namespace prod --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   kubectl create namespace staging --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  (cd "$ROOT/.." && uv run org-bootstrap seed-demo)
+  # Seed image: k3s on Rancher shares the moby image store; k3d needs an import.
+  docker build -q -t isv-product:seed "$ROOT/../apps/isv_product" >/dev/null
+  if [ "${SWARM_CLUSTER:-k3d}" = "k3d" ]; then k3d image import isv-product:seed -c swarm-lab >/dev/null; fi
+  # Argo CD reads the Gitea repo as the non-admin agent user (read is enough).
+  tok="$(vcli kv get -field=token secret/gitea/agent 2>/dev/null || true)"
+  [ -n "$tok" ] || { echo "demo: no secret/gitea/agent — run: bootstrap.sh agent-user"; exit 1; }
+  kubectl -n "$NS" create secret generic argocd-repo-gitea-isv-product \
+    --from-literal=url=http://gitea-http.platform.svc.cluster.local:3000/swarm-lab/isv-product.git \
+    --from-literal=username=swarm-agent --from-literal="password=$tok" \
+    --dry-run=client -o yaml \
+    | kubectl label --local -f - argocd.argoproj.io/secret-type=repository --dry-run=client -o yaml \
+    | kubectl apply -f - >/dev/null
+  # The pre-M6 podinfo demo: its Application had no finalizer, so delete its objects too.
+  kubectl -n "$NS" delete application demo-prod --ignore-not-found >/dev/null
+  kubectl -n prod delete deploy,svc,servicemonitor -l app=podinfo --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n prod delete deploy,svc podinfo --ignore-not-found >/dev/null 2>&1 || true
   kubectl apply -f "$ROOT/../infra/argocd/appproject.yaml"
-  kubectl apply -f "$ROOT/../infra/argocd/application-demo.yaml"
-  kubectl -n "$NS" wait --for=jsonpath='{.status.sync.status}'=Synced application/demo-prod --timeout=300s
-  kubectl -n prod wait --for=condition=Ready pod -l app=podinfo --timeout=300s
-  echo "demo: podinfo Running in prod (argocd Synced)"
+  kubectl apply -f "$ROOT/../infra/argocd/application-isv-product.yaml"
+  kubectl -n "$NS" wait --for=jsonpath='{.status.sync.status}'=Synced application/isv-product-prod --timeout=300s
+  phase=""
+  for i in $(seq 1 60); do
+    phase="$(kubectl -n prod get rollout isv-product -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+    [ "$phase" = "Healthy" ] && break
+    sleep 5
+  done
+  [ "$phase" = "Healthy" ] || { echo "demo: rollout isv-product not Healthy ($phase)"; exit 1; }
+  echo "demo: isv-product Healthy in prod (Argo CD Synced, Argo Rollouts canary ready)"
 }
 
 section_openproject() {
@@ -482,6 +519,7 @@ case "${1:-all}" in
   agent-user) section_agent_user ;;
   runner) section_runner ;;
   argocd) section_argocd ;;
+  rollouts) section_rollouts ;;
   monitoring) section_monitoring ;;
   loki)   section_loki ;;
   demo)   section_demo ;;
@@ -491,6 +529,6 @@ case "${1:-all}" in
   agents) section_agents ;;
   mcp)    section_mcp ;;
   # `all` brings the stand cluster (k3d / Rancher Desktop) up first so `org-bootstrap apply` works on a fresh machine.
-  all)    cluster_up; section_vault; section_cnpg; section_gitea; section_agent_user; section_runner; section_argocd; section_monitoring; section_loki; section_demo; section_openproject; section_litellm; section_agents; section_mcp ;;
-  *) echo "usage: $0 [cluster|vault|cnpg|gitea|agent-user|runner|argocd|monitoring|loki|demo|openproject|litellm|llm-key [zai|openrouter]|agents|mcp|all]"; exit 2 ;;
+  all)    cluster_up; section_vault; section_cnpg; section_gitea; section_agent_user; section_runner; section_argocd; section_rollouts; section_monitoring; section_loki; section_demo; section_openproject; section_litellm; section_agents; section_mcp ;;
+  *) echo "usage: $0 [cluster|vault|cnpg|gitea|agent-user|runner|argocd|rollouts|monitoring|loki|demo|openproject|litellm|llm-key [zai|openrouter]|agents|mcp|all]"; exit 2 ;;
 esac

@@ -8,6 +8,8 @@ spec:
   description: "Swarm lab projects (target namespaces: prod, staging)"
   sourceRepos:
     - https://github.com/kryadov/ai-based-isv
+    # Target projects are canonical in the lab Gitea (spec §6.1).
+    - http://gitea-http.platform.svc.cluster.local:3000/swarm-lab/*
   destinations:
     - namespace: prod
       server: https://kubernetes.default.svc

@@ -176,3 +176,10 @@ def test_create_repo_falls_back_to_user_when_owner_is_not_an_org() -> None:
 def test_create_repo_existing_is_false() -> None:
     rec = Recorder({("POST", "/orgs/o/repos"): 409})
     assert rec.create_repo("demo") is False
+
+
+def test_existing_protection_403_is_updated() -> None:
+    # Gitea answers an existing protection with 403 "Branch protection already exist".
+    rec = Recorder({("POST", "/repos/o/demo/branch_protections"): 403})
+    rec.apply_check_profile("demo", stack="python", git_url="http://x")
+    assert "/repos/o/demo/branch_protections/main" in _paths(rec, "PATCH")
