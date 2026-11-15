@@ -16,7 +16,13 @@ case "$runtime" in
   *) echo "rancher: container runtime is '$runtime' — select the moby (dockerd) engine so k3s sees docker-built images" >&2; exit 1 ;;
 esac
 # The stand publishes Postgres on NodePort 15432 (infra/rancher/swarm-lab.start widens the range).
-kubectl create service nodeport swarm-range-probe --tcp=5432 --node-port=15432 --dry-run=server -o name >/dev/null 2>&1 \
-  || { echo "rancher: NodePort 15432 rejected — install infra/rancher/swarm-lab.start (infra/scripts/toolbox.sh does it) and restart Rancher Desktop" >&2; exit 1; }
+# "already allocated" means the stand's own Postgres NodePort holds it (a
+# re-apply) — the range is fine; only an out-of-range rejection is fatal.
+if ! probe_err="$(kubectl create service nodeport swarm-range-probe --tcp=5432 --node-port=15432 --dry-run=server -o name 2>&1 >/dev/null)"; then
+  case "$probe_err" in
+    *"already allocated"*) ;;
+    *) echo "rancher: NodePort 15432 rejected ($probe_err) — install infra/rancher/swarm-lab.start (infra/scripts/toolbox.sh does it) and restart Rancher Desktop" >&2; exit 1 ;;
+  esac
+fi
 kubectl get nodes -o wide
 echo "rancher: k3s Ready (runtime $runtime, NodePort range ok)"
