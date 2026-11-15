@@ -42,6 +42,7 @@ from agent_runtime.pathguard import DiffUnparseable, diff_files, filter_violatio
 from agent_runtime.settings import WorkerSettings
 from agent_runtime.tracker import TrackerClient
 from agent_runtime.vault_broker import read_gitea_token
+from agent_runtime.worker_deploy import DeployRunner, default_deploy_runner
 from agent_runtime.worker_gates import (
     GateContext,
     GateRunner,
@@ -427,6 +428,7 @@ async def _process_vertex(
     vertex: dict[str, Any],
     stop: asyncio.Event,
     gate_runner: GateRunner | None = None,
+    deploy_runner: DeployRunner | None = None,
 ) -> None:
     vertex_id: int = vertex["id"]
     session: ExecutionSession | None = None
@@ -672,6 +674,36 @@ async def _process_vertex(
             result["auto_merged"] = outcome.auto_merged
             result["review_summary"] = outcome.review_summary
 
+            if settings.deploy_enabled:
+                deployer = deploy_runner or default_deploy_runner(settings, token)
+                deployed = await deployer(changed)
+                session.session_log.append("deploy", deployed.model_dump())
+                result["deploy_verdict"] = deployed.model_dump(exclude={"postmortem"})
+                await client.note(f"deployed {deployed.image} to prod: {deployed.status}")
+                if deployed.postmortem:
+                    manifest = result.get("manifest_path")
+                    evidence = (
+                        Path(manifest).parent
+                        if manifest
+                        else Path(settings.workspace_dir) / f"run-{settings.run_id}"
+                    )
+                    evidence.mkdir(parents=True, exist_ok=True)
+                    postmortem = evidence / "postmortem.md"
+                    postmortem.write_text(deployed.postmortem, encoding="utf-8")
+                    result["postmortem_path"] = str(postmortem)
+                if deployed.status != "succeeded":
+                    # A rollback (or a stuck/rejected rollout) is a verdict, not a
+                    # transient error: re-running the agent would not change it.
+                    reason = f"deploy:{deployed.status}"
+                    await client.fail(vertex_id, reason=reason, terminal=True)
+                    await client.audit(
+                        action="fail",
+                        target=f"vertex:{vertex_id}",
+                        outcome="error",
+                        payload={"reason": reason, **result},
+                    )
+                    return
+
         await client.complete(vertex_id, result)
         await client.audit(
             action="complete",
@@ -709,6 +741,7 @@ async def worker_loop(
     stop: asyncio.Event | None = None,
     tracker: TrackerClient | None = None,
     gate_runner: GateRunner | None = None,
+    deploy_runner: DeployRunner | None = None,
 ) -> None:
     """Claim and execute vertices for ``settings.run_id`` until ``stop`` is set.
 
@@ -764,7 +797,9 @@ async def worker_loop(
                 await _sleep_or_stop(stop_event, settings.poll_interval_seconds)
                 continue
 
-            await _process_vertex(settings, executor, client, vertex, stop_event, gate_runner)
+            await _process_vertex(
+                settings, executor, client, vertex, stop_event, gate_runner, deploy_runner
+            )
     finally:
         if own_http:
             await http.aclose()

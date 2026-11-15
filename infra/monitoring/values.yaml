@@ -19,6 +19,10 @@ grafana:
     limits:
       memory: 512Mi
 prometheus:
+  # NodePort for the host-side platform deployer (M6: pre-rollout baseline).
+  service:
+    type: NodePort
+    nodePort: 30090
   prometheusSpec:
     retention: 3d
     resources:
