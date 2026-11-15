@@ -266,7 +266,9 @@ curl -sf -m 5 "$API_URL/healthz" >/dev/null \
 SELFDEV_TITLE="${SELFDEV_TITLE:-org-bootstrap check: a failing --version must not count as [ok]}"
 SELFDEV_BODY="${SELFDEV_BODY:-In apps/bootstrap/src/bootstrap/prereq.py, _version_of(binary) runs '<binary> --version' and returns the first output line even when the command exits non-zero, so 'org-bootstrap check' marks a broken tool [ok]. Make _version_of return None when the exit code is non-zero (keep None for a missing binary and for OSError/SubprocessError). Add pytest tests in apps/bootstrap/tests/test_prereq_version.py that monkeypatch shutil.which and subprocess.run: exit 0 with output -> first line; exit 1 -> None; missing binary -> None. Keep mypy --strict and ruff clean. (TODO.md: org-bootstrap check exit code.)}"
 SELFDEV_VERTEX="${SELFDEV_VERTEX:-prereq: _version_of returns None when --version exits non-zero; add tests in apps/bootstrap/tests/test_prereq_version.py}"
-SELFDEV_DONE_CMD="${SELFDEV_DONE_CMD:-uv run --quiet pytest -q apps/bootstrap/tests}"
+# The workspace members are packages: sync them all first (as the CI does) —
+# a bare `uv run` installs only the root and the tests fail to collect (run 19).
+SELFDEV_DONE_CMD="${SELFDEV_DONE_CMD:-uv sync --quiet --all-packages --locked && uv run --quiet pytest -q apps/bootstrap/tests}"
 SELFDEV_PATHS="${SELFDEV_PATHS:-apps/bootstrap/src/bootstrap/prereq.py,apps/bootstrap/tests/**}"
 python3 - "$SELFDEV_TITLE" "$SELFDEV_BODY" > "$TMP/issue.json" <<'PYJ'
 import json, sys
