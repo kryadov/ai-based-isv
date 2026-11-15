@@ -318,6 +318,8 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
   sleep 1
 done
 [ "$seed_ok" = "1" ] || fail "seed branch main did not appear in $ORG/$REPO"
+SEED_SHA="$(curl -fsS -H "$AUTH_HEADER" "$GITEA/api/v1/repos/$ORG/$REPO/branches/main" | python3 -c 'import json,sys; print(json.load(sys.stdin)["commit"]["id"])')"
+[ -n "$SEED_SHA" ] || fail "could not read the seed commit of main"
 # Branch protection: main merges only with BOTH CI contexts green.
 CONTEXTS_JSON="$(uv run python -c 'import json; from bootstrap.profiles import REQUIRED_CONTEXTS as c; print(json.dumps(list(c)))')"
 curl -fsS -o /dev/null -X POST -H "$AUTH_HEADER" -H "Content-Type: application/json" \
@@ -528,10 +530,10 @@ print(f"control plane: branch={result['branch']} diff_files={files}")
 PY
 
 # 5b) the pushed branch really carries the new module and a test change
-python3 - "$GITEA" "$TOKEN" "$ORG" "$REPO" "$BRANCH" <<'PY' \
+python3 - "$GITEA" "$TOKEN" "$ORG" "$REPO" "$BRANCH" "$SEED_SHA" <<'PY' \
   || fail "the pushed branch $BRANCH does not carry the expected change"
 import base64, fnmatch, json, sys, urllib.request
-gitea, token, owner, repo, branch = sys.argv[1:6]
+gitea, token, owner, repo, branch, seed_sha = sys.argv[1:7]
 
 def get(path):
     request = urllib.request.Request(
@@ -546,7 +548,11 @@ def tree(ref):
     data = get(f"/api/v1/repos/{owner}/{repo}/git/trees/{sha}?recursive=1")
     return {entry["path"] for entry in data["tree"]}
 
-added = sorted(tree(branch) - tree("main"))
+seed = {
+    e["path"]
+    for e in get(f"/api/v1/repos/{owner}/{repo}/git/trees/{seed_sha}?recursive=1")["tree"]
+}
+added = sorted(tree(branch) - seed)
 assert "src/wordtools/reverse.py" in added, f"reverse.py missing: {added}"
 assert any(
     fnmatch.fnmatch(path, "tests/**") or fnmatch.fnmatch(path, "**/test_*.py")
