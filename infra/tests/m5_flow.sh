@@ -546,13 +546,16 @@ def tree(ref):
     # the git trees API resolves a commit sha only, never a branch name
     sha = get(f"/api/v1/repos/{owner}/{repo}/branches/{ref}")["commit"]["id"]
     data = get(f"/api/v1/repos/{owner}/{repo}/git/trees/{sha}?recursive=1")
-    return {entry["path"] for entry in data["tree"]}
+    return {entry["path"]: entry["sha"] for entry in data["tree"]}
 
 seed = {
-    e["path"]
+    e["path"]: e["sha"]
     for e in get(f"/api/v1/repos/{owner}/{repo}/git/trees/{seed_sha}?recursive=1")["tree"]
 }
-added = sorted(tree(branch) - seed)
+# added OR modified: the model may extend the existing test file instead of
+# creating a new one (run 17), both are a test change.
+head = tree(branch)
+added = sorted(path for path, blob in head.items() if seed.get(path) != blob)
 assert "src/wordtools/reverse.py" in added, f"reverse.py missing: {added}"
 assert any(
     fnmatch.fnmatch(path, "tests/**") or fnmatch.fnmatch(path, "**/test_*.py")
@@ -561,7 +564,7 @@ assert any(
 data = get(f"/api/v1/repos/{owner}/{repo}/contents/src/wordtools/reverse.py?ref={branch}")
 source = base64.b64decode(data["content"]).decode("utf-8")
 assert "reverse_words" in source, source
-print(f"gitea: {branch} adds {', '.join(added)}")
+print(f"gitea: {branch} changes {', '.join(added)}")
 PY
 
 # 5c) append-only session log with the harness event stream
