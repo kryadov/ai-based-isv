@@ -121,6 +121,20 @@ def register_ui(app: FastAPI) -> None:
             )
         return {"id": request_id, "status": status, "decided_by": user}
 
+    @app.post("/ui/api/automations/{name}/run")
+    async def ui_run_automation(name: str, request: Request) -> dict[str, Any]:
+        user = require_user(request)
+        run_id = await app.state.create_automation_run(name, user)
+        async with app.state.session_factory() as session:
+            await store.append_audit(
+                session,
+                actor=f"ui:{user}",
+                action="automation_requested",
+                target=f"automation:{name}",
+                payload={"run_id": run_id},
+            )
+        return {"id": run_id, "status": "requested"}
+
     @app.get("/ui/api/inbox")
     async def ui_inbox(request: Request) -> dict[str, Any]:
         require_user(request)

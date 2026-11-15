@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from agent_api import store
+from agent_api.automations import register_automations
 from agent_api.models import AuditRow, Base, HITLRow, RunRow, VertexRow
 from agent_api.settings import Settings, settings
 from agent_api.ui import register_ui
@@ -50,6 +51,7 @@ def create_app() -> FastAPI:
     app.state.session_secret = current.session_secret
     app.state.projects_file = current.projects_file
     app.state.automations_dir = current.automations_dir
+    register_automations(app)
     register_ui(app)
 
     @app.get("/healthz")
