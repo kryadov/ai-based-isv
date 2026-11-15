@@ -87,3 +87,11 @@
 - [ ] Working-memory scratchpad for the coordinator (today: deps' results are the handoff).
 - [ ] Workers on several hosts (today: one host, N processes); NodePort pool 30100–30110 caps concurrent sandboxes at 11.
 - [ ] Scrape the control-plane `/metrics` when agent_api runs in-cluster (today it runs on the host in flows).
+
+## M9 follow-ups (2026-11-16)
+
+- [ ] Java check profile + Spring/plain-Java service template (compile, Checkstyle, SpotBugs, JUnit via a JDK container).
+- [ ] React/frontend profile (eslint, tsc, vitest; browser e2e later).
+- [ ] LLM-assistant profile: eval suites as first-class tests, prompt versions in the run manifest (spec §7.2.4).
+- [ ] Per-kind templates and tutorials `docs/tutorials/onboard-<kind>.md` (spec §13.1.5).
+- [ ] Canary deploy for non-Python services: the M6 deploy templates are service-agnostic but only isv-product is wired.

@@ -186,6 +186,14 @@ flowchart LR
 - **Judge** (`swarm judge`): все вершины `done`, и смерженный `main` проходит done-команду run. Тогда run получает статус `done`, а в память проекта пишется эпизод `decision`.
 - **Метрики:** `GET /metrics` control plane отдаёт `swarm_vertices{status}`, `swarm_hitl_pending{kind}` и `swarm_runs{status}`.
 
+### 4·M9. Полиглотный коридор
+
+Всё, что зависит от стека, — это данные:
+- check-профили в `infra/templates/check-profiles/<stack>`: `python`, `typescript`, `docs`;
+- шаблоны кода в `infra/templates/projects/<name>`: `ts-service`.
+
+Коридор, агенты, ревьюер, HITL и память от стека не зависят. `m9_flow.sh` доказывает это на TypeScript-сервисе. Приёмочная команда для чужого стека запускает его инструменты в контейнере (например, `node:22` через docker), поэтому рантайм языка на хосте не нужен.
+
 ### 4a. Каталог ролей агентов
 
 Реализуется через реестр `identities` (M3): роль маппится на `allowed_sections`

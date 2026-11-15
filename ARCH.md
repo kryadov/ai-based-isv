@@ -182,6 +182,14 @@ flowchart LR
 - **Judge** (`swarm judge`): all vertices `done`, and the merged `main` passes the run's done command. Then the run is set `done`, and a `decision` episode goes to project memory.
 - **Metrics:** `GET /metrics` on the control plane exposes `swarm_vertices{status}`, `swarm_hitl_pending{kind}` and `swarm_runs{status}`.
 
+### 4·M9. Polyglot corridor
+
+Stack-specific parts are data:
+- check profiles in `infra/templates/check-profiles/<stack>`: `python`, `typescript`, `docs`;
+- code templates in `infra/templates/projects/<name>`: `ts-service`.
+
+The corridor, the agents, the reviewer, HITL and memory are stack-agnostic. `m9_flow.sh` proves it on a TypeScript service. The acceptance command for a foreign stack runs its toolchain in a container (e.g. `node:22` via docker), so the host needs no language runtime.
+
 ### 4a. Agent roles catalog
 
 Implemented via the `identities` registry (M3): a role maps to `allowed_sections`
