@@ -66,6 +66,8 @@ Python 3.12 подхватится автоматически (`.python-version`
 | LiteLLM API | http://localhost:30084/v1 | Bearer master key (Vault `secret/litellm/master`); модели: qwen-coder, qwen3, reviewer (z.ai Coding Plan; OpenRouter только при исчерпании лимита z.ai; ключи из `.env` в Vault `secret/litellm/{zai,openrouter}`) |
 | Argo CD UI | http://localhost:30081 | `admin` / пароль из secret `argocd-initial-admin-secret` |
 | Grafana | http://localhost:30082 | `admin` / пароль в Vault `secret/grafana/admin` |
+| Prometheus | http://localhost:30090 | без авторизации (лаборатория); деплоер M6 берёт отсюда базовую линию |
+| isv-product (prod) | `kubectl -n prod get rollout isv-product` | канарейка Argo Rollouts; секции `rollouts` + `demo` (TUTORIAL.ru.md §8) |
 
 ## 5. Acceptance-тесты L0
 

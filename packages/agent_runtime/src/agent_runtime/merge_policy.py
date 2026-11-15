@@ -17,7 +17,8 @@ from pydantic import BaseModel, StrictBool, ValidationError
 
 from agent_runtime.pathguard import filter_violations
 
-PROTECTED_GLOBS: Final[tuple[str, ...]] = (".gitea/**", ".platform/**")
+# deploy/** — deploy config is human-only (spec §7.2.6, HITL #3; M6).
+PROTECTED_GLOBS: Final[tuple[str, ...]] = (".gitea/**", ".platform/**", "deploy/**")
 
 
 class MergePolicy(BaseModel):

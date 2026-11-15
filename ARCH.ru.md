@@ -122,6 +122,21 @@ flowchart LR
     M --> DONE["трекер Done<br/>+ ссылка на PR"]
 ```
 
+### 3b. Канареечный выкат (M6)
+
+```mermaid
+flowchart LR
+    M["мерж в Gitea"] --> B["деплоер: сборка isv-product:sha7<br/>+ базовая линия"]
+    B --> H{"первый выкат или<br/>изменение deploy/**?"}
+    H -->|"да"| HITL["HITL #3"]
+    H -->|"нет"| P
+    HITL --> P["Argo CD Application<br/>image override"]
+    P --> R["Argo Rollouts canary<br/>20 → 50 → 100 %"]
+    R --> A{"анализ: канарейка vs стабильная<br/>+ окно после выката<br/>(Prometheus, k6 traffic)"}
+    A -->|"прошёл"| OK["успех:<br/>вердикт в evidence + трекер"]
+    A -->|"провал"| RB["прерывание → откат на стабильную<br/>+ postmortem.md"]
+```
+
 ### 3a. Цикл самообеспечения (спека §13.7, уровень 2)
 
 Репо самой платформы — тоже целевой проект. Канон — GitHub; рабочая копия агентов — Gitea `swarm-lab/ai-based-isv`, синхронизация — `infra/scripts/platform-sync.sh`. Агенты работают от не-админского `swarm-agent`; каждый мерж требует HITL (для `platform_repos` автомержа нет).

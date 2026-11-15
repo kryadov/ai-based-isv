@@ -1,0 +1,106 @@
+# Canary analysis (M6). Each query returns 1 (pass) or 0 (fail): the bound is
+# relative to the reference (stable version / pre-rollout baseline) with an
+# absolute floor, so a near-zero reference cannot make the check flaky, and
+# "or vector(0)" turns "no samples yet" into 0 instead of an empty result.
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: canary-vs-stable
+spec:
+  args:
+    - name: canary-hash
+    - name: stable-hash
+  metrics:
+    # The canary must actually serve API traffic; otherwise the comparisons
+    # below would pass vacuously on empty vectors (live lesson, M6).
+    - name: canary-traffic
+      interval: 30s
+      count: 4
+      failureLimit: 2
+      successCondition: result[0] > 0
+      provider:
+        prometheus:
+          address: http://kube-prometheus-stack-prometheus.platform:9090
+          query: |
+            sum(rate(http_requests_total{namespace="prod",service="isv-product",route=~"/api/.*",rollouts_pod_template_hash="{{args.canary-hash}}"}[1m])) or vector(0)
+    - name: error-ratio
+      interval: 30s
+      count: 4
+      failureLimit: 1
+      successCondition: result[0] == 1
+      provider:
+        prometheus:
+          address: http://kube-prometheus-stack-prometheus.platform:9090
+          query: |
+            (
+              (sum(rate(http_requests_total{namespace="prod",service="isv-product",route=~"/api/.*",code=~"5..",rollouts_pod_template_hash="{{args.canary-hash}}"}[1m]))
+                / sum(rate(http_requests_total{namespace="prod",service="isv-product",route=~"/api/.*",rollouts_pod_template_hash="{{args.canary-hash}}"}[1m])))
+              or vector(0)
+            )
+            <= bool
+            clamp_min(
+              2 * ((sum(rate(http_requests_total{namespace="prod",service="isv-product",route=~"/api/.*",code=~"5..",rollouts_pod_template_hash="{{args.stable-hash}}"}[1m]))
+                / sum(rate(http_requests_total{namespace="prod",service="isv-product",route=~"/api/.*",rollouts_pod_template_hash="{{args.stable-hash}}"}[1m])))
+              or vector(0)),
+              0.05
+            )
+    - name: p95-latency
+      interval: 30s
+      count: 4
+      failureLimit: 1
+      successCondition: result[0] == 1
+      provider:
+        prometheus:
+          address: http://kube-prometheus-stack-prometheus.platform:9090
+          query: |
+            (
+              histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{namespace="prod",service="isv-product",route=~"/api/.*",rollouts_pod_template_hash="{{args.canary-hash}}"}[1m])))
+              or vector(0)
+            )
+            <= bool
+            clamp_min(
+              1.5 * (histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{namespace="prod",service="isv-product",route=~"/api/.*",rollouts_pod_template_hash="{{args.stable-hash}}"}[1m])))
+              or vector(0)),
+              0.3
+            )
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: post-rollout
+spec:
+  args:
+    - name: baseline-error
+    - name: baseline-p95
+  metrics:
+    - name: error-ratio
+      interval: 30s
+      count: 4
+      failureLimit: 1
+      successCondition: result[0] == 1
+      provider:
+        prometheus:
+          address: http://kube-prometheus-stack-prometheus.platform:9090
+          query: |
+            (
+              (sum(rate(http_requests_total{namespace="prod",service="isv-product",route=~"/api/.*",code=~"5.."}[1m]))
+                / sum(rate(http_requests_total{namespace="prod",service="isv-product",route=~"/api/.*"}[1m])))
+              or vector(0)
+            )
+            <= bool
+            clamp_min(vector(2 * {{args.baseline-error}}), 0.05)
+    - name: p95-latency
+      interval: 30s
+      count: 4
+      failureLimit: 1
+      successCondition: result[0] == 1
+      provider:
+        prometheus:
+          address: http://kube-prometheus-stack-prometheus.platform:9090
+          query: |
+            (
+              histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{namespace="prod",service="isv-product",route=~"/api/.*"}[1m])))
+              or vector(0)
+            )
+            <= bool
+            clamp_min(vector(1.5 * {{args.baseline-p95}}), 0.3)

@@ -117,6 +117,7 @@ async def fix_attempt(
         repo_url=settings.repo_url,
         base_branch=branch,  # the sandbox clones the PR branch, not main
         work_branch=branch,
+        evidence_suffix=f"fix-{req.round}",
     )
     session = None
     try:

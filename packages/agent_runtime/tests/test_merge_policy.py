@@ -49,3 +49,10 @@ def test_disabled_policy_never_auto_merges() -> None:
 
 def test_empty_paths_never_auto_merge() -> None:
     assert auto_merge_allowed([], load_policy(POLICY, platform_repo=False)) is False
+
+
+def test_deploy_paths_are_protected() -> None:
+    # Deploy config is human-only (spec §7.2.6, HITL #3).
+    from agent_runtime.merge_policy import touches_protected
+
+    assert touches_protected(["src/a.py", "deploy/rollout.yaml"]) == ["deploy/rollout.yaml"]

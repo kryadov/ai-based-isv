@@ -45,6 +45,7 @@ class WorkerSettings(BaseSettings):
     # --- MCP servers registered into the sandbox harness (M4c; empty = omit) ---
     mcp_task_source_url: str = ""
     mcp_llm_url: str = ""
+    mcp_observability_url: str = ""  # M6: read-only rollout/metrics view
     # --- tracker status loop (M4c): task_ref "owner/repo#N"; empty = disabled ---
     task_ref: str = ""
     task_source_url: str = ""  # task-source MCP endpoint reachable from the worker host
@@ -61,6 +62,12 @@ class WorkerSettings(BaseSettings):
     platform_repo: bool = False  # force "platform repo" semantics: never auto-merge (§13.7)
     # Repos ("owner/repo") that ARE this platform (self-dev level 2): always HITL.
     platform_repos: list[str] = ["swarm-lab/ai-based-isv"]
+    # --- deploy (M6): merged main → Argo Rollouts canary in prod ---
+    deploy_enabled: bool = False
+    deploy_app: str = "isv-product"
+    deploy_namespace: str = "prod"
+    prometheus_url: str = "http://localhost:30090"  # host-reachable (NodePort)
+    deploy_timeout_s: float = 900.0
 
     @model_validator(mode="after")
     def _required_at_runtime(self) -> "WorkerSettings":

@@ -701,6 +701,9 @@ class FakeTracker:
     def statuses(self) -> list[tuple[str, str]]:
         return [(a["status"], a.get("note", "")) for n, a in self.calls if n == "set_task_status"]
 
+    def comments(self) -> list[str]:
+        return [str(a.get("body", "")) for n, a in self.calls if n == "add_task_comment"]
+
 
 async def _run_with_tracker(
     tmp_path: Path,
@@ -903,12 +906,15 @@ async def _run_gated(
     vertex: dict[str, Any] | None = None,
     gates_enabled: bool = True,
     tracker: FakeTracker | None = None,
+    deploy_runner: Any = None,
 ) -> tuple[FakeControlPlane, Path]:
     from agent_runtime.tracker import TrackerClient
 
     bare = _init_bare_repo(tmp_path)
     plane = FakeControlPlane(vertices=[vertex or _greet_vertex()])
     update: dict[str, Any] = {"gates_enabled": gates_enabled}
+    if deploy_runner is not None:
+        update["deploy_enabled"] = True
     if tracker is not None:
         update |= {"task_ref": "o/r#7", "task_source_url": "http://tracker.test/mcp"}
     settings = _settings(tmp_path, str(bare)).model_copy(update=update)
@@ -929,6 +935,7 @@ async def _run_gated(
                 stop=stop,
                 tracker=TrackerClient(tracker_http, "http://tracker.test/mcp") if tracker else None,
                 gate_runner=runner,
+                deploy_runner=deploy_runner,
             )
         )
         done = asyncio.ensure_future(plane.complete_called.wait())
@@ -1015,6 +1022,7 @@ async def test_gate_fix_port_runs_executor_on_pr_branch_and_pushes(tmp_path: Pat
     assert fixes[0].pushed is True, fixes[0].reason
     assert fixes[0].replies == {"greeting.py:1": "addressed in fix round 1"}
     fix_request = executor.calls[1]
+    assert fix_request.evidence_suffix == "fix-1"  # never overwrite the vertex manifest
     assert fix_request.base_branch == "agent/vertex-1"
     assert "say world" in fix_request.prompt and "E assert" in fix_request.prompt
     tip = subprocess.run(
@@ -1133,3 +1141,79 @@ def test_repo_coords() -> None:
     )
     with pytest.raises(ValueError):
         repo_coords("/tmp/origin.git")
+
+
+async def test_hitl_rejected_fails_terminal(tmp_path: Path) -> None:
+    # A human said no: the vertex must not be retried (and ask the human again).
+    async def runner(ctx: Any, stop: asyncio.Event) -> Any:
+        return _outcome("blocked", "hitl_rejected")
+
+    plane, _ = await _run_gated(tmp_path, runner=runner)
+    body = plane.fail_calls[0][1]
+    assert body["reason"] == "gate:hitl_rejected" and body["terminal"] is True
+
+
+async def test_transient_gate_block_is_not_terminal(tmp_path: Path) -> None:
+    async def runner(ctx: Any, stop: asyncio.Event) -> Any:
+        return _outcome("blocked", "ci_timeout")
+
+    plane, _ = await _run_gated(tmp_path, runner=runner)
+    assert "terminal" not in plane.fail_calls[0][1]
+
+
+def _verdict(status: str) -> Any:
+    from agent_runtime.deployer import DeployVerdict
+    from agent_runtime.prom import Slo
+
+    return DeployVerdict(
+        status=status,  # type: ignore[arg-type]
+        image="isv-product:abc1234",
+        previous_image="isv-product:seed",
+        revision="3",
+        analysis=[{"name": "r", "phase": "Successful" if status == "succeeded" else "Failed"}],
+        baseline=Slo(error_ratio=0.0, p95_s=0.0),
+        started="t0",
+        finished="t1",
+        postmortem="# Postmortem (draft)" if status == "rolled_back" else None,
+    )
+
+
+async def _merged(ctx: Any, stop: asyncio.Event) -> Any:
+    return _outcome("merged")
+
+
+async def test_deploy_after_merge_completes_with_verdict(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+
+    async def deployer(changed: list[str]) -> Any:
+        calls.append(changed)
+        return _verdict("succeeded")
+
+    tracker = FakeTracker()
+    plane, _ = await _run_gated(tmp_path, runner=_merged, deploy_runner=deployer, tracker=tracker)
+    assert calls == [["greeting.py"]]
+    result = plane.complete_calls[0][1]["result"]
+    assert result["deploy_verdict"]["status"] == "succeeded"
+    assert result["deploy_verdict"]["image"] == "isv-product:abc1234"
+    assert any("deployed isv-product:abc1234 to prod: succeeded" in c for c in tracker.comments())
+
+
+async def test_rollback_fails_terminal_with_postmortem(tmp_path: Path) -> None:
+    async def deployer(changed: list[str]) -> Any:
+        return _verdict("rolled_back")
+
+    plane, _ = await _run_gated(tmp_path, runner=_merged, deploy_runner=deployer)
+    assert plane.complete_calls == []
+    body = plane.fail_calls[0][1]
+    assert body["reason"] == "deploy:rolled_back" and body["terminal"] is True
+    fail_audit = next(a for a in plane.audit_calls if a.get("action") == "fail")
+    postmortem = Path(fail_audit["payload"]["postmortem_path"])
+    assert postmortem.name == "postmortem.md"
+    assert postmortem.read_text(encoding="utf-8").startswith("# Postmortem")
+    assert fail_audit["payload"]["deploy_verdict"]["status"] == "rolled_back"
+
+
+async def test_deploy_disabled_by_default(tmp_path: Path) -> None:
+    plane, _ = await _run_gated(tmp_path, runner=_merged)
+    result = plane.complete_calls[0][1]["result"]
+    assert "deploy_verdict" not in result

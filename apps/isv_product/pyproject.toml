@@ -3,7 +3,7 @@ name = "isv_product"
 version = "0.1.0"
 description = "Demo service seeded by the organization bootstrapper"
 requires-python = ">=3.12"
-dependencies = ["fastapi>=0.115", "uvicorn>=0.34"]
+dependencies = ["fastapi>=0.115", "uvicorn>=0.34", "prometheus-client>=0.21"]
 
 [dependency-groups]
 dev = ["httpx2>=2.16"]

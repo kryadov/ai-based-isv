@@ -25,6 +25,11 @@ src = ["packages", "apps"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
+[tool.ruff.lint.isort]
+# isv_product is seeded as a standalone repo where it is first-party (bootstrap.seed);
+# grouping it the same way here keeps the seeded files ruff-clean.
+known-first-party = ["isv_product"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true

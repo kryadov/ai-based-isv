@@ -388,6 +388,9 @@ env \
   AGENT_RUNTIME_CI_TIMEOUT_S=1500 \
   AGENT_RUNTIME_HITL_POLL_S=5 \
   AGENT_RUNTIME_REVIEWER_BASE_URL="http://localhost:30084/v1" \
+  AGENT_RUNTIME_MCP_OBSERVABILITY_URL="${SELFDEV_OBSERVABILITY_URL:-http://observability.agents.svc.cluster.local:8000/mcp}" \
+  AGENT_RUNTIME_DEPLOY_ENABLED="${SELFDEV_DEPLOY:-0}" \
+  AGENT_RUNTIME_PROMETHEUS_URL="${SELFDEV_PROMETHEUS_URL:-http://localhost:30090}" \
   uv run python -m agent_runtime.worker > "$WORKER_LOG" 2>&1 &
 WORKER_PID=$!
 echo "Selfdev flow: worker pid=$WORKER_PID (log: $WORKER_LOG)"
@@ -405,6 +408,12 @@ while :; do
     curl -fsS "$API_URL/hitl/$HITL_ID" 2>/dev/null || true; echo
     echo "  approve: curl -X POST $API_URL/hitl/$HITL_ID/decision -H 'Content-Type: application/json' -d '{\"action\":\"approve\",\"decided_by\":\"<you>\"}'"
     ANNOUNCED="$HITL_ID"
+    # Acceptance flows only (m6_flow.sh): the merge decision is automated, as in m5.
+    if [ "${SELFDEV_AUTO_APPROVE_MERGE:-0}" = "1" ]; then
+      curl -fsS -o /dev/null -X POST "$API_URL/hitl/$HITL_ID/decision" -H "Content-Type: application/json" \
+        -d '{"action":"approve","decided_by":"acceptance-flow"}' || fail "HITL auto-approve failed"
+      echo "Selfdev flow: HITL #$HITL_ID auto-approved (SELFDEV_AUTO_APPROVE_MERGE=1)"
+    fi
   fi
   STATUS="$(psql_q "SELECT status FROM vertices WHERE id=$VERTEX_ID")"
   [ "$STATUS" = "done" ] && break
@@ -435,4 +444,12 @@ ISSUE_STATE="$(curl -fsS -H "$AUTH_HEADER" "$GITEA/api/v1/repos/$ORG/$REPO/issue
 [ "$ISSUE_STATE" = "closed" ] || fail "task issue $TASK_REF is $ISSUE_STATE, expected closed"
 NEW_MAIN="$(curl -fsS -H "$AUTH_HEADER" "$GITEA/api/v1/repos/$ORG/$REPO/branches/main" | python3 -c 'import json,sys; print(json.load(sys.stdin)["commit"]["id"])')"
 echo "Selfdev flow: PASS — $TASK_REF -> run $RUN_ID -> vertex $VERTEX_ID -> $PR_URL merged after CI + review + HITL in ${ELAPSED}s; main ${SEED_SHA:0:7} -> ${NEW_MAIN:0:7}"
-echo "Next (host Git Bash): bash infra/scripts/platform-sync.sh promote"
+if [ -n "${SELFDEV_RESULT_FILE:-}" ]; then
+  printf '%s' "$RESULT_JSON" > "$SELFDEV_RESULT_FILE"
+fi
+if [ "${SELFDEV_DEPLOY:-0}" = "1" ]; then
+  python3 -c 'import json,sys; d=json.loads(sys.argv[1]).get("deploy_verdict") or {}; print("Selfdev flow: deploy", d.get("status"), d.get("image"))' "$RESULT_JSON"
+fi
+if [ "$REPO" = "ai-based-isv" ]; then
+  echo "Next (host Git Bash): bash infra/scripts/platform-sync.sh promote"
+fi

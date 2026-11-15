@@ -72,6 +72,8 @@ Stand facts are recorded in `infra/env.yaml` (auto-generated — a VET artifact,
 | LiteLLM API | http://localhost:30084/v1 | Bearer master key (Vault `secret/litellm/master`); models: qwen-coder, qwen3, reviewer (z.ai Coding Plan; OpenRouter only on the z.ai plan limit; keys from `.env` into Vault `secret/litellm/{zai,openrouter}`) |
 | Argo CD UI | http://localhost:30081 | `admin` / password from secret `argocd-initial-admin-secret` |
 | Grafana | http://localhost:30082 | `admin` / password in Vault `secret/grafana/admin` |
+| Prometheus | http://localhost:30090 | no auth (lab); the M6 deployer reads the pre-rollout baseline here |
+| isv-product (prod) | `kubectl -n prod get rollout isv-product` | Argo Rollouts canary; sections `rollouts` + `demo` (TUTORIAL.md §8) |
 
 ## 5. L0 acceptance tests
 

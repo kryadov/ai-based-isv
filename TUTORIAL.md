@@ -170,10 +170,44 @@ The first platform change made this way: Gitea PR #3 → GitHub PR #29 (release 
 | `platform-sync.sh pull` exits 3 (`unpromoted`) | Gitea has merged work not yet on GitHub — run `promote` first |
 | Model calls fail | check `.env` keys → `bootstrap.sh litellm`; z.ai errors other than its limit are not rerouted to OpenRouter by design |
 
-## 8. What is not there yet
+## 8. Deploy to prod: canary with metric analysis (M6)
 
-- **Deploying to prod with a canary and metric analysis** is in progress: M6 (Argo Rollouts + k6). Today the corridor ends at the merge.
-- Project memory: M7.
+The demo service `swarm-lab/isv-product` (seeded by `bootstrap.sh demo`) runs in namespace `prod` as an **Argo Rollouts canary**, managed by Argo CD from the repo's `deploy/` directory.
+
+- Traffic: k6 sends a steady 10 rps.
+- Metrics: Prometheus (http://localhost:30090) and Grafana.
+
+When the corridor merges a change and deploy is enabled, the platform deployer:
+1. builds `isv-product:<sha7>` from the merged `main`;
+2. measures the pre-rollout baseline (5xx ratio, p95);
+3. points the Argo CD Application at the new image.
+
+Argo Rollouts then shifts traffic 20 → 50 → 100 % while analysis runs:
+- **canary vs stable:** the canary must carry traffic, its 5xx ratio ≤ max(2 × stable, 5 %), its p95 ≤ max(1.5 × stable, 300 ms);
+- **post-rollout window:** the whole service against the baseline.
+
+If an analysis fails, the rollout aborts, prod returns to the stable version, and the evidence gets a `postmortem.md` draft. A rollout without a passed analysis never counts as successful.
+
+```bash
+./infra/scripts/toolbox.sh bash infra/tests/m6_flow.sh   # good path (agent change) + bad path (injected fault → rollback)
+kubectl -n prod get rollout isv-product                  # phase, step
+kubectl -n prod get analysisrun                          # analysis verdicts
+```
+
+Deploy a commit by hand, or show a rollback with an injected fault:
+
+```bash
+./infra/scripts/toolbox.sh uv run python -m agent_runtime.deployer --sha <sha> --repo-dir <clone> \
+  [--fault FAULT_ERROR_RATE=0.5] --evidence-dir /tmp/deploy
+```
+
+**Deploy config is human-only.** `deploy/**` is a protected gate path: agents cannot change it. Change it with an operator PR in Gitea. The first prod rollout of a service also needs a HITL approval (gate #3).
+
+Agents see rollouts and metrics through the read-only `observability` MCP server (`get_rollout`, `service_slo`, `query_metric`).
+
+## 9. What is not there yet
+
+- Project memory: M7. The rollback postmortem is a draft in the evidence for now.
 - Swarm parallelism: M8.
 - A web panel: M10.
 

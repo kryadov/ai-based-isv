@@ -42,6 +42,7 @@ from agent_runtime.pathguard import DiffUnparseable, diff_files, filter_violatio
 from agent_runtime.settings import WorkerSettings
 from agent_runtime.tracker import TrackerClient
 from agent_runtime.vault_broker import read_gitea_token
+from agent_runtime.worker_deploy import DeployRunner, default_deploy_runner
 from agent_runtime.worker_gates import (
     GateContext,
     GateRunner,
@@ -93,10 +94,14 @@ class ControlPlaneClient:
         )
         response.raise_for_status()
 
-    async def fail(self, vertex_id: int, reason: str | None = None) -> None:
+    async def fail(
+        self, vertex_id: int, reason: str | None = None, *, terminal: bool = False
+    ) -> None:
         payload: dict[str, Any] = {"agent": self._settings.agent}
         if reason is not None:
             payload["reason"] = reason
+        if terminal:
+            payload["terminal"] = True
         response = await self._http.post(
             f"/vertices/{vertex_id}/fail",
             json=payload,
@@ -177,8 +182,10 @@ class TrackedControlPlaneClient(ControlPlaneClient):
             note += f"\nPR: {result['pr_url']}"
         await self._track("done", note, vertex_id)
 
-    async def fail(self, vertex_id: int, reason: str | None = None) -> None:
-        await super().fail(vertex_id, reason=reason)
+    async def fail(
+        self, vertex_id: int, reason: str | None = None, *, terminal: bool = False
+    ) -> None:
+        await super().fail(vertex_id, reason=reason, terminal=terminal)
         note = f"run {self._settings.run_id}: vertex {vertex_id} failed: {reason or 'unknown'}"
         await self._track("blocked", note, vertex_id)
 
@@ -250,7 +257,11 @@ def resolve_gitea_token(settings: WorkerSettings, kube_runner: Any | None = None
 
 def _mcp_servers(settings: WorkerSettings) -> dict[str, str]:
     """Harness MCP registrations: server name -> URL, configured ones only."""
-    configured = {"tracker": settings.mcp_task_source_url, "llm": settings.mcp_llm_url}
+    configured = {
+        "tracker": settings.mcp_task_source_url,
+        "llm": settings.mcp_llm_url,
+        "observability": settings.mcp_observability_url,
+    }
     return {name: url for name, url in configured.items() if url}
 
 
@@ -421,6 +432,7 @@ async def _process_vertex(
     vertex: dict[str, Any],
     stop: asyncio.Event,
     gate_runner: GateRunner | None = None,
+    deploy_runner: DeployRunner | None = None,
 ) -> None:
     vertex_id: int = vertex["id"]
     session: ExecutionSession | None = None
@@ -651,7 +663,10 @@ async def _process_vertex(
                         outcome.pr_url,
                         {"pr_url": outcome.pr_url, "vertex_id": vertex_id, "reason": reason},
                     )
-                await client.fail(vertex_id, reason=reason)
+                # A human rejection is final: retrying would ask the human again.
+                await client.fail(
+                    vertex_id, reason=reason, terminal=outcome.reason == "hitl_rejected"
+                )
                 await client.audit(
                     action="fail",
                     target=f"vertex:{vertex_id}",
@@ -662,6 +677,36 @@ async def _process_vertex(
             result["pr_url"] = outcome.pr_url
             result["auto_merged"] = outcome.auto_merged
             result["review_summary"] = outcome.review_summary
+
+            if settings.deploy_enabled:
+                deployer = deploy_runner or default_deploy_runner(settings, token)
+                deployed = await deployer(changed)
+                session.session_log.append("deploy", deployed.model_dump())
+                result["deploy_verdict"] = deployed.model_dump(exclude={"postmortem"})
+                await client.note(f"deployed {deployed.image} to prod: {deployed.status}")
+                if deployed.postmortem:
+                    manifest = result.get("manifest_path")
+                    evidence = (
+                        Path(manifest).parent
+                        if manifest
+                        else Path(settings.workspace_dir) / f"run-{settings.run_id}"
+                    )
+                    evidence.mkdir(parents=True, exist_ok=True)
+                    postmortem = evidence / "postmortem.md"
+                    postmortem.write_text(deployed.postmortem, encoding="utf-8")
+                    result["postmortem_path"] = str(postmortem)
+                if deployed.status != "succeeded":
+                    # A rollback (or a stuck/rejected rollout) is a verdict, not a
+                    # transient error: re-running the agent would not change it.
+                    reason = f"deploy:{deployed.status}"
+                    await client.fail(vertex_id, reason=reason, terminal=True)
+                    await client.audit(
+                        action="fail",
+                        target=f"vertex:{vertex_id}",
+                        outcome="error",
+                        payload={"reason": reason, **result},
+                    )
+                    return
 
         await client.complete(vertex_id, result)
         await client.audit(
@@ -700,6 +745,7 @@ async def worker_loop(
     stop: asyncio.Event | None = None,
     tracker: TrackerClient | None = None,
     gate_runner: GateRunner | None = None,
+    deploy_runner: DeployRunner | None = None,
 ) -> None:
     """Claim and execute vertices for ``settings.run_id`` until ``stop`` is set.
 
@@ -755,7 +801,9 @@ async def worker_loop(
                 await _sleep_or_stop(stop_event, settings.poll_interval_seconds)
                 continue
 
-            await _process_vertex(settings, executor, client, vertex, stop_event, gate_runner)
+            await _process_vertex(
+                settings, executor, client, vertex, stop_event, gate_runner, deploy_runner
+            )
     finally:
         if own_http:
             await http.aclose()

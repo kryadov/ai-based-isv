@@ -110,10 +110,13 @@ def create_app() -> FastAPI:
     @app.post("/vertices/{vertex_id}/fail")
     async def fail(vertex_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         async with app.state.session_factory() as session:
-            ok = await store.fail_vertex(session, vertex_id, agent=str(payload.get("agent", "")))
+            terminal = payload.get("terminal") is True
+            ok = await store.fail_vertex(
+                session, vertex_id, agent=str(payload.get("agent", "")), terminal=terminal
+            )
             if not ok:
                 raise HTTPException(status_code=409, detail="vertex not leased by agent")
-            return {"ok": True, "requeued": True}
+            return {"ok": True, "requeued": not terminal}
 
     @app.post("/identities")
     async def register_identity(payload: dict[str, Any]) -> dict[str, Any]:

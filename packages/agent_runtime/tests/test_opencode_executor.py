@@ -733,3 +733,14 @@ async def test_attached_mode_sends_basic_auth(tmp_path: Path) -> None:
     expected = "Basic " + base64.b64encode(b"opencode:pod-pass").decode()
     assert seen_auth, "at least one request must have been made"
     assert all(h == expected for h in seen_auth)
+
+
+def test_fix_sessions_get_their_own_evidence_dir(tmp_path: Path) -> None:
+    # Live (m5 run 22): a fix round wrote its manifest over the vertex manifest,
+    # dropping the done_when verdict. Fix sessions keep separate evidence.
+    from agent_runtime.opencode_executor import _evidence_dir as evidence_dir
+
+    main = _request()
+    fix = main.model_copy(update={"evidence_suffix": "fix-1"})
+    assert evidence_dir(tmp_path, main) == _evidence_dir(tmp_path, main)
+    assert evidence_dir(tmp_path, fix) == _evidence_dir(tmp_path, main) / "fix-1"

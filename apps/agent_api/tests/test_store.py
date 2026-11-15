@@ -110,3 +110,19 @@ async def test_audit_append_and_list(session: AsyncSession) -> None:
     assert len(all_events) == 2
     assert all_events[0].actor == "worker-1"
     assert all_events[1].outcome == "rejected"
+
+
+async def test_terminal_fail_marks_failed_not_queued(session: AsyncSession) -> None:
+    run_id = await _make_run_with_vertices(session)
+    claimed = await store.claim_vertex(session, run_id, agent="worker-1")
+    assert claimed is not None
+    assert await store.fail_vertex(session, claimed["id"], agent="worker-1", terminal=True)
+    again = await store.claim_vertex(session, run_id, agent="worker-2")
+    assert again is None or again["id"] != claimed["id"], "terminal failure is not retried"
+
+
+async def test_terminal_fail_by_other_agent_is_refused(session: AsyncSession) -> None:
+    run_id = await _make_run_with_vertices(session)
+    claimed = await store.claim_vertex(session, run_id, agent="worker-1")
+    assert claimed is not None
+    assert not await store.fail_vertex(session, claimed["id"], agent="intruder", terminal=True)
