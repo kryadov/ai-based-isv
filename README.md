@@ -27,7 +27,7 @@ What that means concretely:
 
 **The L0 foundation is live and verified on a single laptop** (k3d/k3s): OpenBao,
 Postgres+pgvector, Gitea (+act_runner, tracker v0 via Issues), OpenProject,
-Argo CD, Prometheus/Grafana, Loki+Alloy, LiteLLM gateway (external models via OpenRouter) — provisioned
+Argo CD, Prometheus/Grafana, Loki+Alloy, LiteLLM gateway (external models: z.ai Coding Plan, OpenRouter fallback) — provisioned
 from scratch with one idempotent command, four end-to-end acceptance flows PASS.
 See [STATE.md](STATE.md) for the authoritative status and next milestones.
 

@@ -248,21 +248,24 @@ section_openproject() {
 }
 
 section_litellm() {
-  # Model gateway. Master key → OpenBao + Secret; models come from an external
-  # API (OpenRouter, no GPU on the stand). The provider key is put into OpenBao
-  # by the owner (`bootstrap.sh llm-key`) and synced here into a Secret.
-  local mk okey
+  # Model gateway. Master key → OpenBao + Secret. Models come from external
+  # APIs (no GPU on the stand): z.ai GLM Coding Plan first, OpenRouter as the
+  # fallback on plan limits (infra/litellm/deployment.yaml). Provider keys:
+  # .env (owner) → OpenBao secret/litellm/{zai,openrouter} → Secret litellm-provider.
+  local mk zkey okey
   mk="$(vcli kv get -field=master-key secret/litellm/master 2>/dev/null || true)"
   [ -n "$mk" ] || { mk="sk-lab-$(openssl rand -hex 12)"; vcli kv put secret/litellm/master "master-key=$mk" >/dev/null; }
   [ -n "$mk" ] || { echo "litellm: пустой master key — прерываю"; exit 1; }
+  import_llm_keys_from_dotenv
+  zkey="$(vcli kv get -field=api-key secret/litellm/zai 2>/dev/null || true)"
   okey="$(vcli kv get -field=api-key secret/litellm/openrouter 2>/dev/null || true)"
-  if [ -z "$okey" ] && [ -n "$(dotenv_get OPENROUTER_API_KEY)" ]; then
-    dotenv_get OPENROUTER_API_KEY | store_llm_key
-    okey="$(vcli kv get -field=api-key secret/litellm/openrouter 2>/dev/null || true)"
-  fi
-  [ -n "$okey" ] || { echo "litellm: no OpenRouter key — set OPENROUTER_API_KEY in .env (see .env.example) or run: bootstrap.sh llm-key"; exit 1; }
-  kubectl -n "$NS" create secret generic litellm-provider \
-    --from-literal="openrouter-api-key=$okey" \
+  [ -n "$zkey$okey" ] || { echo "litellm: no provider key — set ZAI_API_KEY and/or OPENROUTER_API_KEY in .env (see .env.example) or run: bootstrap.sh llm-key <zai|openrouter>"; exit 1; }
+  [ -n "$zkey" ] || echo "litellm: WARNING no z.ai key — every request goes to the OpenRouter fallback"
+  [ -n "$okey" ] || echo "litellm: WARNING no OpenRouter key — no fallback when the z.ai plan limit is hit"
+  local -a lits=()
+  [ -n "$zkey" ] && lits+=(--from-literal="zai-api-key=$zkey")
+  [ -n "$okey" ] && lits+=(--from-literal="openrouter-api-key=$okey")
+  kubectl -n "$NS" create secret generic litellm-provider "${lits[@]}" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   # БД для LiteLLM (ключи/teams хранятся там же)
   kubectl apply -f "$ROOT/postgres/litellm-database.yaml"
@@ -304,23 +307,46 @@ dotenv_get() {
     | tr -d '\r' | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
 }
 
+# provider → .env variable (secret/litellm/<provider> holds `api-key`).
+llm_key_var() {
+  case "$1" in
+    zai) echo ZAI_API_KEY ;;
+    openrouter) echo OPENROUTER_API_KEY ;;
+    *) echo "llm-key: unknown provider '$1' (zai|openrouter)" >&2; return 2 ;;
+  esac
+}
+
+# .env values win: a key set there is (re)written to OpenBao on every run, so
+# rotating a key = edit .env + `bootstrap.sh litellm`. Values are never printed.
+import_llm_keys_from_dotenv() {
+  local p var
+  for p in zai openrouter; do
+    var="$(llm_key_var "$p")"
+    [ -n "$(dotenv_get "$var")" ] || continue
+    dotenv_get "$var" | store_llm_key "$p"
+    echo "litellm: $var from .env → OpenBao secret/litellm/$p"
+  done
+}
+
 section_llm_key() {
-  # Store the OpenRouter API key in OpenBao: from OPENROUTER_API_KEY in .env
-  # when set, else read silently from the terminal (or stdin when piped), so
-  # it never lands in argv, shell history, git or a transcript.
-  local key
-  key="$(dotenv_get OPENROUTER_API_KEY)"
+  # `llm-key` — import every key set in .env; `llm-key <zai|openrouter>` —
+  # that provider's key from .env, else read silently from the terminal (or
+  # stdin when piped): never argv, shell history, git or a transcript.
+  local p="${1:-}" key var
+  if [ -z "$p" ]; then import_llm_keys_from_dotenv; return; fi
+  var="$(llm_key_var "$p")" || exit 2
+  key="$(dotenv_get "$var")"
   if [ -z "$key" ] && [ -t 0 ]; then
-    read -rsp "OpenRouter API key: " key; echo
+    read -rsp "$var: " key; echo
   elif [ -z "$key" ]; then
     IFS= read -r key || true
   fi
   [ -n "$key" ] || { echo "llm-key: empty key — nothing stored"; exit 1; }
-  printf '%s' "$key" | store_llm_key
-  echo "llm-key: stored at secret/litellm/openrouter (now: bootstrap.sh litellm)"
+  printf '%s' "$key" | store_llm_key "$p"
+  echo "llm-key: stored at secret/litellm/$p (now: bootstrap.sh litellm)"
 }
 
-# stdin → OpenBao secret/litellm/openrouter (api-key); never via argv.
+# stdin → OpenBao secret/litellm/<provider> (api-key); never via argv.
 store_llm_key() {
   local POD RTOK
   POD="$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=openbao -o jsonpath='{.items[0].metadata.name}')"
@@ -328,7 +354,7 @@ store_llm_key() {
   [ -n "$RTOK" ] || { echo "openbao: нет root-токена ($ROOT/.vault-root-token)"; exit 2; }
   # `api-key=-` makes bao read the value from stdin (exec -i), never from argv.
   kubectl -n "$NS" exec -i "$POD" -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$RTOK" \
-    bao kv put secret/litellm/openrouter api-key=- >/dev/null
+    bao kv put "secret/litellm/$1" api-key=- >/dev/null
 }
 
 section_agents() {
@@ -395,10 +421,10 @@ case "${1:-all}" in
   demo)   section_demo ;;
   openproject) section_openproject ;;
   litellm) section_litellm ;;
-  llm-key) section_llm_key ;;
+  llm-key) section_llm_key "${2:-}" ;;
   agents) section_agents ;;
   mcp)    section_mcp ;;
   # `all` brings the stand cluster (k3d / Rancher Desktop) up first so `org-bootstrap apply` works on a fresh machine.
   all)    cluster_up; section_vault; section_cnpg; section_gitea; section_runner; section_argocd; section_monitoring; section_loki; section_demo; section_openproject; section_litellm; section_agents; section_mcp ;;
-  *) echo "usage: $0 [cluster|vault|cnpg|gitea|runner|argocd|monitoring|loki|demo|openproject|litellm|llm-key|agents|mcp|all]"; exit 2 ;;
+  *) echo "usage: $0 [cluster|vault|cnpg|gitea|runner|argocd|monitoring|loki|demo|openproject|litellm|llm-key [zai|openrouter]|agents|mcp|all]"; exit 2 ;;
 esac

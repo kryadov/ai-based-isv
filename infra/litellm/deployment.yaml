@@ -1,11 +1,14 @@
 # LiteLLM gateway — single entry point for agent model access (spec §7.8).
-# Models: an external metered API (OpenRouter) — the stand has no GPU, so no
-# local inference. The alias names are historical and kept stable: the
-# acceptance flows (`litellm/qwen3`) and the llm MCP server address them.
+# Models: external APIs only — the stand has no GPU, so no local inference.
+# Primary: z.ai GLM Coding Plan (owner's subscription, OpenAI-compatible
+# coding endpoint). On its plan limit (HTTP 429) or any other failure the
+# router falls back to OpenRouter (metered) and cools z.ai down for a while.
+# The alias names are historical and kept stable: the acceptance flows
+# (`litellm/qwen3`) and the llm MCP server address them.
 #   qwen3      — the executor/agent model: must emit real OpenAI tool_calls.
-#   qwen-coder — cheap light model (gateway pings, short completions).
-# The key never lives in git: OpenBao `secret/litellm/openrouter` → Secret
-# `litellm-provider` (synced by section_litellm) → env OPENROUTER_API_KEY.
+#   qwen-coder — light model (gateway pings, short completions).
+# Keys never live in git: .env → OpenBao `secret/litellm/{zai,openrouter}` →
+# Secret `litellm-provider` (synced by section_litellm) → pod env.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -14,14 +17,31 @@ metadata:
 data:
   config.yaml: |
     model_list:
+      - model_name: qwen3
+        litellm_params:
+          model: openai/glm-5.3
+          api_base: https://api.z.ai/api/coding/paas/v4
+          api_key: os.environ/ZAI_API_KEY
       - model_name: qwen-coder
         litellm_params:
-          model: openrouter/deepseek/deepseek-v4.1-flash
-          api_key: os.environ/OPENROUTER_API_KEY
-      - model_name: qwen3
+          model: openai/glm-5.3-flash
+          api_base: https://api.z.ai/api/coding/paas/v4
+          api_key: os.environ/ZAI_API_KEY
+      - model_name: qwen3-openrouter
         litellm_params:
           model: openrouter/z-ai/glm-5.3
           api_key: os.environ/OPENROUTER_API_KEY
+      - model_name: qwen-coder-openrouter
+        litellm_params:
+          model: openrouter/deepseek/deepseek-v4.1-flash
+          api_key: os.environ/OPENROUTER_API_KEY
+    router_settings:
+      fallbacks:
+        - qwen3: ["qwen3-openrouter"]
+        - qwen-coder: ["qwen-coder-openrouter"]
+      num_retries: 1
+      allowed_fails: 1      # one plan-limit error ...
+      cooldown_time: 300    # ... parks z.ai for 5 min; traffic goes to OpenRouter
     general_settings:
       master_key: os.environ/LITELLM_MASTER_KEY
     litellm_settings:
@@ -54,11 +74,19 @@ spec:
                 secretKeyRef:
                   name: litellm-master
                   key: master-key
+            # Either provider may be unset; section_litellm requires at least one.
+            - name: ZAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-provider
+                  key: zai-api-key
+                  optional: true
             - name: OPENROUTER_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: litellm-provider
                   key: openrouter-api-key
+                  optional: true
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

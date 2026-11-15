@@ -46,15 +46,17 @@ flowchart TB
             KS["kube-prometheus-stack\nGrafana 30082 / Prometheus"]
             LK["Loki + Alloy\ndaemonset: логи подов"]
             OP["OpenProject\nтрекер UI 30083\nauth сломан — см. TODO"]
-            LL["LiteLLM-шлюз\n30084 → OpenRouter"]
+            LL["LiteLLM-шлюз\n30084 → z.ai / OpenRouter"]
         end
         subgraph prod["namespace: prod"]
             PODINFO["podinfo demo\nGitOps-sync, debug-логи"]
         end
         AG["agent-воркеры\n(M3+: claim вершин)"]
     end
-    ORT["(OpenRouter API\nqwen3 → glm-5.3\nqwen-coder → deepseek-v4.1-flash)"]
-    LL -->|HTTPS, ключ из OpenBao| ORT
+    ZAI["(z.ai GLM Coding Plan\nqwen3 → glm-5.3\nqwen-coder → glm-5.3-flash)"]
+    ORT["(OpenRouter API — запасной\nglm-5.3 / deepseek-v4.1-flash)"]
+    LL -->|основной, ключи из OpenBao| ZAI
+    LL -.->|при лимите плана 429| ORT
     GH["GitHub (public)\nканонический репо платформы + CI"] -.-> AR
     TRK(("Трекер\n(задача на входе)")) -.-> API
 ```
