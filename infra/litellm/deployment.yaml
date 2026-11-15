@@ -106,6 +106,16 @@ spec:
             - "/etc/litellm/config.yaml"
             - "--port"
             - "4000"
+          # Ready only once the proxy serves: LiteLLM loads for ~15 s after the
+          # container starts, and a rollout must not kill the old pod before that.
+          readinessProbe:
+            httpGet:
+              path: /health/readiness
+              port: 4000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
           volumeMounts:
             - name: config
               mountPath: /etc/litellm

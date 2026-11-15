@@ -634,6 +634,7 @@ echo "$READER_TOOLS" | grep -q '"get_task"' || fail "task-reader does not list g
 if echo "$READER_TOOLS" | grep -Eq '"(set_task_status|add_task_comment)"'; then
   fail "task-reader exposes write tools to sandboxes: $READER_TOOLS"
 fi
+echo "netpol: sandboxes reach task-reader + llm; task-reader lists read tools only (I3)"
 # review I2: NO pod reaches the write-capable task-source — not a sandbox in
 # `agents`, not a pod in another namespace (only the host via NodePort 30085).
 mcp_tools_list agents "$PROBE_NAME" "$TASK_SOURCE_POD_URL" >/dev/null 2>&1 \
@@ -655,6 +656,7 @@ curl -fsS -m 10 -X POST "$TASK_SOURCE_HOST_URL" \
   -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | grep -q '"set_task_status"' \
   || fail "task-source is not reachable from the host on NodePort 30085"
+echo "netpol: task-source denied from agents + another namespace; host NodePort 30085 OK (I2)"
 # Host IP: colima/lima -> host.lima.internal; Docker/Rancher Desktop -> host.docker.internal.
 HOST_IP="$(docker run --rm alpine sh -c 'getent hosts host.lima.internal || getent hosts host.docker.internal' | awk 'NR==1{print $1}')"
 [ -n "$HOST_IP" ] || fail "could not resolve the host IP for the NodePort denial probe"

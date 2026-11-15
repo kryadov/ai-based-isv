@@ -117,3 +117,13 @@ def test_bootstrap_waits_for_the_new_litellm_rollout() -> None:
     text = BOOTSTRAP.read_text(encoding="utf-8")
     assert "rollout status deploy/litellm" in text
     assert "wait --for=condition=Available deployment/litellm" not in text
+
+
+def test_litellm_pod_is_ready_only_when_serving() -> None:
+    # Without a readiness probe the pod is "Ready" at container start while
+    # LiteLLM still loads (~15 s): `rollout status` returns, the old pod is
+    # killed and the gateway is gone for seconds (m2c FAIL 2026-11-15).
+    deploy = next(d for d in _docs() if d["kind"] == "Deployment")
+    probe = deploy["spec"]["template"]["spec"]["containers"][0]["readinessProbe"]
+    assert probe["httpGet"]["path"] == "/health/readiness"
+    assert probe["httpGet"]["port"] == 4000
