@@ -3,10 +3,12 @@
 > Read this file FIRST. Then `ARCH.md` (how it works, diagrams), `AGENTS.md` (rules), `TODO.md` (backlog).
 > This file is updated at the end of EVERY increment. If your findings contradict it — verify, then update it.
 
-**Current (2026-11-15): M5 (gates + review corridor) is implemented on `feat/m5-gates`, and `m5_flow.sh` PASSes live.** An agent's change now ships as a merged PR, after CI (python check profile plus gitleaks and semgrep), a cross-family bot review, bounded fix rounds and the HITL merge gate.
+**Current (2026-11-15): M5 is CLOSED — release [v0.5.0](https://github.com/kryadov/ai-based-isv/releases/tag/v0.5.0)** (PR #26, merge `b581b01`). An agent's change now ships as a merged PR, after CI (python check profile plus gitleaks and semgrep), a cross-family bot review, bounded fix rounds and the HITL merge gate.
 - Design: `docs/superpowers/specs/2026-11-15-m5-gates-review-design.md`.
 - Plan: `docs/superpowers/plans/2026-11-15-m5-gates-review.md`.
-- After merge: release v0.5.0. Then M6 (canary), and spec §13.7 level 2 (this repo as a target project).
+- **Next: M6 (canary rollout + post-rollout metric analysis).** After it comes spec §13.7 level 2: seed THIS repo into Gitea via `org-bootstrap onboard`, so the platform develops itself through its own corridor (HITL on every merge).
+- Start with `brainstorming` → `writing-plans`.
+- Open follow-ups: TODO.md "M5 follow-ups" and "M4c follow-ups".
 - M4 closed earlier the same day: release [v0.4.0](https://github.com/kryadov/ai-based-isv/releases/tag/v0.4.0).
 Work moved to a no-GPU Windows workstation:
 - **Stand:** Rancher Desktop's built-in k3s plus the toolbox container (AGENTS.md §10; INSTALL.md "Windows (Rancher Desktop + toolbox)").
@@ -15,7 +17,7 @@ Work moved to a no-GPU Windows workstation:
 - **Acceptance on the new stand:** see "Verified acceptance flows".
 - **Previous move:** `docs/superpowers/HANDOFF-2026-11-12.md`.
 
-Last updated: 2026-11-15 (M5 gates corridor implemented, m5_flow PASS live)
+Last updated: 2026-11-15 (M5 merged, v0.5.0 released — M5 closed; next M6)
 
 ## What this project is
 
@@ -126,12 +128,12 @@ The worker drives the tracker status loop (In Progress → Done/Blocked with evi
 - ✅ **M4a — Executor/OpenCode locally (DONE 2026-11-10)**. Plan: `docs/superpowers/plans/2026-11-09-m4a-executor-opencode.md`; design: `docs/superpowers/specs/2026-11-09-m4-agent-runtime-design.md`.
 - ✅ **M4b — sandbox in k3s (DONE 2026-11-10)**. Plan: `docs/superpowers/plans/2026-11-10-m4b-k3s-sandbox.md`; spike notes: `docs/superpowers/research/2026-11-10-m4b-*.md`.
 - ✅ **M4c — MCP servers + tracker status loop (DONE 2026-11-15)**: final review 0 Critical, I1–I3 fixed, minors in TODO.md; all eight flows PASS live on the Rancher stand; PR #25 merged; release **v0.4.0** closes M4. Plan: `docs/superpowers/plans/2026-11-11-m4c-mcp-servers.md`.
-- 🔄 **M5 — gates + review corridor**: implemented on `feat/m5-gates`; `m5_flow` PASS live; regressions m2a–m4c all PASS (2026-11-15); release **v0.5.0** on merge. Plan: `docs/superpowers/plans/2026-11-15-m5-gates-review.md`.
+- ✅ **M5 — gates + review corridor (DONE 2026-11-15)**: `m5_flow` PASS live; regressions m2a–m4c all PASS; PR #26 merged; release **v0.5.0**. Plan: `docs/superpowers/plans/2026-11-15-m5-gates-review.md`.
 - ⏭️ Then M6 (canary), M7 (memory), M8 (swarm mode), M9 (polyglot dogfood), M10 (UI panel + Automations). Spec §13.7 level 2 (this repo developed through its own corridor) becomes possible after M5/M6.
 
 ## Releases / conventions
 
-- Tags/releases per milestone, changelog from merged PRs: `./infra/scripts/release.sh v0.x.y` (spec §13.8). Published: **v0.1.0** (M1), **v0.2.0** (M2 close), **v0.3.0** (M3 close), **v0.4.0** (M4 close, 2026-11-15). Next: v0.5.0 at M5 close.
+- Tags/releases per milestone, changelog from merged PRs: `./infra/scripts/release.sh v0.x.y` (spec §13.8). Published: **v0.1.0** (M1), **v0.2.0** (M2 close), **v0.3.0** (M3 close), **v0.4.0** (M4 close, 2026-11-15), **v0.5.0** (M5 close, 2026-11-15). Next: v0.6.0 at M6 close.
 - Recursive self-development (platform builds itself): spec §13.7 — level 1 (meta-automations on our own logs) after M3, level 2 (this repo as a target project via tracker+pipeline) after M5/M6. Model/subscription routing research for that path: `docs/superpowers/research/2026-11-14-model-subscriptions-routing.md`.
 - External projects deliver tested release artifacts / Docker images to the org registry (spec §13.5); offboarding in v0 via `org-bootstrap offboard` (spec §13.6).
 - Onboarding per project kind (§13.1): per-kind repo templates + tutorials planned (TODO), wizard v0 in CLI, Projects UI in M10 — confirmed by owner.
