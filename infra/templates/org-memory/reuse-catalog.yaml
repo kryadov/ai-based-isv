@@ -21,3 +21,13 @@ components:
     repo: swarm-lab/isv-product
     path: .
     description: FastAPI service with Prometheus metrics per route/code, fault injection and a Dockerfile.
+  - name: check-profile-typescript
+    kind: ci-profile
+    repo: kryadov/ai-based-isv
+    path: infra/templates/check-profiles/typescript
+    description: Gitea Actions corridor for TypeScript/Node projects (npm ci, tsc, eslint, node:test, gitleaks, semgrep).
+  - name: ts-service-template
+    kind: service-template
+    repo: kryadov/ai-based-isv
+    path: infra/templates/projects/ts-service
+    description: TypeScript HTTP service (node:http, no framework) with node:test tests; onboard --template ts-service.

@@ -1,0 +1,10 @@
+# Merge policy (seeded by the bootstrapper). A PR whose EVERY changed path
+# matches `paths` merges without a human once CI is green and the review is
+# clean; everything else waits for the HITL merge gate. Agents cannot change
+# this file (.platform/** is a protected gate path). The platform's own repo
+# ignores this file: HITL on every merge (spec §13.7).
+auto_merge:
+  enabled: true
+  paths:
+    - "docs/**"
+    - "*.md"

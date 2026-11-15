@@ -100,6 +100,24 @@ Use `"action":"reject"` to refuse. Read the PR diff, its CI and the bot review i
 ./infra/scripts/toolbox.sh uv run org-bootstrap onboard --project my-svc --stack python --push-whitelist swarm-admin
 ```
 
+Stacks (check profiles):
+- `python`;
+- `typescript` (M9: npm ci, tsc, eslint, node:test);
+- `docs` (no code).
+
+Start from a code template with `--template`:
+
+```bash
+./infra/scripts/toolbox.sh uv run org-bootstrap onboard --project ts-greeter --stack typescript --template ts-service
+./infra/scripts/toolbox.sh bash infra/tests/m9_flow.sh   # TypeScript dogfood: template → agent change → corridor
+```
+
+For a TypeScript task, the acceptance command runs node in docker:
+
+```bash
+SELFDEV_DONE_CMD="docker run --rm -v \"\$PWD\":/w -w /w node:22.12.0-alpine sh -c 'npm ci && npm test'"
+```
+
 This:
 - creates `swarm-lab/my-svc`;
 - seeds the check profile (`.gitea/workflows/ci.yml`: ruff, mypy, pytest, gitleaks, semgrep) and `.platform/merge-policy.yaml`;

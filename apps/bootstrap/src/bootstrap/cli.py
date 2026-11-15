@@ -12,6 +12,8 @@ from bootstrap.gitea import REPO_NAME, GiteaClient
 from bootstrap.prereq import check_all
 from bootstrap.profile import Profile, save
 from bootstrap.registry import ProjectRecord, offboard_project, register_or_update
+from bootstrap.seed import push_seed
+from bootstrap.templates import TEMPLATES_DIR, template_tree
 
 app = typer.Typer(help="AI-Organisation bootstrapper", no_args_is_help=True)
 memory_app = typer.Typer(
@@ -158,8 +160,6 @@ def seed_demo() -> None:
     """Seed swarm-lab/isv-product: service code + deploy/ + check profile (idempotent)."""
     import tempfile
 
-    from bootstrap.seed import push_seed
-
     token = _gitea_token()
     client = GiteaClient(base_url="http://localhost:30080", token=token, owner="swarm-lab")
     status = client.ensure_repo(REPO_NAME)
@@ -185,14 +185,32 @@ def onboard(
     push_whitelist: list[str] = typer.Option(  # noqa: B008 - typer option factory
         [], "--push-whitelist", help="users allowed to push main directly (platform repo sync)"
     ),
+    template: str = typer.Option(
+        "", "--template", help="seed code from infra/templates/projects/<name> (new repos)"
+    ),
 ) -> None:
     """Заведение нового проекта (спека §13.1): Gitea repo + запись в реестр."""
     if kind not in {"product", "service", "tool", "assistant"}:
         typer.secho("kind must be: product | service | tool | assistant", fg=typer.colors.RED)
         raise typer.Exit(code=1)
+    if template and not (TEMPLATES_DIR / template).is_dir():
+        typer.secho(f"unknown template {template!r}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
     token = _gitea_token()
     client = GiteaClient(base_url="http://localhost:30080", token=token, owner=owner)
     status = client.ensure_repo(project)
+    if template and status == "created":
+        # Template code lands BEFORE the profile and branch protection (M9).
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            push_seed(
+                f"{client.base_url}/{client.owner}/{project}.git",
+                token,
+                Path(tmp),
+                message=f"seed: {template} template",
+                build=lambda dest: template_tree(template, dest),
+            )
     # The gate corridor (M5): CI check profile + merge policy + protected main.
     client.apply_check_profile(
         project, stack=stack, git_url=PLATFORM_GIT_URL, push_whitelist=push_whitelist
@@ -256,7 +274,6 @@ def memory_seed() -> None:
     import tempfile
 
     from bootstrap.org_memory import ORG_MEMORY_REPO, seed_tree
-    from bootstrap.seed import push_seed
 
     token = _gitea_token()
     client = GiteaClient(base_url="http://localhost:30080", token=token, owner="swarm-lab")

@@ -100,6 +100,24 @@ bao_get secret/gitea/admin password
 ./infra/scripts/toolbox.sh uv run org-bootstrap onboard --project my-svc --stack python --push-whitelist swarm-admin
 ```
 
+Стеки (check-профили):
+- `python`;
+- `typescript` (M9: npm ci, tsc, eslint, node:test);
+- `docs` (без кода).
+
+Начать с шаблона кода можно через `--template`:
+
+```bash
+./infra/scripts/toolbox.sh uv run org-bootstrap onboard --project ts-greeter --stack typescript --template ts-service
+./infra/scripts/toolbox.sh bash infra/tests/m9_flow.sh   # догфуд на TypeScript: шаблон → изменение агента → коридор
+```
+
+Для задачи на TypeScript приёмочная команда запускает node в docker:
+
+```bash
+SELFDEV_DONE_CMD="docker run --rm -v \"\$PWD\":/w -w /w node:22.12.0-alpine sh -c 'npm ci && npm test'"
+```
+
 Команда:
 - создаёт `swarm-lab/my-svc`;
 - раскладывает check-профиль (`.gitea/workflows/ci.yml`: ruff, mypy, pytest, gitleaks, semgrep) и `.platform/merge-policy.yaml`;
