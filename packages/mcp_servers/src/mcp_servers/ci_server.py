@@ -119,6 +119,8 @@ def main() -> None:
     """Serve over streamable HTTP. Config from env: GITEA_BASE_URL, GITEA_TOKEN, PORT."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     app = create_ci_app(base_url=os.environ["GITEA_BASE_URL"], token=os.environ["GITEA_TOKEN"])
+    # FastMCP (not Flask) bound in a pod; the NetworkPolicy is the boundary.
+    # nosemgrep: python.flask.security.audit.app-run-param-config.avoid_app_run_with_bad_host
     app.run(
         transport="http",
         host="0.0.0.0",  # noqa: S104 - in-cluster service, fronted by NetworkPolicy
