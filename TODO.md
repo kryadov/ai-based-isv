@@ -95,3 +95,13 @@
 - [ ] LLM-assistant profile: eval suites as first-class tests, prompt versions in the run manifest (spec §7.2.4).
 - [ ] Per-kind templates and tutorials `docs/tutorials/onboard-<kind>.md` (spec §13.1.5).
 - [ ] Canary deploy for non-Python services: the M6 deploy templates are service-agnostic but only isv-product is wired.
+
+## M10 follow-ups (2026-11-16)
+
+- [ ] OIDC/SSO for the panel; server-side user profiles (language preference).
+- [ ] Pipeline kanban (task → spec → code → gates → review → canary → prod) and Settings tab.
+- [ ] Browser e2e tests of the panel (today: HTTP-level acceptance + `node --check` of app.js).
+- [ ] Cron scheduling of automations (k8s CronJob once agent_api runs in-cluster).
+- [ ] The other starter automations (dep-updates, log-analysis, feedback-ingest) and the 26-item catalogue as workflow functions.
+- [ ] Charts in Metrics (trusted change, time-to-accept, DORA, verification debt).
+- [ ] Deploy agent_api + the panel in-cluster (Ingress/NodePort, Postgres secret) instead of running on the host in flows.

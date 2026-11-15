@@ -270,10 +270,51 @@ Guarantees:
 - A bad plan degrades to a single vertex.
 - Workers pause taking new work while merges wait for you (backpressure, default 3).
 
-## 11. What is not there yet
+## 11. The organization panel and Automations (M10)
 
-- Embeddings and code indexing: retrieval is lexical for now.
-- Baseline invalidation, specialist consult roles, workers on several hosts.
-- A web panel: M10.
+The panel is served by the control plane at `/ui`. It is for humans only; agents are service identities and never log in. Enable it with local users (OIDC is planned):
+
+```bash
+PW_HASH=$(printf '%s' 'your-password' | sha256sum | cut -d' ' -f1)
+AGENT_API_UI_USERS="you:$PW_HASH:admin" AGENT_API_SESSION_SECRET=$(openssl rand -hex 24) \
+  ./infra/scripts/toolbox.sh uv run uvicorn --factory agent_api.main:create_app --host 127.0.0.1 --port 8472
+# open http://127.0.0.1:8472/ui   (from the host: run the toolbox with the port reachable, or use the flows' agent_api)
+```
+
+Without configured users the panel is disabled (503), never open.
+
+| Tab | What it shows |
+|---|---|
+| **Inbox** | Decisions waiting for you: merge, deploy, escalation, automation. Approve or reject them; the decision is recorded under your name. The health strip at the bottom shows pending decisions, finished and failed runs, running vertices and memory episodes. |
+| **Projects** | The registry (`infra/projects.yaml`) and runs per repo. |
+| **Swarm** | Runs and their vertex graphs: status, deps, agent, PR. |
+| **Automations** | Definitions (`infra/automations/*.yaml`), "Run now", run history with findings and created issues. |
+| **Metrics** | Control-plane gauges (`/metrics`). |
+| **Memory** | Search over project episodes, with the promotion command. |
+| **Pipeline, Settings** | Placeholders (planned). |
+
+EN/RU toggle in the top bar.
+
+**Automations.** A requested run is executed by the engine on the host:
+
+```bash
+AGENT_RUNTIME_API_URL=http://127.0.0.1:8472 AUTOMATIONS_GITEA_TOKEN=$(bao_get secret/gitea/admin token) \
+  ./infra/scripts/toolbox.sh uv run python -m agent_runtime.automations poll   # or: run vuln-scan
+./infra/scripts/toolbox.sh bash infra/tests/m10_flow.sh                         # login → Inbox decision → vuln-scan → fix task
+```
+
+`vuln-scan` runs semgrep (configs from the definition) and gitleaks over its scope and files an Inbox card with the findings. Approving the card creates one `[vuln-scan]` fix task per affected repo. A rejection does nothing.
+
+## 12. What is not there yet
+
+- OIDC/SSO.
+- The Pipeline kanban.
+- Browser e2e tests of the panel.
+- Cron scheduling for automations, and the other catalogue automations (dep-updates, log-analysis, feedback-ingest, …).
+- Embeddings and code indexing.
+- Baseline invalidation.
+- Workers on several hosts.
+
+See [TODO.md](TODO.md).
 
 See [STATE.md](STATE.md) and [TODO.md](TODO.md).

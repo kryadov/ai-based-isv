@@ -190,6 +190,15 @@ Stack-specific parts are data:
 
 The corridor, the agents, the reviewer, HITL and memory are stack-agnostic. `m9_flow.sh` proves it on a TypeScript service. The acceptance command for a foreign stack runs its toolchain in a container (e.g. `node:22` via docker), so the host needs no language runtime.
 
+### 4·M10. Organization panel and Automations
+
+- **Panel** `/ui` (agent_api, dependency-free ES modules): login for humans only (signed sessions, local users; OIDC later). The tabs are Inbox, Projects, Swarm, Automations, Metrics and Memory, with an EN/RU toggle. Every action goes through `/ui/api` and is audited under the human's name.
+- **Automations:**
+  - definitions are code (`infra/automations/*.yaml`);
+  - the control plane stores runs (`automation_runs`);
+  - the host engine (`agent_runtime.automations`) works, then files an Inbox card (HITL `automation`);
+  - **actions happen only after a human approves**: for `vuln-scan`, one tracker issue per affected repo.
+
 ### 4a. Agent roles catalog
 
 Implemented via the `identities` registry (M3): a role maps to `allowed_sections`

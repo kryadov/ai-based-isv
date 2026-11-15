@@ -25,11 +25,25 @@ What that means concretely:
 
 ## Current state
 
-**The L0 foundation is live and verified on a single laptop** (k3d/k3s): OpenBao,
-Postgres+pgvector, Gitea (+act_runner, tracker v0 via Issues), OpenProject,
-Argo CD, Prometheus/Grafana, Loki+Alloy, LiteLLM gateway (external models: z.ai Coding Plan; OpenRouter only when its limit is exhausted) — provisioned
-from scratch with one idempotent command, four end-to-end acceptance flows PASS.
-See [STATE.md](STATE.md) for the authoritative status and next milestones.
+**v1.0.0 — the full delivery loop runs on a laptop stand** (Rancher Desktop k3s +
+toolbox), every milestone proven by a live acceptance flow:
+
+- **L0** (OpenBao, Postgres+pgvector, Gitea + Actions, Argo CD + Rollouts,
+  Prometheus/Grafana, Loki, LiteLLM → z.ai Coding Plan; OpenRouter only when
+  its limit is exhausted), provisioned by one idempotent command.
+- **The corridor:** tracker issue → agent in a k3s sandbox → PR → CI (per-stack
+  check profile + security scans) → bot review → fix rounds → **HITL** → merge
+  → **canary rollout with metric analysis** (auto-rollback + postmortem).
+- **Project memory** (lessons into the next task's prompt) and **org memory**
+  (lessons + reuse catalog via PRs).
+- **Swarm mode:** a planned vertex graph executed by parallel agents.
+- **Polyglot:** Python, TypeScript.
+- **Self-development:** the platform develops itself through its own corridor.
+- **Organization panel** (`/ui`): Inbox decisions, Swarm, Projects, Memory,
+  Metrics, Automations.
+
+Start with [TUTORIAL.md](TUTORIAL.md); the authoritative status is [STATE.md](STATE.md).
+
 
 ## Layers
 
