@@ -230,10 +230,34 @@ curl -s "http://127.0.0.1:8472/memory/slice?project=swarm-lab/isv-product&paths=
 
 Команда открывает PR в org-память на ревью. Агенты в org-память не пишут.
 
-## 10. Чего пока нет
+## 10. Режим роя: одна задача, несколько агентов параллельно (M8)
+
+Крупную задачу **координатор** разбивает на граф вершин. Независимые вершины идут **параллельно** на нескольких воркерах. Зависимые стартуют, когда их зависимости смержены, и получают **handoff** — файлы, PR и ревью каждой зависимости. Каждая вершина проходит коридор отдельным PR. В конце **judge** проверяет, что смерженный `main` проходит done-команду.
+
+```bash
+./infra/scripts/toolbox.sh bash infra/tests/m8_flow.sh   # issue → план → 3 воркера → коридор ×N → judge
+```
+
+Составные части, с тем же env воркера, что у `selfdev_flow.sh`:
+
+```bash
+uv run python -m agent_runtime.swarm plan --run-id N --title "..." --body "..." \
+  --allowed "src/**,tests/**,docs/**" --done-cmd "uv sync --quiet --all-groups && uv run --quiet pytest -q"
+uv run python -m agent_runtime.swarm run --workers 3          # пока все вершины не done/failed
+uv run python -m agent_runtime.swarm judge --run-id N --done-cmd "..." --project swarm-lab/<repo>
+curl -s http://127.0.0.1:8472/metrics                          # swarm_vertices / swarm_hitl_pending / swarm_runs
+```
+
+Гарантии:
+- Планировщик не может расширить область или запустить команду.
+- Параллельные вершины не делят файлы.
+- Плохой план деградирует до одной вершины.
+- Воркеры не берут новую работу, пока мержи ждут вас (backpressure, по умолчанию 3).
+
+## 11. Чего пока нет
 
 - Эмбеддинги и индексация кода: retrieval пока лексический.
-- Параллельный рой — M8.
+- Инвалидация baseline, консультирующие роли специалистов, воркеры на нескольких хостах.
 - Веб-панель — M10.
 
 См. [STATE.md](STATE.md) и [TODO.ru.md](TODO.ru.md).

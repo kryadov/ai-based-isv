@@ -126,3 +126,14 @@ async def test_terminal_fail_by_other_agent_is_refused(session: AsyncSession) ->
     claimed = await store.claim_vertex(session, run_id, agent="worker-1")
     assert claimed is not None
     assert not await store.fail_vertex(session, claimed["id"], agent="intruder", terminal=True)
+
+
+async def test_claim_returns_deps_for_handoffs(session: AsyncSession) -> None:
+    run_id = await store.create_run(session, project="p", task_ref="o/r#1")
+    await store.add_vertex(session, run_id, name="a", done_when="x")
+    await store.add_vertex(session, run_id, name="b", done_when="x", deps=["a"])
+    first = await store.claim_vertex(session, run_id, agent="w")
+    assert first is not None and first["deps"] == []
+    assert await store.complete_vertex(session, first["id"], agent="w", result_data={})
+    second = await store.claim_vertex(session, run_id, agent="w")
+    assert second is not None and second["deps"] == ["a"]

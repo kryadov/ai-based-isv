@@ -73,6 +73,28 @@ class ControlPlaneClient:
         self._http = http
         self._settings = settings
 
+    async def pending_merges(self) -> int:
+        """Pending HITL merge requests (backpressure, M8); 0 when unknown."""
+        try:
+            response = await self._http.get("/hitl/pending")
+            if response.status_code != 200:
+                return 0
+            pending = response.json().get("pending", [])
+            return sum(1 for r in pending if r.get("kind") == "merge")
+        except (httpx.HTTPError, ValueError):
+            return 0
+
+    async def run_vertices(self) -> list[dict[str, Any]]:
+        """The run graph (handoffs, M8); [] when unavailable."""
+        try:
+            response = await self._http.get(f"/runs/{self._settings.run_id}/vertices")
+            if response.status_code != 200:
+                return []
+            vertices: list[dict[str, Any]] = response.json().get("vertices", [])
+            return vertices
+        except (httpx.HTTPError, ValueError):
+            return []
+
     async def claim(self) -> dict[str, Any] | None:
         response = await self._http.post(
             "/vertices/claim",
@@ -378,6 +400,22 @@ class MemoryPort(Protocol):
 Extractor = Callable[[str, list[str], str], Awaitable[list[dict[str, str]]]]
 
 
+def handoff_section(deps: list[str], graph: list[dict[str, Any]]) -> str:
+    """Structured handoff from the vertex's upstream deps (M8 working memory)."""
+    by_name = {str(v.get("name")): v for v in graph}
+    lines = []
+    for dep in deps:
+        result = by_name.get(dep, {}).get("result") or {}
+        files = ", ".join(result.get("diff_files", [])) or "(none)"
+        line = f"- {dep}: files {files}; PR {result.get('pr_url', '(none)')}"
+        if result.get("review_summary"):
+            line += f"; review: {result['review_summary']}"
+        lines.append(line)
+    if not lines:
+        return ""
+    return "Handoff from upstream vertices (already merged into main):\n" + "\n".join(lines)
+
+
 def build_vertex_prompt(vertex: dict[str, Any]) -> str:
     """Assemble the prompt the sandbox receives from the vertex metadata."""
     name = vertex.get("name") or "unnamed"
@@ -521,6 +559,11 @@ async def _process_vertex(
             else []
         )
         prompt = build_vertex_prompt(vertex)
+        deps = [str(d) for d in vertex.get("deps", [])]
+        if deps:
+            handoff = handoff_section(deps, await client.run_vertices())
+            if handoff:
+                prompt = f"{prompt}\n\n{handoff}"
         section = memory_prompt_section(memory_slice)
         if section:
             prompt = f"{prompt}\n\n{section}"
@@ -860,6 +903,19 @@ async def worker_loop(
 
     try:
         while not stop_event.is_set():
+            # Backpressure (spec §7.3): do not take new work while merges wait for
+            # humans — the flow is bounded by review throughput.
+            if settings.max_pending_merges > 0:
+                pending = await client.pending_merges()
+                if pending >= settings.max_pending_merges:
+                    await client.audit(
+                        action="backpressure",
+                        target=f"run:{settings.run_id}",
+                        outcome="ok",
+                        payload={"pending_merges": pending, "limit": settings.max_pending_merges},
+                    )
+                    await _sleep_or_stop(stop_event, settings.poll_interval_seconds)
+                    continue
             try:
                 vertex = await client.claim()
             except Exception as exc:

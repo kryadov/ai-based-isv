@@ -162,6 +162,30 @@ flowchart LR
 - Контракт вершины: `{id, deps, paths_allow, paths_avoid, done_when, deliverable}`.
   `done_when` проверяется **кодом**, а не отказом LLM failing.
 
+### 4·M8. Реализованный режим роя (v0.9.0)
+
+```mermaid
+flowchart LR
+    T["задача (issue)"] --> PL["swarm plan<br/>LLM-координатор → проверенный граф"]
+    PL --> Q["очередь с lease<br/>(deps, захват SKIP LOCKED)"]
+    Q --> W1["воркер w1"] & W2["воркер w2"] & W3["воркер w3"]
+    W1 & W2 & W3 --> C["коридор на каждую вершину<br/>PR → CI → ревью → HITL → мерж"]
+    C -->|"результат = handoff"| Q
+    C --> J["swarm judge<br/>всё done + main проходит"]
+```
+
+- **Планировщик** (`agent_runtime.planner`): LLM предлагает `{name, deps, paths_allow}`, платформа проверяет граф до запуска. Проверки:
+  - имена уникальны, зависимости известны, циклов нет, вершин не больше 5;
+  - пути внутри разрешённой области задачи;
+  - **вершины, которые могут идти одновременно, не делят файлы**.
+
+  `done_when` задаёт платформа, команд от планировщика нет. При любом сбое — откат к одной вершине.
+- **Параллельные исполнители** (`swarm run --workers N`): N процессов-воркеров на один run, у каждого своя lease-идентичность (`<agent>-w<i>`) и рабочий каталог. У каждой вершины свой под-песочница и NodePort.
+- **Handoff:** в промпт зависимой вершины попадает «Handoff from upstream vertices» — файлы, PR и ревью каждой зависимости. Ответ `claim` содержит `deps`, граф отдаёт `GET /runs/{id}/vertices`.
+- **Backpressure:** воркер не берёт новую вершину, пока HITL ждут не меньше `max_pending_merges` мержей (по умолчанию 3). Ожидание аудитится как `backpressure`.
+- **Judge** (`swarm judge`): все вершины `done`, и смерженный `main` проходит done-команду run. Тогда run получает статус `done`, а в память проекта пишется эпизод `decision`.
+- **Метрики:** `GET /metrics` control plane отдаёт `swarm_vertices{status}`, `swarm_hitl_pending{kind}` и `swarm_runs{status}`.
+
 ### 4a. Каталог ролей агентов
 
 Реализуется через реестр `identities` (M3): роль маппится на `allowed_sections`

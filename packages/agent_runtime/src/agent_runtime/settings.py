@@ -71,6 +71,8 @@ class WorkerSettings(BaseSettings):
     # --- project memory (M7): slice into the prompt, episodes on close ---
     memory_enabled: bool = True
     extractor_model: str = "qwen-coder"  # light LiteLLM alias (memory-extractor)
+    # --- swarm (M8): no new claims while this many merges wait for HITL (0 = off) ---
+    max_pending_merges: int = 3
 
     @model_validator(mode="after")
     def _required_at_runtime(self) -> "WorkerSettings":

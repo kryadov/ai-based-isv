@@ -113,6 +113,7 @@ async def claim_vertex(
             VertexRow.name,
             VertexRow.done_when,
             VertexRow.paths_allow_json,
+            VertexRow.deps_json,
             VertexRow.attempts,
         )
     )
@@ -123,6 +124,7 @@ async def claim_vertex(
         "name": row.name,
         "done_when": row.done_when,
         "paths_allow": row.paths_allow_json,
+        "deps": list(row.deps_json or []),  # swarm handoffs (M8)
         "attempts": row.attempts,
     }
 

@@ -8,7 +8,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from sqlalchemy import select
+from fastapi.responses import PlainTextResponse
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -17,7 +18,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from agent_api import store
-from agent_api.models import AuditRow, Base, HITLRow
+from agent_api.models import AuditRow, Base, HITLRow, RunRow, VertexRow
 from agent_api.settings import settings
 
 
@@ -70,6 +71,82 @@ def create_app() -> FastAPI:
                 paths_allow=list(payload.get("paths_allow", [])),
             )
             return {"vertex_id": vertex_id}
+
+    # --- swarm (M8): the run graph, the judge verdict, metrics -------------------
+
+    @app.get("/runs/{run_id}/vertices")
+    async def run_vertices(run_id: int) -> dict[str, Any]:
+        async with app.state.session_factory() as session:
+            rows = await session.scalars(
+                select(VertexRow).where(VertexRow.run_id == run_id).order_by(VertexRow.id)
+            )
+            return {
+                "vertices": [
+                    {
+                        "id": r.id,
+                        "name": r.name,
+                        "status": r.status,
+                        "deps": list(r.deps_json or []),
+                        "paths_allow": list(r.paths_allow_json or []),
+                        "attempts": r.attempts,
+                        "leased_by": r.leased_by,
+                        "result": r.result_json or {},
+                    }
+                    for r in rows
+                ]
+            }
+
+    @app.post("/runs/{run_id}/status")
+    async def set_run_status(run_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        status = str(payload.get("status", ""))
+        if status not in ("done", "failed"):
+            raise HTTPException(status_code=422, detail="status must be done or failed")
+        async with app.state.session_factory() as session:
+            run = (await session.scalars(select(RunRow).where(RunRow.id == run_id))).first()
+            if run is None:
+                raise HTTPException(status_code=404, detail="run not found")
+            run.status = status
+            await session.commit()
+            await store.append_audit(
+                session,
+                actor=str(payload.get("actor", "judge")),
+                action="run_status",
+                target=f"run:{run_id}",
+                outcome="ok" if status == "done" else "error",
+                payload={"status": status, "note": str(payload.get("note", ""))},
+            )
+        return {"run_id": run_id, "status": status}
+
+    @app.get("/metrics", response_class=PlainTextResponse)
+    async def metrics() -> str:
+        async with app.state.session_factory() as session:
+            vertices = (
+                await session.execute(
+                    select(VertexRow.status, func.count()).group_by(VertexRow.status)
+                )
+            ).all()
+            hitl = (
+                await session.execute(
+                    select(HITLRow.kind, func.count())
+                    .where(HITLRow.status == "pending")
+                    .group_by(HITLRow.kind)
+                )
+            ).all()
+            runs = (
+                await session.execute(select(RunRow.status, func.count()).group_by(RunRow.status))
+            ).all()
+        lines = [
+            "# HELP swarm_vertices Vertices by status (all runs).",
+            "# TYPE swarm_vertices gauge",
+            *(f'swarm_vertices{{status="{s}"}} {n}' for s, n in vertices),
+            "# HELP swarm_hitl_pending Pending HITL requests by kind.",
+            "# TYPE swarm_hitl_pending gauge",
+            *(f'swarm_hitl_pending{{kind="{k}"}} {n}' for k, n in hitl),
+            "# HELP swarm_runs Runs by status.",
+            "# TYPE swarm_runs gauge",
+            *(f'swarm_runs{{status="{s}"}} {n}' for s, n in runs),
+        ]
+        return "\n".join(lines) + "\n"
 
     @app.post("/vertices/claim")
     async def claim_vertex(payload: dict[str, Any]) -> dict[str, Any]:

@@ -158,6 +158,30 @@ flowchart LR
 - Vertex contract: `{id, deps, paths_allow, paths_avoid, done_when, deliverable}`.
   `done_when` is validated by code, not by an LLM refusing to fail.
 
+### 4·M8. Implemented swarm mode (v0.9.0)
+
+```mermaid
+flowchart LR
+    T["task (issue)"] --> PL["swarm plan<br/>coordinator LLM → validated graph"]
+    PL --> Q["lease queue<br/>(deps, SKIP-LOCKED claim)"]
+    Q --> W1["worker w1"] & W2["worker w2"] & W3["worker w3"]
+    W1 & W2 & W3 --> C["corridor per vertex<br/>PR → CI → review → HITL → merge"]
+    C -->|"result = handoff"| Q
+    C --> J["swarm judge<br/>all done + main passes"]
+```
+
+- **Planner** (`agent_runtime.planner`): an LLM proposes `{name, deps, paths_allow}`; the platform validates it before anything runs. The checks:
+  - names unique, deps known, no cycles, at most 5 vertices;
+  - paths inside the task's allowed area;
+  - **vertices that can run concurrently do not share files**.
+
+  `done_when` is platform-supplied; the planner never gives commands. Any failure falls back to one vertex.
+- **Parallel executors** (`swarm run --workers N`): N worker processes on one run, with distinct lease identities (`<agent>-w<i>`) and workspaces. Each vertex has its own sandbox pod and NodePort.
+- **Handoffs:** a dependent vertex's prompt gets "Handoff from upstream vertices" (files, PR, review of each dep). The claim response carries `deps`, and `GET /runs/{id}/vertices` exposes the graph.
+- **Backpressure:** a worker does not claim while at least `max_pending_merges` (default 3) merges wait for HITL. The wait is audited as `backpressure`.
+- **Judge** (`swarm judge`): all vertices `done`, and the merged `main` passes the run's done command. Then the run is set `done`, and a `decision` episode goes to project memory.
+- **Metrics:** `GET /metrics` on the control plane exposes `swarm_vertices{status}`, `swarm_hitl_pending{kind}` and `swarm_runs{status}`.
+
 ### 4a. Agent roles catalog
 
 Implemented via the `identities` registry (M3): a role maps to `allowed_sections`
