@@ -40,10 +40,21 @@ data:
         litellm_params:
           model: openrouter/deepseek/deepseek-v4.1-flash
           api_key: os.environ/OPENROUTER_API_KEY
+      # Bot reviewer (M5): a different model family than the GLM implementer
+      # (cross-family review, research 2026-11-14); metered via OpenRouter.
+      - model_name: reviewer
+        litellm_params:
+          model: openrouter/moonshotai/kimi-k3.1-pro
+          api_key: os.environ/OPENROUTER_API_KEY
+      - model_name: reviewer-fallback
+        litellm_params:
+          model: openrouter/z-ai/glm-5.3
+          api_key: os.environ/OPENROUTER_API_KEY
     router_settings:
       fallbacks:
         - qwen3: ["qwen3-openrouter"]
         - qwen-coder: ["qwen-coder-openrouter"]
+        - reviewer: ["reviewer-fallback"]
       num_retries: 1
       allowed_fails: 1      # one plan-limit error ...
       cooldown_time: 300    # ... parks z.ai for 5 min; traffic goes to OpenRouter

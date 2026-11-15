@@ -127,3 +127,15 @@ def test_litellm_pod_is_ready_only_when_serving() -> None:
     probe = deploy["spec"]["template"]["spec"]["containers"][0]["readinessProbe"]
     assert probe["httpGet"]["path"] == "/health/readiness"
     assert probe["httpGet"]["port"] == 4000
+
+
+def test_reviewer_alias_is_cross_family_with_fallback() -> None:
+    # The implementer is GLM (z.ai); review by a different family (research 2026-11-14).
+    models = _models()
+    assert models["reviewer"]["model"].startswith("openrouter/moonshotai/")
+    assert models["reviewer"]["api_key"] == "os.environ/OPENROUTER_API_KEY"
+    fallbacks: dict[str, list[str]] = {}
+    for entry in _config()["router_settings"]["fallbacks"]:
+        fallbacks.update(entry)
+    assert fallbacks["reviewer"] == ["reviewer-fallback"]
+    assert models["reviewer-fallback"]["model"].startswith("openrouter/")
