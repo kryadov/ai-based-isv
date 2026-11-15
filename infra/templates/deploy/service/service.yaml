@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: isv-product
+  labels:
+    app: isv-product
+spec:
+  selector:
+    app: isv-product
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+---
+# Scraped by kube-prometheus-stack (serviceMonitorSelectorNilUsesHelmValues:
+# false). The pod-template-hash label tells canary and stable series apart.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: isv-product
+  labels:
+    app: isv-product
+spec:
+  selector:
+    matchLabels:
+      app: isv-product
+  podTargetLabels:
+    - rollouts-pod-template-hash
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

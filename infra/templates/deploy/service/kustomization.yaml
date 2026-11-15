@@ -1,0 +1,13 @@
+# Argo CD renders this with the Application's kustomize overrides: the deployer
+# sets images (isv-product:<sha7>) and patches (fault env, baseline args).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - rollout.yaml
+  - service.yaml
+  - analysis.yaml
+  - k6.yaml
+images:
+  - name: isv-product
+    newName: isv-product
+    newTag: seed

@@ -1,0 +1,72 @@
+# Argo Rollouts canary for a service project (spec §7.2.6, M6). Seeded into the
+# project repo as deploy/; agents cannot change deploy/** (protected gate path,
+# human-only deploy config — HITL #3). The platform deployer sets the image and
+# the post-rollout baseline args through the Argo CD Application (kustomize).
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: isv-product
+spec:
+  replicas: 4
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: isv-product
+  strategy:
+    canary:
+      # Background analysis while the canary takes traffic: canary vs stable,
+      # selected by pod-template-hash (replica-based traffic split).
+      analysis:
+        templates:
+          - templateName: canary-vs-stable
+        args:
+          - name: canary-hash
+            valueFrom:
+              podTemplateHashValue: Latest
+          - name: stable-hash
+            valueFrom:
+              podTemplateHashValue: Stable
+      steps:
+        - setWeight: 20
+        - pause: {duration: 60s}
+        - setWeight: 50
+        - pause: {duration: 60s}
+        - setWeight: 100
+        # Post-rollout window: the whole service against the pre-rollout
+        # baseline; a failure aborts and rolls back to the stable ReplicaSet.
+        - analysis:
+            templates:
+              - templateName: post-rollout
+            args:
+              - name: baseline-error
+                value: "0"
+              - name: baseline-p95
+                value: "0"
+  template:
+    metadata:
+      labels:
+        app: isv-product
+    spec:
+      containers:
+        - name: isv-product
+          image: isv-product
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: FAULT_ERROR_RATE
+              value: "0"
+            - name: FAULT_LATENCY_MS
+              value: "0"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi

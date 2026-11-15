@@ -1,0 +1,56 @@
+# Synthetic traffic next to the service (spec §14): a constant 10 rps on the
+# business endpoint, so the canary analysis always has samples.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: isv-product-k6
+data:
+  load.js: |
+    import http from "k6/http";
+    export const options = {
+      scenarios: {
+        steady: {
+          executor: "constant-arrival-rate",
+          rate: 10,
+          timeUnit: "1s",
+          duration: "720h",
+          preAllocatedVUs: 5,
+          maxVUs: 20,
+        },
+      },
+    };
+    export default function () {
+      http.get("http://isv-product.prod:8000/api/greet?name=k6");
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: isv-product-k6
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: isv-product-k6
+  template:
+    metadata:
+      labels:
+        app: isv-product-k6
+    spec:
+      containers:
+        - name: k6
+          image: grafana/k6:1.0.0
+          args: ["run", "--quiet", "--no-summary", "/scripts/load.js"]
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+      volumes:
+        - name: script
+          configMap:
+            name: isv-product-k6
