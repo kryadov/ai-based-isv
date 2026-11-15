@@ -159,6 +159,11 @@ def reviewer_base(settings: WorkerSettings) -> str:
     return url.rstrip("/").removesuffix("/v1")
 
 
+def is_platform_repo(settings: WorkerSettings, owner: str, repo: str) -> bool:
+    """True for this platform's own repo: HITL on every merge, never auto-merge."""
+    return settings.platform_repo or f"{owner}/{repo}" in settings.platform_repos
+
+
 def default_gate_runner(settings: WorkerSettings, token: str) -> GateRunner:
     """The production runner: Gitea + LiteLLM reviewer + agent_api HITL."""
     base_url, owner, repo = repo_coords(settings.repo_url)
@@ -168,7 +173,7 @@ def default_gate_runner(settings: WorkerSettings, token: str) -> GateRunner:
         max_fix_rounds=settings.max_fix_rounds,
         ci_timeout_s=settings.ci_timeout_s,
         hitl_poll_s=settings.hitl_poll_s,
-        platform_repo=settings.platform_repo,
+        platform_repo=is_platform_repo(settings, owner, repo),
     )
 
     async def runner(ctx: GateContext, stop: asyncio.Event) -> GateOutcome:
