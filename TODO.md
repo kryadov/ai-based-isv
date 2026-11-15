@@ -36,7 +36,7 @@
 - [ ] Worker `attempts >= 3` is checked after the claim increment, so only 2 real executions happen (pre-existing).
 - [ ] `llm.complete` bypasses token budgets (M5); the git MCP server is built but not wired (M5 scoped tokens).
 - [ ] MCP servers have no auth token; sandboxes use the LiteLLM master key: add an MCP auth token and a scoped LiteLLM virtual key per run/role.
-- [ ] `org-bootstrap check` marks a tool `[ok]` even when `--version` fails: check the exit code.
+- [x] `org-bootstrap check` marks a tool `[ok]` even when `--version` fails: check the exit code. Done by an agent through the self-development corridor (Gitea PR #3 → GitHub PR #29, 2026-11-15).
 - [ ] LLM: set `OPENROUTER_API_KEY` in `.env`, so the fallback works when the z.ai Coding Plan limit is hit. z.ai ToS lists supported tools only (LiteLLM is not listed): if the plan gets restricted, route z.ai only through the OpenCode provider.
 
 ## M5 follow-ups (2026-11-15)

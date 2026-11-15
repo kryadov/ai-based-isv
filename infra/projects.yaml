@@ -1,0 +1,8 @@
+# Project registry of the organization (v0 file; M10: Projects UI).
+projects:
+- name: ai-based-isv
+  kind: tool
+  owner: swarm-lab
+  status: alive
+  status_date: '2026-11-15'
+  reason: self-development level 2 (spec §13.7)
