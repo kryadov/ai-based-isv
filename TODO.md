@@ -77,3 +77,4 @@
 - [ ] Read-only `memory` MCP server for on-demand search by agents (today: slice in the prompt only).
 - [ ] Memory outages are logged, not audited (`memory_skipped`): the fail-open client cannot tell an outage from an empty slice.
 - [ ] Episode TTL / consolidation job (drift and poisoning guard).
+- [ ] A same-image deploy with a config change (fault env) gets a postmortem that only names the image (`rolled back to <same image>`): include the env/config diff.

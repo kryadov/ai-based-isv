@@ -3,10 +3,13 @@
 > Read this file FIRST. Then `ARCH.md` (how it works, diagrams), `AGENTS.md` (rules), `TODO.md` (backlog).
 > This file is updated at the end of EVERY increment. If your findings contradict it — verify, then update it.
 
-**Current (2026-11-16): M6 is CLOSED — canary rollout with metric analysis; release v0.7.0.** A merged change to the demo service now reaches prod as an Argo Rollouts canary (20→50→100 %) and is judged by Prometheus: canary vs stable (the canary must carry traffic; 5xx ≤ max(2×stable, 5 %), p95 ≤ max(1.5×stable, 300 ms)) plus a post-rollout window against the pre-rollout baseline; a failed analysis aborts, prod returns to stable and a `postmortem.md` draft lands in the evidence. Acceptance `infra/tests/m6_flow.sh` PASS live: agent task `swarm-lab/isv-product#2` → corridor (PR #3, CI, review, HITL) → canary `isv-product:ca1fef1` promoted; same commit with `FAULT_ERROR_RATE=0.5` → `error-ratio` failed → rolled back, postmortem written, prod back on `ca1fef1`.
+**Current (2026-11-16): M7 is CLOSED — project memory; release v0.8.0.** Experience now feeds the next task: vertex outcomes are written to project episodic memory (control-plane table `memory_episodes`, API `/memory/*`): deploy success markers, rollback postmortems, terminal failures, and up to two lessons from the light-model memory-extractor; at vertex start the worker puts the most relevant episodes (path overlap + task words) into the agent prompt and logs their ids (`memory_slice`). Org memory: Gitea `swarm-lab/org-memory` (`lessons/`, reuse catalog v1, docs check profile); `org-bootstrap memory promote --episode N` opens a human-reviewed PR. Acceptance `infra/tests/m7_flow.sh` PASS live: fault canary rolled back → postmortem episode #1 → the next agent task on `isv-product` (PR #5) received [1] in its prompt → promotion PR org-memory#1; the extractor added 2 lessons.
+- Design `docs/superpowers/specs/2026-11-16-m7-memory-design.md`, plan `docs/superpowers/plans/2026-11-16-m7-memory.md`. Deferred (TODO "M7 follow-ups"): embeddings, code indexing, spec self-evals, auto-promotion, a `memory` MCP server.
+- **Next: M8 (swarm mode: parallel vertices, coordinator, working memory).** Usage: TUTORIAL.md §9.
+
+**Earlier (2026-11-16): M6 closed — canary rollout with metric analysis; release v0.7.0.** A merged change to the demo service now reaches prod as an Argo Rollouts canary (20→50→100 %) and is judged by Prometheus: canary vs stable (the canary must carry traffic; 5xx ≤ max(2×stable, 5 %), p95 ≤ max(1.5×stable, 300 ms)) plus a post-rollout window against the pre-rollout baseline; a failed analysis aborts, prod returns to stable and a `postmortem.md` draft lands in the evidence. Acceptance `infra/tests/m6_flow.sh` PASS live: agent task `swarm-lab/isv-product#2` → corridor (PR #3, CI, review, HITL) → canary `isv-product:ca1fef1` promoted; same commit with `FAULT_ERROR_RATE=0.5` → `error-ratio` failed → rolled back, postmortem written, prod back on `ca1fef1`.
 - Design `docs/superpowers/specs/2026-11-16-m6-canary-design.md`, plan `docs/superpowers/plans/2026-11-16-m6-canary.md`. Pieces: `apps/isv_product` (metrics, fault injection, Dockerfile); `infra/templates/deploy/service` (Rollout, analysis, k6); `bootstrap.sh rollouts` (argo-rollouts 2.43.8 + controller metrics) and `demo` (seeds `swarm-lab/isv-product`, Argo CD Application from Gitea); `agent_runtime.deployer` (+ CLI) and the worker deploy step (`AGENT_RUNTIME_DEPLOY_ENABLED`); `observability` MCP (read-only, Prometheus-only egress); Prometheus NodePort 30090; `deploy/**` is a protected gate path; HITL reject and canary rollback fail the vertex terminally.
 - Live lessons: k6 keep-alive pinned traffic to old pods → the canary analysis passed vacuously (fixed: `canary-traffic` metric + no connection reuse); a same-image fault deploy reported success before Argo CD synced (fixed: verdict requires a new pod-template-hash); Gitea answers an existing branch protection with 403.
-- **Next: M7 (project memory: episodic write-back of verdicts and postmortems).** Usage guide: TUTORIAL.md (§8 = canary).
 
 
 **Current (2026-11-15): spec §13.7 LEVEL 2 is ACHIEVED — the platform develops itself through its own corridor; release v0.6.0.** First self-made change: tracker issue `swarm-lab/ai-based-isv#2` → run 20 / vertex 20 → agent `swarm-agent` in a k3s sandbox → Gitea PR #3 → platform CI (`ci / checks`, `ci / security`) green → bot review clean → HITL approved (operator under the owner pre-authorization, after reading the diff) → merged (1069 s) → `platform-sync.sh promote` → GitHub PR #29 → GitHub CI green → merged `df0bed5` → `platform-sync.sh pull`. The change: `org-bootstrap check` no longer reports `[ok]` for a tool whose `--version` exits non-zero (+ tests) — TODO item closed by an agent.
@@ -22,7 +25,7 @@ Work moved to a no-GPU Windows workstation:
 - **Acceptance on the new stand:** see "Verified acceptance flows".
 - **Previous move:** `docs/superpowers/HANDOFF-2026-11-12.md`.
 
-Last updated: 2026-11-16 (M6 closed — v0.7.0; next M7)
+Last updated: 2026-11-16 (M7 closed — v0.8.0; next M8)
 
 ## What this project is
 
@@ -139,7 +142,7 @@ The worker drives the tracker status loop (In Progress → Done/Blocked with evi
 
 ## Releases / conventions
 
-- Tags/releases per milestone, changelog from merged PRs: `./infra/scripts/release.sh v0.x.y` (spec §13.8). Published: **v0.1.0** (M1), **v0.2.0** (M2 close), **v0.3.0** (M3 close), **v0.4.0** (M4 close, 2026-11-15), **v0.5.0** (M5 close, 2026-11-15), **v0.6.0** (§13.7 level 2: first self-made change, 2026-11-15). **v0.7.0** (M6 close, 2026-11-16). Next: v0.8.0 at M7 close.
+- Tags/releases per milestone, changelog from merged PRs: `./infra/scripts/release.sh v0.x.y` (spec §13.8). Published: **v0.1.0** (M1), **v0.2.0** (M2 close), **v0.3.0** (M3 close), **v0.4.0** (M4 close, 2026-11-15), **v0.5.0** (M5 close, 2026-11-15), **v0.6.0** (§13.7 level 2: first self-made change, 2026-11-15). **v0.7.0** (M6 close, 2026-11-16), **v0.8.0** (M7 close, 2026-11-16). Next: v0.9.0 at M8 close.
 - Recursive self-development (platform builds itself): spec §13.7 — level 1 (meta-automations on our own logs) after M3, level 2 (this repo as a target project via tracker+pipeline) — ACHIEVED 2026-11-15 (v0.6.0, AGENTS.md §11). Model/subscription routing research for that path: `docs/superpowers/research/2026-11-14-model-subscriptions-routing.md`.
 - External projects deliver tested release artifacts / Docker images to the org registry (spec §13.5); offboarding in v0 via `org-bootstrap offboard` (spec §13.6).
 - Onboarding per project kind (§13.1): per-kind repo templates + tutorials planned (TODO), wizard v0 in CLI, Projects UI in M10 — confirmed by owner.
