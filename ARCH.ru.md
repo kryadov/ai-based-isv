@@ -122,6 +122,20 @@ flowchart LR
     M --> DONE["трекер Done<br/>+ ссылка на PR"]
 ```
 
+### 3a. Цикл самообеспечения (спека §13.7, уровень 2)
+
+Репо самой платформы — тоже целевой проект. Канон — GitHub; рабочая копия агентов — Gitea `swarm-lab/ai-based-isv`, синхронизация — `infra/scripts/platform-sync.sh`. Агенты работают от не-админского `swarm-agent`; каждый мерж требует HITL (для `platform_repos` автомержа нет).
+
+```mermaid
+flowchart LR
+    GH["GitHub main<br/>(канон)"] -->|"platform-sync pull<br/>(только fast-forward)"| GT["Gitea swarm-lab/ai-based-isv<br/>main"]
+    GT --> TASK["issue → run → vertex<br/>(swarm-agent, песочница)"]
+    TASK --> COR["PR → CI платформы → ревью<br/>→ HITL → мерж"]
+    COR --> GT
+    GT -->|"platform-sync promote"| PRG["GitHub PR selfdev/&lt;sha7&gt;"]
+    PRG -->|"зелёный GitHub CI → мерж"| GH
+```
+
 ## 4. Модель сворм-исполнения
 
 - **Один писатель на участок кода**; специалисты ревьюят, не пишут совместно.

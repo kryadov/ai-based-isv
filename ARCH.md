@@ -118,6 +118,20 @@ flowchart LR
     M --> DONE["tracker Done<br/>+ PR link"]
 ```
 
+### 3a. Self-development loop (spec §13.7 level 2)
+
+The platform repo itself is a target project. GitHub stays canonical; Gitea `swarm-lab/ai-based-isv` is the agents' working copy, synced by `infra/scripts/platform-sync.sh`. Agents act as the non-admin `swarm-agent`; every merge needs HITL (no auto-merge for `platform_repos`).
+
+```mermaid
+flowchart LR
+    GH["GitHub main<br/>(canonical)"] -->|"platform-sync pull<br/>(fast-forward only)"| GT["Gitea swarm-lab/ai-based-isv<br/>main"]
+    GT --> TASK["issue → run → vertex<br/>(swarm-agent, sandbox)"]
+    TASK --> COR["PR → platform CI → review<br/>→ HITL → merge"]
+    COR --> GT
+    GT -->|"platform-sync promote"| PRG["GitHub PR selfdev/&lt;sha7&gt;"]
+    PRG -->|"GitHub CI green → merge"| GH
+```
+
 ## 4. Swarm execution model
 
 - **One writer per code area**; specialists review, never co-write.
