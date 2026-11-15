@@ -38,6 +38,9 @@ class ExecutionRequest(BaseModel):
     repo_url: str
     base_branch: str = "main"
     work_branch: str
+    # Sub-directory of the vertex evidence for extra sessions (gate fix rounds:
+    # "fix-<round>"), so they never overwrite the vertex manifest and verdict.
+    evidence_suffix: str = ""
 
 
 class ExecutionEvent(BaseModel):

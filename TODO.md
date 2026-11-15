@@ -41,7 +41,7 @@
 
 ## M5 follow-ups (2026-11-15)
 
-- [ ] Live forced-red fix-loop scenario in `m5_flow` (deterministic CI failure injected before review). The fix loop is unit-proven (gate driver + real-git fix port) but has not yet happened live.
+- [ ] Live forced-red fix-loop scenario in `m5_flow` (deterministic CI failure injected before review). The fix loop is unit-proven (gate driver + real-git fix port) but has not yet happened live. (2026-11-16: a real fix round happened live in m5 run 22 — it exposed fix evidence overwriting the vertex manifest, fixed: `evidence_suffix=fix-N`.)
 - [ ] Agent-authored replies to review threads: v0 posts "addressed in fix round N" per blocking finding; the next review round re-judges.
 - [ ] Read-scoped Gitea tokens per project for the `ci` / `task-reader` MCP servers and the reviewer (v0 reuses the admin token).
 - [ ] Webhook-driven gate controller in agent_api (M8, swarm scale): the corridor now runs inside the run-scoped worker, which holds the lease while waiting for CI/HITL.

@@ -519,13 +519,14 @@ class OpencodeSession:
 
 
 def _evidence_dir(workspace: Path, request: ExecutionRequest) -> Path:
-    return (
+    base = (
         workspace
         / ".agent_runtime"
         / "runs"
         / f"run-{request.run_id}"
         / f"vertex-{request.vertex_id}"
     )
+    return base / request.evidence_suffix if request.evidence_suffix else base
 
 
 def _derived_image_tag(image: str) -> str:

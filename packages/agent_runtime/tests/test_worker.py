@@ -1022,6 +1022,7 @@ async def test_gate_fix_port_runs_executor_on_pr_branch_and_pushes(tmp_path: Pat
     assert fixes[0].pushed is True, fixes[0].reason
     assert fixes[0].replies == {"greeting.py:1": "addressed in fix round 1"}
     fix_request = executor.calls[1]
+    assert fix_request.evidence_suffix == "fix-1"  # never overwrite the vertex manifest
     assert fix_request.base_branch == "agent/vertex-1"
     assert "say world" in fix_request.prompt and "E assert" in fix_request.prompt
     tip = subprocess.run(
