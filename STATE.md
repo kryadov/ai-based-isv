@@ -126,7 +126,7 @@ The worker drives the tracker status loop (In Progress → Done/Blocked with evi
 - ✅ **M4a — Executor/OpenCode locally (DONE 2026-11-10)**. Plan: `docs/superpowers/plans/2026-11-09-m4a-executor-opencode.md`; design: `docs/superpowers/specs/2026-11-09-m4-agent-runtime-design.md`.
 - ✅ **M4b — sandbox in k3s (DONE 2026-11-10)**. Plan: `docs/superpowers/plans/2026-11-10-m4b-k3s-sandbox.md`; spike notes: `docs/superpowers/research/2026-11-10-m4b-*.md`.
 - ✅ **M4c — MCP servers + tracker status loop (DONE 2026-11-15)**: final review 0 Critical, I1–I3 fixed, minors in TODO.md; all eight flows PASS live on the Rancher stand; PR #25 merged; release **v0.4.0** closes M4. Plan: `docs/superpowers/plans/2026-11-11-m4c-mcp-servers.md`.
-- 🔄 **M5 — gates + review corridor**: implemented on `feat/m5-gates`; `m5_flow` PASS live; regressions and the PR are next; release **v0.5.0** on merge. Plan: `docs/superpowers/plans/2026-11-15-m5-gates-review.md`.
+- 🔄 **M5 — gates + review corridor**: implemented on `feat/m5-gates`; `m5_flow` PASS live; regressions m2a–m4c all PASS (2026-11-15); release **v0.5.0** on merge. Plan: `docs/superpowers/plans/2026-11-15-m5-gates-review.md`.
 - ⏭️ Then M6 (canary), M7 (memory), M8 (swarm mode), M9 (polyglot dogfood), M10 (UI panel + Automations). Spec §13.7 level 2 (this repo developed through its own corridor) becomes possible after M5/M6.
 
 ## Releases / conventions
