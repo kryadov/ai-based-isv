@@ -1,0 +1,64 @@
+# ci MCP server (M5): READ-ONLY CI status and job logs of a PR, for fix
+# attempts in sandbox pods and for the host worker. No write tools.
+# Cluster-only (ci.agents.svc:8000/mcp). v0 reuses the admin token from Secret
+# mcp-task-source (a read-scoped token per project — TODO.md).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ci
+  namespace: agents
+  labels: &labels
+    app.kubernetes.io/name: ci
+    app.kubernetes.io/component: mcp-server
+    app.kubernetes.io/part-of: agent-runtime
+    agent-runtime.io/sandbox-access: "yes"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ci
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: server
+          image: mcp-servers:0.1.0
+          imagePullPolicy: Never
+          command: ["python", "-m", "mcp_servers.ci_server"]
+          env:
+            - name: GITEA_BASE_URL
+              value: http://gitea-http.platform.svc.cluster.local:3000
+            - name: GITEA_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-task-source
+                  key: gitea-token
+            - name: PORT
+              value: "8000"
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 20m, memory: 96Mi}
+            limits: {memory: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ci
+  namespace: agents
+  labels:
+    app.kubernetes.io/name: ci
+    app.kubernetes.io/component: mcp-server
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: ci
+  ports:
+    - port: 8000
+      targetPort: 8000
