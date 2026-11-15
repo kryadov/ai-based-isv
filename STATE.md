@@ -3,8 +3,11 @@
 > Read this file FIRST. Then `ARCH.md` (how it works, diagrams), `AGENTS.md` (rules), `TODO.md` (backlog).
 > This file is updated at the end of EVERY increment. If your findings contradict it — verify, then update it.
 
-**Current (2026-11-15): M4 is CLOSED — release [v0.4.0](https://github.com/kryadov/ai-based-isv/releases/tag/v0.4.0).** PR #25 is merged to main as `d2d6969`.
-**Next step: M5 (gates + review).** Start it with `brainstorming` → `writing-plans` (AGENTS.md §1) against spec §7 and the M4 design. The deferred M4c minors and the security follow-ups (MCP auth token, scoped LiteLLM virtual keys) are in TODO.md.
+**Current (2026-11-15): M5 (gates + review corridor) is implemented on `feat/m5-gates`, and `m5_flow.sh` PASSes live.** An agent's change now ships as a merged PR, after CI (python check profile plus gitleaks and semgrep), a cross-family bot review, bounded fix rounds and the HITL merge gate.
+- Design: `docs/superpowers/specs/2026-11-15-m5-gates-review-design.md`.
+- Plan: `docs/superpowers/plans/2026-11-15-m5-gates-review.md`.
+- After merge: release v0.5.0. Then M6 (canary), and spec §13.7 level 2 (this repo as a target project).
+- M4 closed earlier the same day: release [v0.4.0](https://github.com/kryadov/ai-based-isv/releases/tag/v0.4.0).
 Work moved to a no-GPU Windows workstation:
 - **Stand:** Rancher Desktop's built-in k3s plus the toolbox container (AGENTS.md §10; INSTALL.md "Windows (Rancher Desktop + toolbox)").
 - **LLM:** external. The z.ai GLM Coding Plan comes first, OpenRouter is the fallback on plan limits, and keys go `.env` → OpenBao (AGENTS.md §10).
@@ -12,7 +15,7 @@ Work moved to a no-GPU Windows workstation:
 - **Acceptance on the new stand:** see "Verified acceptance flows".
 - **Previous move:** `docs/superpowers/HANDOFF-2026-11-12.md`.
 
-Last updated: 2026-11-15 (M4c merged, v0.4.0 released — M4 closed; next M5)
+Last updated: 2026-11-15 (M5 gates corridor implemented, m5_flow PASS live)
 
 ## What this project is
 
@@ -51,7 +54,14 @@ Verified acceptance flows (run them through the toolbox: `./infra/scripts/toolbo
 ./infra/tests/m4a_flow.sh          # agent_runtime E2E: issue-like vertex → agent in docker → PR branch with evidence
 ./infra/tests/m4b_flow.sh          # same vertex in a k3s sandbox pod: NetworkPolicy + Secret + NodePort + netpol negative
 ./infra/tests/m4c_flow.sh          # Gitea issue → run → agent in pod via MCP → branch + evidence → tracker In Progress → Done; MCP netpol (I2/I3)
+./infra/tests/m5_flow.sh           # + gate corridor: PR → CI (checks + security) → bot review → HITL approve → merged → issue Done
 ```
+
+**m5_flow PASS live (2026-11-15, run 11):** PR #2 merged; `ci / checks` and `ci / security` green; one bot review; HITL #2 approved; 131 s from claim to merge. Before the green run, the corridor found and blocked real defects in its own environment:
+- act_runner pointed at the NodePort instead of the service port, and lacked the `ubuntu-latest` label;
+- CI checkout used an unreachable ROOT_URL;
+- semgrep crashed with pydantic ≥2.12;
+- the profile itself had a mutable action tag and `curl | sh` installs, which semgrep blocked.
 
 Status on the Rancher/toolbox stand (2026-11-15): **all eight PASS**, run one at a time:
 - m2a, m2b, m2c, m2d, m3, m4a, m4b, m4c.
@@ -93,6 +103,21 @@ Code gates: `ruff check` / `ruff format --check` / `mypy packages apps` / `pytes
 
 The worker drives the tracker status loop (In Progress → Done/Blocked with evidence comments) through the host-only `task-source`. Sandboxes get the read-only `task-reader` and `llm` as OpenCode MCP servers.
 
+**M5 adds — the gate corridor (`feat/m5-gates`, verified E2E by `m5_flow.sh`):**
+- **Check profile** (`infra/templates/check-profiles/python/`): a Gitea Actions workflow with two jobs.
+  - `checks`: ruff, format, mypy, pytest.
+  - `security`: gitleaks and semgrep `p/ci`.
+  - Actions are SHA-pinned, downloads are checksum-verified, and there are no skip switches.
+  - It ships with `.platform/merge-policy.yaml`. `org-bootstrap onboard` / `seed-demo` seed both, set `PLATFORM_GIT_URL` and protect `main` with both CI contexts.
+- **Gate driver** (`agent_runtime/gates.py`), run by the worker after push when `AGENT_RUNTIME_GATES_ENABLED=1`:
+  - PR (reused across attempts) → wait for CI → bot review → fix rounds (≤2) → HITL `merge` (or policy auto-merge for docs-only) → merge → confirm;
+  - it fails closed on CI timeout, reviewer failure, protected paths (`.gitea/**`, `.platform/**`), HITL reject, or an unconfirmed merge;
+  - `fix_rounds_exhausted` files a HITL `escalation`;
+  - wiring is in `worker_gates.py`, which stops the implementer sandbox before fix rounds.
+- **Reviewer** (`reviewer.py`, prompt `prompts/reviewer-v1.md`): LiteLLM alias `reviewer` → `moonshotai/kimi-k3.1-pro`, cross-family vs the GLM implementer, with fallback `reviewer-fallback`. Output is structured JSON; invalid output gets one retry and is then treated as unavailable, which blocks the merge.
+- **MCP `ci` server** (read-only `get_pr_checks` / `get_job_log`). The `agent_api` gets `GET /hitl/{id}`, plus `HITLClient` and `GiteaPRClient` (PRs, statuses, reviews, job-log tail, merge).
+- **Tracker stage comments:** `[platform] PR opened / CI / review / fix round / merged`. Done carries the PR link.
+
 ## Milestones
 
 - ✅ **M1** — monorepo skeleton (release **v0.1.0**)
@@ -101,7 +126,8 @@ The worker drives the tracker status loop (In Progress → Done/Blocked with evi
 - ✅ **M4a — Executor/OpenCode locally (DONE 2026-11-10)**. Plan: `docs/superpowers/plans/2026-11-09-m4a-executor-opencode.md`; design: `docs/superpowers/specs/2026-11-09-m4-agent-runtime-design.md`.
 - ✅ **M4b — sandbox in k3s (DONE 2026-11-10)**. Plan: `docs/superpowers/plans/2026-11-10-m4b-k3s-sandbox.md`; spike notes: `docs/superpowers/research/2026-11-10-m4b-*.md`.
 - ✅ **M4c — MCP servers + tracker status loop (DONE 2026-11-15)**: final review 0 Critical, I1–I3 fixed, minors in TODO.md; all eight flows PASS live on the Rancher stand; PR #25 merged; release **v0.4.0** closes M4. Plan: `docs/superpowers/plans/2026-11-11-m4c-mcp-servers.md`.
-- ⏭️ **Next: M5 (gates + review)**, then M6 (canary), M7 (memory), M8 (swarm mode), M9 (polyglot dogfood), M10 (UI panel + Automations).
+- 🔄 **M5 — gates + review corridor**: implemented on `feat/m5-gates`; `m5_flow` PASS live; regressions and the PR are next; release **v0.5.0** on merge. Plan: `docs/superpowers/plans/2026-11-15-m5-gates-review.md`.
+- ⏭️ Then M6 (canary), M7 (memory), M8 (swarm mode), M9 (polyglot dogfood), M10 (UI panel + Automations). Spec §13.7 level 2 (this repo developed through its own corridor) becomes possible after M5/M6.
 
 ## Releases / conventions
 

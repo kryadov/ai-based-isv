@@ -78,7 +78,21 @@ Stand facts are recorded in `infra/env.yaml` (auto-generated — a VET artifact,
 ```bash
 ./infra/tests/m2a_pr_flow.sh      # PR-flow with branch protection (requires bootstrap)
 ./infra/tests/m2b_deploy_flow.sh  # GitOps demo-deploy to prod + metrics + logs (requires the demo merged to main: the Application follows main)
+./infra/tests/m2c_flow.sh         # tracker issues → poller + LLM gateway
+./infra/tests/m2d_flow.sh         # bootstrap CLI end to end
+./infra/tests/m3_flow.sh          # control plane on live Postgres
+./infra/tests/m4a_flow.sh         # agent in docker → PR branch with evidence
+./infra/tests/m4b_flow.sh         # agent in a k3s sandbox pod + NetworkPolicy
+./infra/tests/m4c_flow.sh         # tracker loop via MCP + MCP NetworkPolicy
+./infra/tests/m5_flow.sh          # gate corridor: PR → CI → bot review → HITL → merged
 ```
+
+On the Windows stand, prefix each with `./infra/scripts/toolbox.sh bash`, and run them **one at a time**.
+
+**Gate corridor (M5):**
+- A worker with `AGENT_RUNTIME_GATES_ENABLED=1` waits at the HITL merge gate. List the pending requests with `curl $API/hitl/pending`.
+- Approve: `curl -X POST $API/hitl/<id>/decision -H 'Content-Type: application/json' -d '{"action":"approve","decided_by":"<you>"}'`. To reject, use `"reject"`, which closes the PR.
+- `org-bootstrap onboard --project <name> [--stack python]` seeds the CI check profile and merge policy, sets `PLATFORM_GIT_URL` and protects `main`.
 
 ## 6. Troubleshooting
 

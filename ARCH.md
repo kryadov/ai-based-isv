@@ -93,6 +93,31 @@ sequenceDiagram
 Scaling principle (spec §8): the bottleneck is **verification capacity** (gates/review),
 not generation. Merge queue + backpressure throttle the swarm to integration speed.
 
+**Implemented since M5 (`agent_runtime/gates.py`, verified by `m5_flow.sh`):**
+- After the vertex pushes `agent/vertex-N`, the worker drives the corridor:
+  PR → CI → bot review → fix rounds (≤2) → HITL merge (or policy auto-merge for docs-only) → merge.
+  The tracker gets a `[platform]` comment at each stage.
+- CI is the repo's **check profile**, a Gitea Actions workflow seeded by the bootstrapper:
+  - job `checks`: ruff, mypy, pytest;
+  - job `security`: gitleaks, semgrep.
+  `main` is protected by both contexts.
+- The reviewer is a different model family from the implementer (LiteLLM alias `reviewer`).
+- Every unknown or failed state blocks the merge. Agents can never change `.gitea/**` or `.platform/**`.
+
+```mermaid
+flowchart LR
+    V["vertex done<br/>branch pushed"] --> PR["PR (reused<br/>across attempts)"]
+    PR --> CI{"CI checks +<br/>security"}
+    CI --> RV{"bot review<br/>(cross-family)"}
+    RV -->|"red CI or blocking"| FX["fix round ≤2<br/>(agent on PR branch)"]
+    FX --> CI
+    RV -->|"green + clean"| POL{"merge policy"}
+    POL -->|"docs-only"| M["merge"]
+    POL -->|"otherwise"| HITL["HITL merge<br/>approval"]
+    HITL --> M
+    M --> DONE["tracker Done<br/>+ PR link"]
+```
+
 ## 4. Swarm execution model
 
 - **One writer per code area**; specialists review, never co-write.

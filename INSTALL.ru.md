@@ -72,7 +72,21 @@ Python 3.12 подхватится автоматически (`.python-version`
 ```bash
 ./infra/tests/m2a_pr_flow.sh      # PR-flow с branch protection (нужен работающий bootstrap)
 ./infra/tests/m2b_deploy_flow.sh  # GitOps demo-deploy в prod + метрики + логи (нужен merge в main: Application следит за main)
+./infra/tests/m2c_flow.sh         # задачи трекера → поллер + LLM-шлюз
+./infra/tests/m2d_flow.sh         # CLI бутстрапера end to end
+./infra/tests/m3_flow.sh          # control plane на живом Postgres
+./infra/tests/m4a_flow.sh         # агент в docker → PR-ветка с evidence
+./infra/tests/m4b_flow.sh         # агент в k3s-песочнице + NetworkPolicy
+./infra/tests/m4c_flow.sh         # петля трекера через MCP + NetworkPolicy для MCP
+./infra/tests/m5_flow.sh          # коридор гейтов: PR → CI → бот-ревью → HITL → мерж
 ```
+
+На Windows-стенде добавляйте к каждому префикс `./infra/scripts/toolbox.sh bash` и запускайте **строго по одному**.
+
+**Коридор гейтов (M5):**
+- Воркер с `AGENT_RUNTIME_GATES_ENABLED=1` ждёт на HITL-гейте мержа. Ожидающие запросы показывает `curl $API/hitl/pending`.
+- Подтвердить: `curl -X POST $API/hitl/<id>/decision -H 'Content-Type: application/json' -d '{"action":"approve","decided_by":"<you>"}'`. Отклонить — `"reject"`, PR при этом закрывается.
+- `org-bootstrap onboard --project <name> [--stack python]` раскладывает check-профиль CI и политику мержа, выставляет `PLATFORM_GIT_URL` и защищает `main`.
 
 ## 6. Troubleshooting
 
