@@ -578,6 +578,128 @@ def test_opencode_config_text_renders_provider_and_permissions() -> None:
     assert text.startswith("{") and text.endswith("\n")
 
 
+def test_opencode_config_text_registers_remote_mcp_servers() -> None:
+    import json
+
+    from agent_runtime.opencode_executor import opencode_config_text
+
+    text = opencode_config_text(
+        model="litellm/qwen3",
+        llm_endpoint="http://litellm.internal:4000",
+        mcp_servers={"tracker": "http://task-source.agents.svc:8000/mcp"},
+    )
+    config = json.loads(text)
+    # Shape verified live against opencode 2.2.0 (`opencode mcp add --url`).
+    assert config["mcp"] == {
+        "servers": {"tracker": {"type": "remote", "url": "http://task-source.agents.svc:8000/mcp"}}
+    }
+
+
+async def test_start_records_harness_mcp_status_in_the_session_log(tmp_path: Path) -> None:
+    import httpx
+    from agent_runtime.opencode_executor import OpencodeExecutor
+
+    terminal = {"id": "e", "type": "session.execution.succeeded", "data": {"sessionID": "ses_test"}}
+    inner = _handler(events=[terminal], diff_items=[], status_tokens=None)
+    mcp = [{"name": "tracker", "status": {"status": "connected"}, "integrationID": "mcp_1"}]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/mcp" and request.method == "GET":
+            return httpx.Response(200, json={"location": {"directory": "/w"}, "data": mcp})
+        return inner(request)
+
+    executor = OpencodeExecutor(
+        base_url="http://127.0.0.1:30100",
+        workspace=tmp_path,
+        evidence_root=tmp_path,
+        model="litellm/qwen3",
+        llm_endpoint="http://l:4000/v1",
+        transport=httpx.MockTransport(handler),
+    )
+    session = await executor.start(_request())
+    await session.wait_done()
+    records = [
+        json.loads(line)
+        for line in session.session_log.path.read_text(encoding="utf-8").splitlines()
+    ]
+    statuses = [r for r in records if r["type"] == "mcp_status"]
+    assert len(statuses) == 1
+    assert statuses[0]["payload"]["servers"] == mcp
+
+
+async def test_mcp_status_waits_out_pending_servers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Live m4c: servers connect lazily; one read right after the prompt saw
+    # "llm" still pending. The executor re-reads (bounded) until none pend.
+    import agent_runtime.opencode_executor as oe
+    import httpx
+
+    monkeypatch.setattr(oe, "MCP_SETTLE_INTERVAL_SECONDS", 0.01)
+    terminal = {"id": "e", "type": "session.execution.succeeded", "data": {"sessionID": "ses_test"}}
+    inner = _handler(events=[terminal], diff_items=[], status_tokens=None)
+    reads = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/mcp":
+            reads["n"] += 1
+            state = "pending" if reads["n"] < 3 else "connected"
+            return httpx.Response(
+                200, json={"data": [{"name": "llm", "status": {"status": state}}]}
+            )
+        return inner(request)
+
+    executor = oe.OpencodeExecutor(
+        base_url="http://127.0.0.1:30100",
+        workspace=tmp_path,
+        evidence_root=tmp_path,
+        model="litellm/qwen3",
+        llm_endpoint="http://l:4000/v1",
+        transport=httpx.MockTransport(handler),
+    )
+    session = await executor.start(_request())
+    await session.wait_done()
+    records = [
+        json.loads(line)
+        for line in session.session_log.path.read_text(encoding="utf-8").splitlines()
+    ]
+    [status] = [r for r in records if r["type"] == "mcp_status"]
+    assert status["payload"]["servers"][0]["status"]["status"] == "connected"
+    assert reads["n"] == 3
+
+
+async def test_start_tolerates_a_harness_without_mcp_endpoint(tmp_path: Path) -> None:
+    import httpx
+    from agent_runtime.opencode_executor import OpencodeExecutor
+
+    terminal = {"id": "e", "type": "session.execution.succeeded", "data": {"sessionID": "ses_test"}}
+    executor = OpencodeExecutor(
+        base_url="http://127.0.0.1:30100",
+        workspace=tmp_path,
+        evidence_root=tmp_path,
+        model="litellm/qwen3",
+        llm_endpoint="http://l:4000/v1",
+        transport=httpx.MockTransport(_handler(events=[terminal], diff_items=[])),
+    )
+    session = await executor.start(_request())  # /api/mcp -> 404 in the base mock
+    assert await session.wait_done() == ExecutionStatus.DONE
+    text = session.session_log.path.read_text(encoding="utf-8")
+    assert '"mcp_status"' not in text
+
+
+def test_opencode_config_text_omits_mcp_when_none_or_empty() -> None:
+    import json
+
+    from agent_runtime.opencode_executor import opencode_config_text
+
+    empty: dict[str, str] = {}
+    for servers in (None, empty):
+        text = opencode_config_text(
+            model="litellm/qwen3", llm_endpoint="http://l:4000", mcp_servers=servers
+        )
+        assert "mcp" not in json.loads(text)
+
+
 async def test_attached_mode_sends_basic_auth(tmp_path: Path) -> None:
     """k3s sandboxes attach with Basic auth scraped from the pod logs."""
     import base64

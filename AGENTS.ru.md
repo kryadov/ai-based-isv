@@ -37,3 +37,9 @@ Python ≥3.12, src-layout, hatchling; mypy --strict без подавлений
 
 ## 10. Карта проекта
 `STATE.md` — состояние и следующий шаг (обновлять после каждого инкремента) · `ARCH.md`/`ARCH.ru.md` — архитектура со схемами · `TODO.md` — бэклог · спека + аддендумы — полный дизайн.
+
+## 11. Окружение стенда (директива владельца, 2026-11-14)
+
+Живой стенд работает на **встроенном Kubernetes Rancher Desktop** (k3s, движок moby) на Windows-машине — НЕ создавать k3d-кластер и НЕ поднимать отдельный WSL-дистрибутив. Все команды бутстрапа/флоу/гейтов — через toolbox-контейнер из Git Bash: `./infra/scripts/toolbox.sh <cmd>` (выставляет `SWARM_CLUSTER=rancher-desktop`). Подробности — INSTALL.ru.md «Windows (Rancher Desktop + toolbox)».
+
+**LLM (директива владельца, 2026-11-15):** на стенде нет GPU — никакого локального инференса и Ollama. LiteLLM маршрутизирует алиасы (`qwen3` — агентная модель с tool calls, `qwen-coder` — лёгкая модель) сначала в **z.ai GLM Coding Plan**, а при исчерпании лимита плана — в **OpenRouter** (z.ai после этого «остывает» 5 минут; `infra/litellm/deployment.yaml`). Локальные секреты — в **`.env`** в корне репо (в .gitignore; шаблон `.env.example`: `ZAI_API_KEY=`, `OPENROUTER_API_KEY=`); каждый запуск секции `litellm` записывает заданные там ключи в OpenBao `secret/litellm/{zai,openrouter}`, откуда они идут в Secret кластера (`bootstrap.sh llm-key [zai|openrouter]` — импорт без передеплоя). Ключи не коммитить и не выводить в логи/чат — проверять наличие, а не значение. После перезапуска Rancher Desktop OpenBao поднимается запечатанным: сначала `./infra/scripts/toolbox.sh bash infra/scripts/bootstrap.sh vault` (идемпотентный unseal), потом остальные секции.

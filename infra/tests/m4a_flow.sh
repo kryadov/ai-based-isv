@@ -43,12 +43,11 @@ WORKSPACE_DIR="$PWD/.agent-runtime-workspace"
 POLL_TIMEOUT_SECONDS=1200   # 20 min: the local 7B model needs minutes per turn
 POLL_INTERVAL_SECONDS=10
 
-# The lab gateway serves two local Ollama models behind LiteLLM. The harness needs
-# a model that emits real OpenAI tool_calls: qwen2.5-coder:7b (alias `qwen-coder`)
-# answers with the raw tool-call JSON as assistant text, so the sandbox never
-# touches a file and the session diff comes back empty (spike lesson 11, re-confirmed
-# live on 2026-11-09 through this gateway). `qwen3` invokes tools reliably and is
-# the model this flow drives.
+# The lab gateway (LiteLLM) routes its aliases to an external API (OpenRouter;
+# infra/litellm/deployment.yaml). The harness needs a model that emits real
+# OpenAI tool_calls (spike lesson 11: a model that answers with tool-call JSON as
+# text leaves the session diff empty); alias `qwen3` is the tool-calling agent
+# model this flow drives.
 MODEL="litellm/qwen3"
 MODEL_ALIAS="${MODEL#litellm/}"
 
@@ -83,7 +82,7 @@ trap cleanup EXIT
 # ---------------------------------------------------------------------------
 echo "M4a flow: preflight — live stand"
 
-kubectl get nodes >/dev/null 2>&1 || fail "k3d cluster swarm-lab is not reachable"
+kubectl get nodes >/dev/null 2>&1 || fail "stand cluster is not reachable"
 docker info >/dev/null 2>&1 || fail "docker is not reachable on the host"
 
 # The worker writes a full clone of the target repo plus the run evidence under the

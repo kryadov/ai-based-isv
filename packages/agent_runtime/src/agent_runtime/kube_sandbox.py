@@ -20,7 +20,7 @@ import asyncio
 import json
 import subprocess
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -277,6 +277,7 @@ class KubeSandbox:
         nodeport_range: tuple[int, int] = (30100, 30110),
         kube_runner: KubeRunner | None = None,
         image: str = SANDBOX_IMAGE,
+        mcp_servers: Mapping[str, str] | None = None,
     ) -> None:
         self._gitea_token = gitea_token
         self._repo_url = repo_url
@@ -286,6 +287,7 @@ class KubeSandbox:
         self._litellm_base_url = litellm_base_url
         self._litellm_api_key = litellm_api_key
         self._model = model
+        self._mcp_servers = dict(mcp_servers or {})
         self._namespace = namespace
         self._low, self._high = nodeport_range
         self._kube = kube_runner if kube_runner is not None else kubectl_runner
@@ -337,7 +339,11 @@ class KubeSandbox:
         if not free:
             raise KubeSandboxError(f"no free NodePort in range {self._low}-{self._high}")
 
-        config_jsonc = opencode_config_text(model=self._model, llm_endpoint=self._litellm_base_url)
+        config_jsonc = opencode_config_text(
+            model=self._model,
+            llm_endpoint=self._litellm_base_url,
+            mcp_servers=self._mcp_servers,
+        )
         secret = secret_manifest(
             name=self._name,
             run_id=self._run_id,
@@ -491,17 +497,24 @@ class KubeSandboxExecutorFactory:
         kube_runner: KubeRunner | None = None,
         image: str = SANDBOX_IMAGE,
         transport: httpx.AsyncBaseTransport | None = None,
+        mcp_servers: Mapping[str, str] | None = None,
     ) -> None:
         self._gitea_token = gitea_token
         self._litellm_api_key = litellm_api_key
         self._litellm_base_url = litellm_base_url
         self._model = model
+        self._mcp_servers = dict(mcp_servers or {})
         self._evidence_root = evidence_root
         self._namespace = namespace
         self._nodeport_range = nodeport_range
         self._kube_runner = kube_runner
         self._image = image
         self._transport = transport
+
+    @property
+    def mcp_servers(self) -> dict[str, str]:
+        """MCP servers registered into every sandbox's harness config."""
+        return dict(self._mcp_servers)
 
     async def start(self, request: ExecutionRequest) -> ExecutionSession:
         sandbox = KubeSandbox(
@@ -517,6 +530,7 @@ class KubeSandboxExecutorFactory:
             nodeport_range=self._nodeport_range,
             kube_runner=self._kube_runner,
             image=self._image,
+            mcp_servers=self._mcp_servers,
         )
         handle = await asyncio.to_thread(sandbox.start)
         executor = OpencodeExecutor(

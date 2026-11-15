@@ -1,0 +1,57 @@
+# Ingress to the MCP servers on port 8000 (M4c review I2).
+#
+# allow-mcp-ingress — sandbox-accessible servers (task-reader, llm; label
+# agent-runtime.io/sandbox-access=yes) admit pods of THIS namespace only.
+#
+# allow-task-source-ingress — the write-capable task-source (holds the Gitea
+# admin token) admits NO pod: only traffic from outside the pod network, i.e.
+# the host worker via NodePort 30085. NodePort traffic arrives SNATed to the
+# node's pod-network gateway 10.42.0.1 (observed live on k3d and Rancher
+# Desktop, flannel default CIDR) or with an off-cluster source address.
+# Note: a pod in ANOTHER namespace reaching the node's NodePort is SNATed to
+# 10.42.0.1 too — those namespaces are platform infrastructure; sandboxes
+# cannot (their egress only allows sandbox-access pods).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-mcp-ingress
+  namespace: agents
+  labels:
+    app.kubernetes.io/part-of: agent-runtime
+spec:
+  podSelector:
+    matchLabels:
+      agent-runtime.io/sandbox-access: "yes"
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-task-source-ingress
+  namespace: agents
+  labels:
+    app.kubernetes.io/part-of: agent-runtime
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: task-source
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 10.42.0.1/32
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.42.0.0/16
+      ports:
+        - protocol: TCP
+          port: 8000

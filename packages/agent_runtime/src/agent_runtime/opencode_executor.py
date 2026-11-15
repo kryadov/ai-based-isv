@@ -14,7 +14,7 @@ import json
 import os
 import subprocess
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -34,15 +34,27 @@ from agent_runtime.pathguard import diff_files
 from agent_runtime.session_log import SessionLog
 from agent_runtime.settings import OPENCODE_IMAGE, OPENCODE_PORT
 
+# opencode connects MCP servers lazily at session start: re-read the status
+# until none is "pending" (bounded, ~15 s) before recording the evidence.
+MCP_SETTLE_INTERVAL_SECONDS: float = 1.0
+MCP_SETTLE_ATTEMPTS: int = 15
+
 _DockerRunner = Callable[
     [list[str], str | None, dict[str, str] | None], subprocess.CompletedProcess[str]
 ]
 
 
-def opencode_config_text(*, model: str, llm_endpoint: str) -> str:
-    """Render the opencode.jsonc content shared by docker and k3s sandboxes."""
+def opencode_config_text(
+    *, model: str, llm_endpoint: str, mcp_servers: Mapping[str, str] | None = None
+) -> str:
+    """Render the opencode.jsonc content shared by docker and k3s sandboxes.
+
+    ``mcp_servers`` maps a server name to its streamable-HTTP URL; each becomes
+    a ``remote`` entry under ``mcp.servers`` (shape verified live against
+    opencode 2.2.0, see the M4c spike note). Empty or None omits the block.
+    """
     provider_id, model_id = _split_model(model)
-    config = {
+    config: dict[str, Any] = {
         "$schema": "https://opencode.ai/config.json",
         "model": f"{provider_id}/{model_id}",
         "permissions": [{"action": "*", "resource": "*", "effect": "allow"}],
@@ -64,6 +76,12 @@ def opencode_config_text(*, model: str, llm_endpoint: str) -> str:
             }
         },
     }
+    if mcp_servers:
+        config["mcp"] = {
+            "servers": {
+                name: {"type": "remote", "url": url} for name, url in sorted(mcp_servers.items())
+            }
+        }
     return f"{json.dumps(config, indent=2, ensure_ascii=False)}\n"
 
 
@@ -271,6 +289,18 @@ class OpencodeExecutor:
             if self._serve is not None:
                 await asyncio.to_thread(self._serve.stop)
             raise
+
+        # Evidence that the harness registered and reached its MCP servers
+        # (M4c, Review Focus #3). Best effort: a harness without the endpoint
+        # or a transient error must not fail the vertex.
+        with contextlib.suppress(Exception):
+            servers = await client.mcp_status()
+            for _ in range(MCP_SETTLE_ATTEMPTS):
+                if not any(_mcp_state(s) == "pending" for s in servers):
+                    break
+                await asyncio.sleep(MCP_SETTLE_INTERVAL_SECONDS)
+                servers = await client.mcp_status()
+            session_log.append("mcp_status", {"servers": servers})
 
         return OpencodeSession(
             client=client,
@@ -544,6 +574,11 @@ def _dockerfile(base_image: str) -> str:
         # The image exists only to host the sandbox workspace, so trust any path.
         "RUN git config --system --add safe.directory '*'\n"
     )
+
+
+def _mcp_state(server: dict[str, Any]) -> str:
+    status = server.get("status")
+    return str(status.get("status", "")) if isinstance(status, dict) else ""
 
 
 def _split_model(model: str) -> tuple[str, str]:

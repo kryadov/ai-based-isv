@@ -46,15 +46,17 @@ flowchart TB
             KS["kube-prometheus-stack\nGrafana 30082 / Prometheus"]
             LK["Loki + Alloy\ndaemonset: логи подов"]
             OP["OpenProject\nтрекер UI 30083\nauth сломан — см. TODO"]
-            LL["LiteLLM-шлюз\n30084 → хостовая Ollama"]
+            LL["LiteLLM-шлюз\n30084 → z.ai / OpenRouter"]
         end
         subgraph prod["namespace: prod"]
             PODINFO["podinfo demo\nGitOps-sync, debug-логи"]
         end
         AG["agent-воркеры\n(M3+: claim вершин)"]
     end
-    OLL["(Хостовая Ollama\nqwen2.5-coder:7b\ncolima VM 6CPU/24GB)"]
-    LL -->|hostAliases 192.168.5.2| OLL
+    ZAI["(z.ai GLM Coding Plan\nqwen3 → glm-5.3\nqwen-coder → glm-5.3-flash)"]
+    ORT["(OpenRouter API — запасной\nglm-5.3 / deepseek-v4.1-flash)"]
+    LL -->|основной, ключи из OpenBao| ZAI
+    LL -.->|при лимите плана 429| ORT
     GH["GitHub (public)\nканонический репо платформы + CI"] -.-> AR
     TRK(("Трекер\n(задача на входе)")) -.-> API
 ```
@@ -184,7 +186,10 @@ uv run ruff check . && uv run mypy packages apps && uv run pytest   # код п�
 ./infra/tests/m2b_deploy_flow.sh    # GitOps → prod + метрики + логи
 ./infra/tests/m2c_flow.sh           # задачи трекера → poller + LLM-шлюз
 ./infra/tests/m2d_flow.sh           # бутстреппер-CLI end-to-end
-./infra/tests/m3_flow.sh            # control plane на живом Postgres (M3, в работе)
+./infra/tests/m3_flow.sh            # control plane на живом Postgres (M3)
+./infra/tests/m4a_flow.sh           # M4a: вершина-исполнитель, opencode serve в docker → session log + manifest + ветка в Gitea
+./infra/tests/m4b_flow.sh           # M4b: вершина в k3s-поде-песочнице: NetworkPolicy + Secret на прогон + NodePort, Postgres закрыт
+./infra/tests/m4c_flow.sh           # M4c: полный цикл — issue в Gitea → поллер через task-source MCP (дедуп) → run → агент в k3s с MCP (tracker, llm) → ветка → issue закрыт с вердиктом
 ```
 
 Перекрёстные ссылки: полный дизайн §7.2 (конвейер), §7.3 (оркестрация), §7.4 (память),

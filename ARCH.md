@@ -43,15 +43,17 @@ flowchart TB
             KS["kube-prometheus-stack\nGrafana 30082 / Prometheus"]
             LK["Loki + Alloy\ndaemonset: pod logs"]
             OP["OpenProject\ntracker UI 30083\nauth broken — see TODO"]
-            LL["LiteLLM gateway\n30084 → host Ollama"]
+            LL["LiteLLM gateway\n30084 → z.ai / OpenRouter"]
         end
         subgraph prod["namespace: prod"]
             PODINFO["podinfo demo\nGitOps-synced, debug logs"]
         end
         AG["agent workers\n(M3+: claim vertices)"]
     end
-    OLL["(Host Ollama\nqwen2.5-coder:7b\ncolima VM 6CPU/24GB)"]
-    LL -->|hostAliases 192.168.5.2| OLL
+    ZAI["(z.ai GLM Coding Plan\nqwen3 → glm-5.3\nqwen-coder → glm-5.3-flash)"]
+    ORT["(OpenRouter API — fallback\nglm-5.3 / deepseek-v4.1-flash)"]
+    LL -->|primary, keys from OpenBao| ZAI
+    LL -.->|on plan limit 429| ORT
     GH["GitHub (public)\ncanonical repo of this platform + CI"] -.-> AR
     TRK(("Tracker\n(task in)")) -.-> API
 ```
@@ -181,9 +183,10 @@ uv run ruff check . && uv run mypy packages apps && uv run pytest   # platform c
 ./infra/tests/m2b_deploy_flow.sh    # GitOps → prod + metrics + logs
 ./infra/tests/m2c_flow.sh           # tracker issues → poller + LLM gateway
 ./infra/tests/m2d_flow.sh           # bootstrap CLI end-to-end
-./infra/tests/m3_flow.sh            # control plane on live Postgres (M3, in progress)
+./infra/tests/m3_flow.sh            # control plane on live Postgres (M3)
 ./infra/tests/m4a_flow.sh           # M4a executor vertex: opencode serve in docker → session log + manifest + branch in Gitea
 ./infra/tests/m4b_flow.sh           # M4b executor vertex in a k3s sandbox pod: NetworkPolicy + per-run Secret + NodePort, Postgres denied
+./infra/tests/m4c_flow.sh           # M4c full cycle: Gitea issue → poller via task-source MCP (dedup) → run → k3s agent with MCP (tracker, llm) → branch → issue closed with verdict
 ```
 
 Cross-references: full design §7.2 (pipeline), §7.3 (orchestration), §7.4 (memory),

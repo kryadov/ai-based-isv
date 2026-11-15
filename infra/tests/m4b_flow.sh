@@ -45,12 +45,11 @@ WORKSPACE_DIR="$PWD/.agent-runtime-workspace"
 POLL_TIMEOUT_SECONDS=1200   # 20 min: the local 7B model needs minutes per turn
 POLL_INTERVAL_SECONDS=10
 
-# The lab gateway serves two local Ollama models behind LiteLLM. The harness needs
-# a model that emits real OpenAI tool_calls: qwen2.5-coder:7b (alias `qwen-coder`)
-# answers with the raw tool-call JSON as assistant text, so the sandbox never
-# touches a file and the session diff comes back empty (spike lesson 11, re-confirmed
-# live on 2026-11-09 through this gateway). `qwen3` invokes tools reliably and is
-# the model this flow drives.
+# The lab gateway (LiteLLM) routes its aliases to an external API (OpenRouter;
+# infra/litellm/deployment.yaml). The harness needs a model that emits real
+# OpenAI tool_calls (spike lesson 11: a model that answers with tool-call JSON as
+# text leaves the session diff empty); alias `qwen3` is the tool-calling agent
+# model this flow drives.
 MODEL="litellm/qwen3"
 MODEL_ALIAS="${MODEL#litellm/}"
 
@@ -85,7 +84,9 @@ trap cleanup EXIT
 # ---------------------------------------------------------------------------
 echo "M4b flow: preflight — live stand"
 
-kubectl get nodes >/dev/null 2>&1 || fail "k3d cluster swarm-lab is not reachable"
+# shellcheck source=../scripts/cluster-lib.sh
+. infra/scripts/cluster-lib.sh
+kubectl get nodes >/dev/null 2>&1 || fail "stand cluster ($(swarm_cluster)) is not reachable"
 docker info >/dev/null 2>&1 || fail "docker is not reachable on the host"
 
 # The worker writes a full clone of the target repo plus the run evidence under the
@@ -108,11 +109,11 @@ uv run org-bootstrap apply --section agents >/dev/null 2>&1 \
   || fail "section_agents failed to apply (namespace/PVC/NetworkPolicy)"
 kubectl -n agents get pvc agent-scratch >/dev/null 2>&1 \
   || fail "PVC agent-scratch missing in namespace agents"
-docker port k3d-swarm-lab-serverlb 2>/dev/null | grep -q "30100/tcp" \
-  || fail "k3d does not publish the 30100-30110 NodePort range (section_agents should add it)"
-# The derived image must be visible to k3s pods (import is idempotent).
-k3d image import "$DERIVED_IMAGE" -c swarm-lab >/dev/null 2>&1 \
-  || fail "could not import $DERIVED_IMAGE into the k3d cluster"
+cluster_nodeport_published 30100 \
+  || fail "the cluster does not publish the 30100-30110 NodePort range (section_agents should add it)"
+# The derived image must be visible to k3s pods (import is idempotent; no-op on Rancher Desktop).
+cluster_image_import "$DERIVED_IMAGE" >/dev/null 2>&1 \
+  || fail "could not make $DERIVED_IMAGE available to the cluster"
 
 # Gitea admin token (OpenBao secret/gitea/admin, same source as m2a/m2c).
 ROOT_TOKEN_FILE="infra/.vault-root-token"
@@ -480,9 +481,11 @@ PY
 
 # 5e) sandbox teardown: pod, service and secret must be gone after the vertex
 SANDBOX_NAME="agent-$RUN_ID-$VERTEX_ID"
+# Deletion is asynchronous (the pod terminates within its grace period), so
+# wait for each object to disappear rather than racing a terminating pod.
 for kind in pod service secret; do
-  kubectl -n agents get "$kind/$SANDBOX_NAME" >/dev/null 2>&1 \
-    && fail "$kind/$SANDBOX_NAME survived the vertex (teardown leak)"
+  kubectl -n agents wait --for=delete "$kind/$SANDBOX_NAME" --timeout=90s >/dev/null 2>&1 \
+    || fail "$kind/$SANDBOX_NAME survived the vertex (teardown leak)"
 done
 echo "M4b flow: sandbox teardown clean (pod/service/secret removed)"
 

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from bootstrap.cli import app
 from bootstrap.prereq import check_all
 from typer.testing import CliRunner
@@ -15,11 +16,14 @@ def test_version() -> None:
     assert __version__ in result.output
 
 
-def test_check_reports_known_tools() -> None:
+def test_check_reports_known_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SWARM_CLUSTER", raising=False)
     result = runner.invoke(app, ["check"])
     output = result.output
-    for tool in ("docker", "k3d", "helm", "kubectl", "uv", "gh", "ollama", "psql"):
+    for tool in ("docker", "k3d", "helm", "kubectl", "uv", "gh", "psql"):
         assert tool in output
+    # No GPU on the stand: models come from an external API, not host Ollama.
+    assert "ollama" not in output
 
 
 def test_check_all_returns_results() -> None:
@@ -33,3 +37,25 @@ def test_py_typed_marker_present() -> None:
 
     marker = Path(bootstrap.__file__).parent / "py.typed"
     assert marker.exists()
+
+
+def test_required_tools_k3d_flavour_needs_k3d() -> None:
+    from bootstrap.prereq import required_tools
+
+    assert "k3d" in required_tools("k3d")
+
+
+def test_required_tools_rancher_desktop_drops_k3d() -> None:
+    from bootstrap.prereq import required_tools
+
+    tools = required_tools("rancher-desktop")
+    assert "k3d" not in tools
+    for tool in ("docker", "helm", "kubectl", "uv", "gh", "psql"):
+        assert tool in tools
+    assert "ollama" not in tools
+
+
+def test_check_follows_swarm_cluster_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SWARM_CLUSTER", "rancher-desktop")
+    result = runner.invoke(app, ["check"])
+    assert " k3d " not in result.output

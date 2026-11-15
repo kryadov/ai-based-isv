@@ -77,6 +77,8 @@ uv run mypy packages apps
 uv run pytest
 ```
 
+On the Windows stand prefix each with `./infra/scripts/toolbox.sh` (§10).
+
 ## 9. Git discipline — incident lessons (no exceptions)
 
 These rules come from real incidents on this branch (a 24 MB PDF in history, a sqlite artifact in two commits, accumulated conflicts from three consecutive cherry-picks):
@@ -88,3 +90,9 @@ These rules come from real incidents on this branch (a 24 MB PDF in history, a s
 5. Binary work artifacts (test databases, PDFs) never enter git.
 6. Before any git operation — verify `git status` and `git branch --show-current`; branch transitions — via `checkout -b`/`checkout`.
 7. Integrations — via **merge** only; never move work between branches by cherry-pick.
+
+## 10. Stand environment (owner directive, 2026-11-14)
+
+The live stand runs on **Rancher Desktop's built-in Kubernetes** (k3s, moby engine) on the Windows workstation — do NOT create a k3d cluster and do NOT set up a separate WSL distro. Run every bootstrap/flow/gate command through the toolbox container from Git Bash: `./infra/scripts/toolbox.sh <cmd>` (it sets `SWARM_CLUSTER=rancher-desktop`). Details — INSTALL.md "Windows (Rancher Desktop + toolbox)".
+
+**LLM (owner directive, 2026-11-15):** the stand has no GPU — no local inference, no Ollama. LiteLLM routes its aliases (`qwen3` = tool-calling agent model, `qwen-coder` = light model) to the **z.ai GLM Coding Plan** first and falls back to **OpenRouter** when the plan limit is hit (z.ai is then cooled down for 5 min; `infra/litellm/deployment.yaml`). Local secrets live in the repo-root **`.env`** (gitignored; template `.env.example`: `ZAI_API_KEY=`, `OPENROUTER_API_KEY=`); every `litellm` bootstrap run writes the keys set there into OpenBao `secret/litellm/{zai,openrouter}`, which feeds the cluster Secret (`bootstrap.sh llm-key [zai|openrouter]` imports without redeploying). Never commit keys, never print them to logs or chat — check presence, not value. After a Rancher Desktop restart OpenBao comes up sealed: run `./infra/scripts/toolbox.sh bash infra/scripts/bootstrap.sh vault` (idempotent unseal) before any other section.

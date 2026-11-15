@@ -20,6 +20,7 @@ class WorkerSettings(BaseSettings):
     agent: str = "worker"
     poll_interval_seconds: float = 2.0
     lease_ttl_seconds: int = 300
+    session_timeout_seconds: float = 900.0  # per attempt; a stuck harness fails the attempt
     workspace_dir: Path = Path("./.agent-runtime-workspace")
     repo_url: str = ""
     base_branch: str = "main"
@@ -41,6 +42,12 @@ class WorkerSettings(BaseSettings):
     openbao_pod_label: str = "app.kubernetes.io/name=openbao"
     openbao_namespace: str = "platform"
     vault_root_token: str = ""  # explicit override; otherwise read from vault_root_token_path
+    # --- MCP servers registered into the sandbox harness (M4c; empty = omit) ---
+    mcp_task_source_url: str = ""
+    mcp_llm_url: str = ""
+    # --- tracker status loop (M4c): task_ref "owner/repo#N"; empty = disabled ---
+    task_ref: str = ""
+    task_source_url: str = ""  # task-source MCP endpoint reachable from the worker host
 
     @model_validator(mode="after")
     def _required_at_runtime(self) -> "WorkerSettings":

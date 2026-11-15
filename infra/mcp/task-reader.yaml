@@ -1,0 +1,68 @@
+# task-reader MCP server: the READ-ONLY task-source variant for sandbox pods
+# (M4c review I3). Same image, TASK_SOURCE_READ_ONLY=1 — only get_task and
+# list_tasks are registered, so an agent can read its task but never close or
+# comment on an issue. Cluster-only (task-reader.agents.svc:8000/mcp).
+# v0 reuses the admin token from Secret mcp-task-source (a read-scoped Gitea
+# token per project is M5 — TODO.md).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: task-reader
+  namespace: agents
+  labels: &labels
+    app.kubernetes.io/name: task-reader
+    app.kubernetes.io/component: mcp-server
+    app.kubernetes.io/part-of: agent-runtime
+    agent-runtime.io/sandbox-access: "yes"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: task-reader
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: server
+          image: mcp-servers:0.1.0
+          imagePullPolicy: Never
+          command: ["python", "-m", "mcp_servers.task_source"]
+          env:
+            - name: GITEA_BASE_URL
+              value: http://gitea-http.platform.svc.cluster.local:3000
+            - name: GITEA_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-task-source
+                  key: gitea-token
+            - name: TASK_SOURCE_READ_ONLY
+              value: "1"
+            - name: PORT
+              value: "8000"
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 20m, memory: 96Mi}
+            limits: {memory: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: task-reader
+  namespace: agents
+  labels:
+    app.kubernetes.io/name: task-reader
+    app.kubernetes.io/component: mcp-server
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: task-reader
+  ports:
+    - port: 8000
+      targetPort: 8000

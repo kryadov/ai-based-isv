@@ -26,7 +26,7 @@
 
 **Фундамент L0 жив и проверен на одном ноутбуке** (k3d/k3s): OpenBao,
 Postgres+pgvector, Gitea (+act_runner, трекер v0 через Issues), OpenProject,
-Argo CD, Prometheus/Grafana, Loki+Alloy, LiteLLM-шлюз над Ollama — разворачивается
+Argo CD, Prometheus/Grafana, Loki+Alloy, LiteLLM-шлюз (внешние модели: z.ai Coding Plan, запасной OpenRouter) — разворачивается
 с нуля одной идемпотентной командой, четыре end-to-end acceptance-флоу PASS.
 Авторитетный статус и следующие майлстоуны — [STATE.md](STATE.md).
 

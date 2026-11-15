@@ -47,7 +47,7 @@ services:
     namespace: $NS
     image: $litellm_image
     endpoint: http://localhost:30084/v1
-    model_backend: host ollama (qwen2.5-coder:7b)
+    model_backend: OpenRouter API (qwen3 -> z-ai/glm-5.3, qwen-coder -> deepseek/deepseek-v4.1-flash)
 EOF
 echo "env.yaml generated:"
 cat "$ROOT/env.yaml"

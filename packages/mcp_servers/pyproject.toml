@@ -3,7 +3,7 @@ name = "mcp_servers"
 version = "0.1.0"
 description = "MCP tool servers: task-source, git, ci, deploy/observability, memory, llm"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = ["fastmcp>=4.1.8,<5", "httpx>=0.28", "pydantic>=2.9"]
 
 [build-system]
 requires = ["hatchling"]

@@ -4,6 +4,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 NS=platform
+# shellcheck source=cluster-lib.sh
+. "$ROOT/scripts/cluster-lib.sh"
 
 # CLI-хелперы OpenBao через exec в под (под выбирается по лейблу — имя меняется с чартом).
 # Рут-токен: infra/.vault-root-token (gitignored, создаётся section_vault при инициализации).
@@ -246,15 +248,25 @@ section_openproject() {
 }
 
 section_litellm() {
-  # Шлюз моделей. Master key → Vault + secret; конфиг — model_list над хостовой Ollama.
-  # Ollama на хосте: litellm-под резолвит хост через hostAliases (IP lima-хоста определяется динамически).
-  local mk hostip
+  # Model gateway. Master key → OpenBao + Secret. Models come from external
+  # APIs (no GPU on the stand): z.ai GLM Coding Plan first, OpenRouter as the
+  # fallback on plan limits (infra/litellm/deployment.yaml). Provider keys:
+  # .env (owner) → OpenBao secret/litellm/{zai,openrouter} → Secret litellm-provider.
+  local mk zkey okey
   mk="$(vcli kv get -field=master-key secret/litellm/master 2>/dev/null || true)"
   [ -n "$mk" ] || { mk="sk-lab-$(openssl rand -hex 12)"; vcli kv put secret/litellm/master "master-key=$mk" >/dev/null; }
   [ -n "$mk" ] || { echo "litellm: пустой master key — прерываю"; exit 1; }
-  # colima/lima -> host.lima.internal; Docker Desktop / Rancher Desktop (Windows) -> host.docker.internal
-  hostip="$(docker run --rm alpine sh -c 'getent hosts host.lima.internal || getent hosts host.docker.internal' | awk 'NR==1{print $1}')"
-  [ -n "$hostip" ] || { echo "litellm: не удалось определить IP хоста (host.lima.internal / host.docker.internal)"; exit 1; }
+  import_llm_keys_from_dotenv
+  zkey="$(vcli kv get -field=api-key secret/litellm/zai 2>/dev/null || true)"
+  okey="$(vcli kv get -field=api-key secret/litellm/openrouter 2>/dev/null || true)"
+  [ -n "$zkey$okey" ] || { echo "litellm: no provider key — set ZAI_API_KEY and/or OPENROUTER_API_KEY in .env (see .env.example) or run: bootstrap.sh llm-key <zai|openrouter>"; exit 1; }
+  [ -n "$zkey" ] || echo "litellm: WARNING no z.ai key — every request goes to the OpenRouter fallback"
+  [ -n "$okey" ] || echo "litellm: WARNING no OpenRouter key — no fallback when the z.ai plan limit is hit"
+  local -a lits=()
+  [ -n "$zkey" ] && lits+=(--from-literal="zai-api-key=$zkey")
+  [ -n "$okey" ] && lits+=(--from-literal="openrouter-api-key=$okey")
+  kubectl -n "$NS" create secret generic litellm-provider "${lits[@]}" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   # БД для LiteLLM (ключи/teams хранятся там же)
   kubectl apply -f "$ROOT/postgres/litellm-database.yaml"
   kubectl -n "$NS" wait --for=jsonpath='{.status.ready}'=true database/litellm-db --timeout=180s 2>/dev/null || true
@@ -268,10 +280,11 @@ section_litellm() {
     --from-literal="master-key=$mk" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   kubectl apply -f "$ROOT/litellm/deployment.yaml"
-  kubectl -n "$NS" patch deploy litellm --type=strategic \
-    -p "{\"spec\":{\"template\":{\"spec\":{\"hostAliases\":[{\"ip\":\"$hostip\",\"hostnames\":[\"host.lima.internal\"]}]}}}}" >/dev/null
+  # Drop the host-alias pin left by the former host-Ollama setup (no-op if absent).
+  kubectl -n "$NS" patch deploy litellm --type=json \
+    -p '[{"op":"remove","path":"/spec/template/spec/hostAliases"}]' >/dev/null 2>&1 || true
   kubectl -n "$NS" rollout restart deploy/litellm
-  kubectl -n "$NS" wait --for=condition=Available deployment/litellm --timeout=600s
+  kubectl -n "$NS" rollout status deploy/litellm --timeout=600s
   local code i
   code=""
   for i in $(seq 1 12); do
@@ -285,6 +298,65 @@ section_litellm() {
   echo "litellm: ready (api http://localhost:30084/v1)"
 }
 
+# Value of KEY from the repo-root .env (gitignored; template: .env.example).
+# Quotes and a trailing CR are stripped; prints nothing when unset.
+dotenv_get() {
+  local f="$ROOT/../.env"
+  [ -f "$f" ] || return 0
+  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$f" | tail -n1 \
+    | tr -d '\r' | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
+}
+
+# provider → .env variable (secret/litellm/<provider> holds `api-key`).
+llm_key_var() {
+  case "$1" in
+    zai) echo ZAI_API_KEY ;;
+    openrouter) echo OPENROUTER_API_KEY ;;
+    *) echo "llm-key: unknown provider '$1' (zai|openrouter)" >&2; return 2 ;;
+  esac
+}
+
+# .env values win: a key set there is (re)written to OpenBao on every run, so
+# rotating a key = edit .env + `bootstrap.sh litellm`. Values are never printed.
+import_llm_keys_from_dotenv() {
+  local p var
+  for p in zai openrouter; do
+    var="$(llm_key_var "$p")"
+    [ -n "$(dotenv_get "$var")" ] || continue
+    dotenv_get "$var" | store_llm_key "$p"
+    echo "litellm: $var from .env → OpenBao secret/litellm/$p"
+  done
+}
+
+section_llm_key() {
+  # `llm-key` — import every key set in .env; `llm-key <zai|openrouter>` —
+  # that provider's key from .env, else read silently from the terminal (or
+  # stdin when piped): never argv, shell history, git or a transcript.
+  local p="${1:-}" key var
+  if [ -z "$p" ]; then import_llm_keys_from_dotenv; return; fi
+  var="$(llm_key_var "$p")" || exit 2
+  key="$(dotenv_get "$var")"
+  if [ -z "$key" ] && [ -t 0 ]; then
+    read -rsp "$var: " key; echo
+  elif [ -z "$key" ]; then
+    IFS= read -r key || true
+  fi
+  [ -n "$key" ] || { echo "llm-key: empty key — nothing stored"; exit 1; }
+  printf '%s' "$key" | store_llm_key "$p"
+  echo "llm-key: stored at secret/litellm/$p (now: bootstrap.sh litellm)"
+}
+
+# stdin → OpenBao secret/litellm/<provider> (api-key); never via argv.
+store_llm_key() {
+  local POD RTOK
+  POD="$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=openbao -o jsonpath='{.items[0].metadata.name}')"
+  RTOK="$(cat "$ROOT/.vault-root-token" 2>/dev/null || true)"
+  [ -n "$RTOK" ] || { echo "openbao: нет root-токена ($ROOT/.vault-root-token)"; exit 2; }
+  # `api-key=-` makes bao read the value from stdin (exec -i), never from argv.
+  kubectl -n "$NS" exec -i "$POD" -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$RTOK" \
+    bao kv put "secret/litellm/$1" api-key=- >/dev/null
+}
+
 section_agents() {
   # Namespace + scratch PVC + network policy for agent sandbox pods (M4b).
   kubectl apply -f "$ROOT/agents/namespace.yaml"
@@ -293,25 +365,54 @@ section_agents() {
   kubectl apply -f "$ROOT/agents/netpol-allow.yaml"
   # k3d publishes only individually mapped host ports; add the sandbox
   # NodePort range to the load balancer once (live serverlb swap, no cluster
-  # recreation). Guarded: skip when the range is already mapped.
-  if command -v k3d >/dev/null 2>&1 && command -v docker >/dev/null 2>&1; then
-    if ! docker port k3d-swarm-lab-serverlb 2>/dev/null | grep -q "30100/tcp"; then
-      k3d cluster edit swarm-lab --port-add "30100-30110:30100-30110@loadbalancer" \
-        && echo "agents: added k3d NodePort range 30100-30110"
-    else
-      echo "agents: k3d NodePort range 30100-30110 already mapped"
-    fi
-  else
-    echo "agents: k3d/docker not found — skipping NodePort range mapping" >&2
-  fi
+  # recreation). No-op on Rancher Desktop (it forwards every NodePort).
+  cluster_publish_nodeport 30100-30110
   kubectl -n agents get pvc agent-scratch >/dev/null
   echo "agents: namespace, agent-scratch PVC, network policies Ready"
+}
+
+section_mcp() {
+  # MCP servers (M4c): task-source (Gitea Issues, write, host-only), task-reader
+  # (read-only, for sandboxes) + llm (LiteLLM proxy) in `agents`.
+  # The image is built on the host and made visible to the cluster: `agents` is
+  # default-deny, so pods cannot pip-install at boot.
+  local img="mcp-servers:0.1.0" gt mk
+  docker build -q -f "$ROOT/mcp/Dockerfile" -t "$img" "$ROOT/../packages/mcp_servers" >/dev/null
+  cluster_image_import "$img"
+  # Credentials: OpenBao -> per-server k8s Secrets (values never echoed).
+  gt="$(vcli kv get -field=token secret/gitea/admin 2>/dev/null || true)"
+  [ -n "$gt" ] || { echo "mcp: no Gitea token at secret/gitea/admin (OpenBao sealed?)"; exit 1; }
+  mk="$(vcli kv get -field=master-key secret/litellm/master 2>/dev/null || true)"
+  [ -n "$mk" ] || { echo "mcp: no LiteLLM key at secret/litellm/master"; exit 1; }
+  kubectl -n agents create secret generic mcp-task-source --from-literal="gitea-token=$gt"     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  kubectl -n agents create secret generic mcp-llm --from-literal="api-key=$mk"     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  kubectl apply -f "$ROOT/agents/netpol-allow.yaml"
+  kubectl apply -f "$ROOT/agents/netpol-mcp.yaml"
+  kubectl apply -f "$ROOT/mcp/task-source.yaml"
+  kubectl apply -f "$ROOT/mcp/task-reader.yaml"
+  kubectl apply -f "$ROOT/mcp/llm.yaml"
+  # Same tag re-imported: restart so the pods pick up the fresh image.
+  kubectl -n agents rollout restart deploy/task-source deploy/task-reader deploy/llm >/dev/null
+  kubectl -n agents rollout status deploy/task-source --timeout=180s
+  kubectl -n agents rollout status deploy/task-reader --timeout=180s
+  kubectl -n agents rollout status deploy/llm --timeout=180s
+  # Host access for the worker's tracker loop: publish NodePort 30085 once.
+  cluster_publish_nodeport 30085
+  local code i
+  code=""
+  for i in $(seq 1 20); do
+    code="$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:30085/mcp       -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream'       -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' || true)"
+    [ "$code" = "200" ] && break
+    sleep 3
+  done
+  [ "$code" = "200" ] || { echo "mcp: task-source not answering on :30085 ($code)"; exit 1; }
+  echo "mcp: task-source (write, host-only :30085), task-reader + llm (sandbox, *.agents.svc:8000) Ready"
 }
 
 case "${1:-all}" in
   vault)  section_vault ;;
   cnpg)   section_cnpg ;;
-  cluster) bash "$ROOT/scripts/k3d-up.sh" ;;
+  cluster) cluster_up ;;
   gitea)  section_gitea ;;
   runner) section_runner ;;
   argocd) section_argocd ;;
@@ -320,8 +421,10 @@ case "${1:-all}" in
   demo)   section_demo ;;
   openproject) section_openproject ;;
   litellm) section_litellm ;;
+  llm-key) section_llm_key "${2:-}" ;;
   agents) section_agents ;;
-  # `all` brings the k3d cluster up first so `org-bootstrap apply` works on a fresh machine.
-  all)    bash "$ROOT/scripts/k3d-up.sh"; section_vault; section_cnpg; section_gitea; section_runner; section_argocd; section_monitoring; section_loki; section_demo; section_openproject; section_litellm; section_agents ;;
-  *) echo "usage: $0 [cluster|vault|cnpg|gitea|runner|argocd|monitoring|loki|demo|openproject|litellm|agents|all]"; exit 2 ;;
+  mcp)    section_mcp ;;
+  # `all` brings the stand cluster (k3d / Rancher Desktop) up first so `org-bootstrap apply` works on a fresh machine.
+  all)    cluster_up; section_vault; section_cnpg; section_gitea; section_runner; section_argocd; section_monitoring; section_loki; section_demo; section_openproject; section_litellm; section_agents; section_mcp ;;
+  *) echo "usage: $0 [cluster|vault|cnpg|gitea|runner|argocd|monitoring|loki|demo|openproject|litellm|llm-key [zai|openrouter]|agents|mcp|all]"; exit 2 ;;
 esac

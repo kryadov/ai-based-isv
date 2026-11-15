@@ -6,12 +6,29 @@ report (ok/missing + path/version). No side effects.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
 from typing import Final
 
-CHECKS: Final[tuple[str, ...]] = ("docker", "k3d", "helm", "kubectl", "uv", "gh", "ollama", "psql")
+# No host model server: the stand has no GPU, LiteLLM routes to an external API.
+CHECKS: Final[tuple[str, ...]] = ("docker", "k3d", "helm", "kubectl", "uv", "gh", "psql")
+
+
+def required_tools(cluster: str) -> tuple[str, ...]:
+    """Tools the stand needs for cluster flavour `cluster` (SWARM_CLUSTER).
+
+    Rancher Desktop owns its k3s cluster, so k3d is only needed for `k3d`.
+    """
+    if cluster == "rancher-desktop":
+        return tuple(t for t in CHECKS if t != "k3d")
+    return CHECKS
+
+
+def current_cluster() -> str:
+    """Cluster flavour from SWARM_CLUSTER (default `k3d`), as the bash side reads it."""
+    return os.environ.get("SWARM_CLUSTER", "") or "k3d"
 
 
 @dataclass(frozen=True)
@@ -41,8 +58,10 @@ def _version_of(binary: str) -> str | None:
     return first[0] if first else "installed"
 
 
-def check_all(tools: tuple[str, ...] = CHECKS) -> tuple[CheckResult, ...]:
-    """Check all tools; return results in `tools` order."""
+def check_all(tools: tuple[str, ...] | None = None) -> tuple[CheckResult, ...]:
+    """Check all tools (default: the current cluster flavour's); keep `tools` order."""
+    if tools is None:
+        tools = required_tools(current_cluster())
     results: list[CheckResult] = []
     for name in tools:
         version = _version_of(name)

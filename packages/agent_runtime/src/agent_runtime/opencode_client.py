@@ -136,6 +136,19 @@ class OpencodeClient:
         )
         await _raise_for_status(response)
 
+    async def mcp_status(self) -> list[dict[str, Any]]:
+        """Return the harness's MCP servers and their connection status.
+
+        opencode connects configured servers lazily at session start, so call
+        this after a session exists (M4c spike).
+        """
+        response = await self._http.get("/api/mcp")
+        await _raise_for_status(response)
+        data = response.json().get("data")
+        if not isinstance(data, list):
+            raise OpencodeError("Malformed MCP status response")
+        return [item for item in data if isinstance(item, dict)]
+
     async def get_session(self, session_id: str) -> dict[str, Any]:
         """Fetch the session status object (including token counts)."""
         response = await self._http.get(f"/api/session/{session_id}")
