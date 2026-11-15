@@ -20,7 +20,10 @@ REPO=ts-greeter
 GITEA=http://localhost:30080
 NODE_IMAGE=node:22.12.0-alpine
 DONE_CMD="docker run --rm -v \"\$PWD\":/w -w /w $NODE_IMAGE sh -c 'npm ci --no-audit --no-fund && npm test'"
-TMP="$(mktemp -d)"
+# Under the repo path: the docker daemon sees the same paths as the toolbox only
+# for the mounted repo, and step 3 mounts this dir into a node container.
+mkdir -p .agent-runtime-workspace
+TMP="$(mktemp -d -p "$PWD/.agent-runtime-workspace" m9.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 
 TOKEN="$(kubectl -n platform exec "$(kubectl -n platform get pod -l app.kubernetes.io/name=openbao -o name)" -- \
