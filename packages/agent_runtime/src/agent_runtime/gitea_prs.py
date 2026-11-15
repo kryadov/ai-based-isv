@@ -8,6 +8,7 @@ redacted (upstream bodies may echo request data back).
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 import httpx
@@ -17,6 +18,7 @@ CIState = Literal["success", "failure", "error", "pending"]
 ReviewEvent = Literal["COMMENT", "REQUEST_CHANGES", "APPROVED"]
 _CI_STATES: frozenset[str] = frozenset({"success", "failure", "error", "pending"})
 _REDACTED = "***"
+_JOB_RE = re.compile(r"/actions/runs/\d+/jobs/(\d+)")
 
 
 class GiteaPRError(RuntimeError):
@@ -79,6 +81,30 @@ class GiteaPRClient:
             # Unknown states never count as green.
             return "error"
         return state  # type: ignore[return-value]  # narrowed by _CI_STATES
+
+    async def job_log_tail(
+        self, owner: str, repo: str, number: int, *, tail_lines: int = 200
+    ) -> str:
+        """Log tail of the first failed CI job of the PR head; ``""`` if unavailable."""
+        pr = await self.get_pr(owner, repo, number)
+        data = await self._request("GET", f"/repos/{owner}/{repo}/commits/{pr.head_sha}/status")
+        statuses = data.get("statuses") if isinstance(data, dict) else None
+        for status in statuses or []:
+            if not isinstance(status, dict):
+                continue
+            if str(status.get("status") or status.get("state")) not in {"failure", "error"}:
+                continue
+            match = _JOB_RE.search(str(status.get("target_url", "")))
+            if match is None:
+                continue
+            try:
+                text = await self._request_text(
+                    "GET", f"/repos/{owner}/{repo}/actions/jobs/{match.group(1)}/logs"
+                )
+            except GiteaPRError:
+                return ""
+            return "\n".join(text.splitlines()[-max(1, tail_lines) :])
+        return ""
 
     async def changed_files(self, owner: str, repo: str, number: int) -> list[str]:
         data = await self._request(

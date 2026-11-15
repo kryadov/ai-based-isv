@@ -872,3 +872,221 @@ async def test_exhausted_vertex_is_never_reported_in_progress_again(tmp_path: Pa
         await asyncio.wait_for(task, timeout=3.0)
     assert executor.calls == []
     assert [s for s, _ in tracker.statuses()] == ["blocked"]
+
+
+# --- M5: the gate corridor after push (Task 8) --------------------------------
+
+_GREET_DIFF = (
+    "diff --git a/greeting.py b/greeting.py\n"
+    "new file mode 100644\n"
+    "index 0000000..d8649da\n"
+    "--- /dev/null\n"
+    "+++ b/greeting.py\n"
+    "@@ -0,0 +1 @@\n"
+    "+print('hello')\n"
+)
+_FIX_DIFF = (
+    "diff --git a/greeting.py b/greeting.py\n"
+    "--- a/greeting.py\n"
+    "+++ b/greeting.py\n"
+    "@@ -1 +1 @@\n"
+    "-print('hello')\n"
+    "+print('hello, world')\n"
+)
+
+
+async def _run_gated(
+    tmp_path: Path,
+    *,
+    runner: Any,
+    executor: FakeExecutor | None = None,
+    vertex: dict[str, Any] | None = None,
+    gates_enabled: bool = True,
+    tracker: FakeTracker | None = None,
+) -> tuple[FakeControlPlane, Path]:
+    from agent_runtime.tracker import TrackerClient
+
+    bare = _init_bare_repo(tmp_path)
+    plane = FakeControlPlane(vertices=[vertex or _greet_vertex()])
+    update: dict[str, Any] = {"gates_enabled": gates_enabled}
+    if tracker is not None:
+        update |= {"task_ref": "o/r#7", "task_source_url": "http://tracker.test/mcp"}
+    settings = _settings(tmp_path, str(bare)).model_copy(update=update)
+    stop = asyncio.Event()
+    async with (
+        httpx.AsyncClient(
+            transport=httpx.MockTransport(plane.handler), base_url="http://test"
+        ) as http,
+        httpx.AsyncClient(
+            transport=httpx.MockTransport((tracker or FakeTracker()).handler)
+        ) as tracker_http,
+    ):
+        task = asyncio.create_task(
+            worker_loop(
+                settings,
+                executor or FakeExecutor(diff=_GREET_DIFF, diff_files=["greeting.py"]),
+                http=http,
+                stop=stop,
+                tracker=TrackerClient(tracker_http, "http://tracker.test/mcp") if tracker else None,
+                gate_runner=runner,
+            )
+        )
+        done = asyncio.ensure_future(plane.complete_called.wait())
+        failed = asyncio.ensure_future(plane.fail_called.wait())
+        await asyncio.wait({done, failed}, timeout=3.0, return_when=asyncio.FIRST_COMPLETED)
+        done.cancel()
+        failed.cancel()
+        await asyncio.sleep(0.1)
+        stop.set()
+        await asyncio.wait_for(task, timeout=3.0)
+    return plane, bare
+
+
+def _outcome(status: str, reason: str = "") -> Any:
+    from agent_runtime.gates import GateOutcome
+
+    return GateOutcome(status, "http://g/o/r/pulls/3", reason=reason)  # type: ignore[arg-type]
+
+
+async def test_gates_disabled_never_calls_the_gate_runner(tmp_path: Path) -> None:
+    calls: list[Any] = []
+
+    async def runner(ctx: Any, stop: asyncio.Event) -> Any:
+        calls.append(ctx)
+        return _outcome("merged")
+
+    plane, _ = await _run_gated(tmp_path, runner=runner, gates_enabled=False)
+    assert calls == []
+    assert len(plane.complete_calls) == 1
+
+
+async def test_gates_merged_completes_vertex_with_pr_url(tmp_path: Path) -> None:
+    seen: list[Any] = []
+
+    async def runner(ctx: Any, stop: asyncio.Event) -> Any:
+        seen.append(ctx)
+        return _outcome("merged")
+
+    plane, _ = await _run_gated(tmp_path, runner=runner)
+    assert len(plane.complete_calls) == 1
+    assert plane.complete_calls[0][1]["result"]["pr_url"] == "http://g/o/r/pulls/3"
+    ctx = seen[0]
+    assert ctx.branch == "agent/vertex-1"
+    assert "greet" in ctx.title and "verdict" in ctx.body
+
+
+async def test_gates_blocked_fails_vertex_with_reason(tmp_path: Path) -> None:
+    async def runner(ctx: Any, stop: asyncio.Event) -> Any:
+        return _outcome("blocked", "ci_timeout")
+
+    plane, _ = await _run_gated(tmp_path, runner=runner)
+    assert plane.complete_calls == []
+    assert plane.fail_calls[0][1]["reason"] == "gate:ci_timeout"
+
+
+async def test_fix_rounds_exhausted_files_escalation(tmp_path: Path) -> None:
+    async def runner(ctx: Any, stop: asyncio.Event) -> Any:
+        return _outcome("blocked", "fix_rounds_exhausted")
+
+    plane, _ = await _run_gated(tmp_path, runner=runner)
+    hitl = [b for m, p, b in plane.requests if m == "POST" and p == "/hitl"]
+    assert hitl and hitl[0]["kind"] == "escalation"
+    assert hitl[0]["context"]["pr_url"] == "http://g/o/r/pulls/3"
+
+
+async def test_gate_fix_port_runs_executor_on_pr_branch_and_pushes(tmp_path: Path) -> None:
+    from agent_runtime.gates import FixRequest
+    from agent_runtime.reviewer import Finding
+
+    executor = FakeExecutor(diff=_GREET_DIFF, diff_files=["greeting.py"])
+    fixes: list[Any] = []
+
+    async def runner(ctx: Any, stop: asyncio.Event) -> Any:
+        executor.diff = _FIX_DIFF
+        finding = Finding(path="greeting.py", line=1, severity="blocking", body="say world")
+        fixes.append(
+            await ctx.fix(
+                FixRequest(round=1, ci_state="failure", ci_log_tail="E assert", blocking=[finding])
+            )
+        )
+        return _outcome("merged")
+
+    _, bare = await _run_gated(tmp_path, runner=runner, executor=executor)
+    assert fixes[0].pushed is True, fixes[0].reason
+    assert fixes[0].replies == {"greeting.py:1": "addressed in fix round 1"}
+    fix_request = executor.calls[1]
+    assert fix_request.base_branch == "agent/vertex-1"
+    assert "say world" in fix_request.prompt and "E assert" in fix_request.prompt
+    tip = subprocess.run(
+        ["git", "--git-dir", str(bare), "show", "agent/vertex-1:greeting.py"],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=_GIT_ENV,
+    ).stdout
+    assert "hello, world" in tip
+
+
+async def test_gate_notify_posts_platform_comment(tmp_path: Path) -> None:
+    tracker = FakeTracker()
+
+    async def runner(ctx: Any, stop: asyncio.Event) -> Any:
+        await ctx.notify("PR opened: http://g/o/r/pulls/3")
+        return _outcome("merged")
+
+    await _run_gated(tmp_path, runner=runner, tracker=tracker)
+    comments = [a["body"] for n, a in tracker.calls if n == "add_task_comment"]
+    assert "[platform] PR opened: http://g/o/r/pulls/3" in comments
+
+
+async def test_implementer_diff_touching_protected_paths_rejected(tmp_path: Path) -> None:
+    diff = (
+        "diff --git a/.gitea/workflows/ci.yml b/.gitea/workflows/ci.yml\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        "+++ b/.gitea/workflows/ci.yml\n"
+        "@@ -0,0 +1 @@\n"
+        "+name: pwned\n"
+    )
+    vertex = _greet_vertex() | {"paths_allow": ["*"]}
+
+    async def runner(ctx: Any, stop: asyncio.Event) -> Any:
+        return _outcome("merged")
+
+    plane, _ = await _run_gated(
+        tmp_path,
+        runner=runner,
+        vertex=vertex,
+        executor=FakeExecutor(diff=diff, diff_files=[".gitea/workflows/ci.yml"]),
+    )
+    assert plane.complete_calls == []
+    assert "paths_violation" in plane.fail_calls[0][1]["reason"]
+
+
+def test_build_fix_prompt_contains_findings_and_log() -> None:
+    from agent_runtime.gates import FixRequest
+    from agent_runtime.reviewer import Finding
+    from agent_runtime.worker_gates import build_fix_prompt
+
+    req = FixRequest(
+        round=2,
+        ci_state="failure",
+        ci_log_tail="\n".join(f"log {i}" for i in range(500)),
+        blocking=[Finding(path="a.py", line=4, severity="blocking", body="null check")],
+    )
+    prompt = build_fix_prompt(_greet_vertex(), req)
+    assert "Fix round 2" in prompt and "a.py:4 — null check" in prompt
+    assert "log 499" in prompt and "log 299" not in prompt
+    assert ".gitea/" in prompt
+
+
+def test_repo_coords() -> None:
+    from agent_runtime.worker_gates import repo_coords
+
+    assert repo_coords("http://localhost:30080/swarm-lab/target-scratch.git") == (
+        "http://localhost:30080",
+        "swarm-lab",
+        "target-scratch",
+    )
+    with pytest.raises(ValueError):
+        repo_coords("/tmp/origin.git")

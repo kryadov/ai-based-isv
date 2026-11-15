@@ -19,6 +19,7 @@ class FakeGitea:
         self.statuses: dict[str, dict[str, Any]] = {}
         self.requests: list[httpx.Request] = []
         self.fail_with: int | None = None
+        self.job_logs: dict[int, str] = {}
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -42,6 +43,13 @@ class FakeGitea:
         if path.startswith("/commits/") and path.endswith("/status"):
             sha = path.split("/")[2]
             return httpx.Response(200, json=self.statuses.get(sha, {"state": "", "statuses": []}))
+        if path == "/pulls/3" and request.method == "GET":
+            return httpx.Response(200, json=next(p for p in self.prs if p["number"] == 3))
+        if path.startswith("/actions/jobs/") and path.endswith("/logs"):
+            job = int(path.split("/")[3])
+            if job in self.job_logs:
+                return httpx.Response(200, text=self.job_logs[job])
+            return httpx.Response(404)
         if path == "/pulls/3/merge" and request.method == "POST":
             return httpx.Response(200)
         return httpx.Response(404, text="not found")
@@ -110,3 +118,52 @@ async def test_errors_never_leak_token(client: GiteaPRClient, gitea: FakeGitea) 
             event="COMMENT",
         )
     assert TOKEN not in str(excinfo.value)
+
+
+async def test_job_log_tail_follows_the_failed_status(
+    client: GiteaPRClient, gitea: FakeGitea
+) -> None:
+    gitea.prs.append(
+        {
+            "number": 3,
+            "html_url": "u",
+            "state": "open",
+            "merged": False,
+            "head": {"ref": "b", "sha": "abc"},
+        }
+    )
+    gitea.statuses["abc"] = {
+        "state": "failure",
+        "statuses": [
+            {
+                "context": "ci / security (pull_request)",
+                "status": "success",
+                "target_url": f"{BASE}/o/r/actions/runs/9/jobs/40",
+            },
+            {
+                "context": "ci / checks (pull_request)",
+                "status": "failure",
+                "target_url": f"{BASE}/o/r/actions/runs/9/jobs/41",
+            },
+        ],
+    }
+    gitea.job_logs[41] = "\n".join(f"line {i}" for i in range(300))
+    tail = await client.job_log_tail("o", "r", 3, tail_lines=5)
+    assert tail.splitlines() == [f"line {i}" for i in range(295, 300)]
+
+
+async def test_job_log_tail_unavailable_is_empty(client: GiteaPRClient, gitea: FakeGitea) -> None:
+    gitea.prs.append(
+        {
+            "number": 3,
+            "html_url": "u",
+            "state": "open",
+            "merged": False,
+            "head": {"ref": "b", "sha": "abc"},
+        }
+    )
+    gitea.statuses["abc"] = {
+        "state": "failure",
+        "statuses": [{"context": "x", "status": "failure"}],
+    }
+    assert await client.job_log_tail("o", "r", 3) == ""
