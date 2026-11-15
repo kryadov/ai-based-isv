@@ -8,16 +8,22 @@ from bootstrap.profiles import REQUIRED_CONTEXTS
 
 
 class Recorder(GiteaClient):
-    def __init__(self, responses: dict[tuple[str, str], int] | None = None) -> None:
+    def __init__(
+        self,
+        responses: dict[tuple[str, str], int] | None = None,
+        bodies: dict[tuple[str, str], dict[str, object]] | None = None,
+    ) -> None:
         super().__init__(base_url="http://g", token="t", owner="o")
         self.calls: list[tuple[str, str, dict[str, object] | None]] = []
         self.responses = responses or {}
+        self.bodies = bodies or {}
 
     def _request(
         self, method: str, path: str, payload: dict[str, object] | None = None
     ) -> tuple[int, dict[str, object]]:
         self.calls.append((method, path, payload))
-        return self.responses.get((method, path), 404 if method == "GET" else 201), {}
+        code = self.responses.get((method, path), 404 if method == "GET" else 201)
+        return code, self.bodies.get((method, path), {})
 
 
 def _paths(rec: Recorder, method: str) -> list[str]:
@@ -77,9 +83,77 @@ def test_onboard_seeds_the_check_profile(monkeypatch: pytest.MonkeyPatch, tmp_pa
     monkeypatch.setattr(
         GiteaClient,
         "apply_check_profile",
-        lambda self, repo, *, stack, git_url: seen.append((repo, stack, git_url)),
+        lambda self, repo, *, stack, git_url, push_whitelist=(): seen.append(
+            (repo, stack, git_url)
+        ),
     )
     monkeypatch.setattr(cli, "register_or_update", lambda record: None)
     result = CliRunner().invoke(cli.app, ["onboard", "--project", "acme"])
     assert result.exit_code == 0, result.output
     assert seen == [("acme", "python", cli.PLATFORM_GIT_URL)]
+
+
+def _b64(text: str) -> str:
+    import base64
+
+    return base64.b64encode(text.encode()).decode()
+
+
+def test_identical_files_are_not_rewritten() -> None:
+    from bootstrap.profiles import profile_files
+
+    files = profile_files("platform")
+    bodies: dict[tuple[str, str], dict[str, object]] = {
+        ("GET", f"/repos/o/demo/contents/{p}"): {"sha": "s", "content": _b64(c)}
+        for p, c in files.items()
+    }
+    responses = {key: 200 for key in bodies}
+    rec = Recorder(responses, bodies)
+    rec.apply_check_profile("demo", stack="platform", git_url="http://x")
+    # Re-onboarding the platform repo creates no commits on main.
+    assert not [p for m, p, _ in rec.calls if m in ("PUT", "POST") and "/contents/" in p]
+
+
+def test_put_file_raises_on_http_error() -> None:
+    rec = Recorder({("POST", "/repos/o/demo/contents/a.txt"): 403})
+    with pytest.raises(RuntimeError, match="a.txt"):
+        rec.put_file("demo", "a.txt", "x")
+
+
+def test_push_whitelist_in_protection() -> None:
+    rec = Recorder()
+    rec.apply_check_profile(
+        "demo", stack="python", git_url="http://x", push_whitelist=["swarm-admin"]
+    )
+    payload = next(p for m, path, p in rec.calls if path.endswith("/branch_protections"))
+    assert payload is not None
+    assert payload["enable_push"] is True
+    assert payload["enable_push_whitelist"] is True
+    assert payload["push_whitelist_usernames"] == ["swarm-admin"]
+
+
+def test_default_protection_has_no_push() -> None:
+    rec = Recorder()
+    rec.apply_check_profile("demo", stack="python", git_url="http://x")
+    payload = next(p for m, path, p in rec.calls if path.endswith("/branch_protections"))
+    assert payload is not None and "enable_push" not in payload
+
+
+def test_onboard_passes_push_whitelist(monkeypatch: pytest.MonkeyPatch) -> None:
+    from typer.testing import CliRunner
+
+    from bootstrap import cli
+
+    seen: list[tuple[str, ...]] = []
+    monkeypatch.setattr(cli, "_gitea_token", lambda: "t")
+    monkeypatch.setattr(GiteaClient, "ensure_repo", lambda self, repo: "exists")
+    monkeypatch.setattr(
+        GiteaClient,
+        "apply_check_profile",
+        lambda self, repo, *, stack, git_url, push_whitelist=(): seen.append(tuple(push_whitelist)),
+    )
+    monkeypatch.setattr(cli, "register_or_update", lambda record: None)
+    args = ["onboard", "--project", "p", "--stack", "platform", "--push-whitelist", "swarm-admin"]
+    result = CliRunner().invoke(cli.app, args)
+    assert result.exit_code == 0, result.output
+    assert seen == [("swarm-admin",)]

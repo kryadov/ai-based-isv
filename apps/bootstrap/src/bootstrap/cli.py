@@ -168,6 +168,9 @@ def onboard(
     owner: str = typer.Option("swarm-admin", help="владелец проекта"),
     reason: str = typer.Option("new project", help="зачем создается"),
     stack: str = typer.Option("python", help="check profile (CI corridor) for the repo"),
+    push_whitelist: list[str] = typer.Option(  # noqa: B008 - typer option factory
+        [], "--push-whitelist", help="users allowed to push main directly (platform repo sync)"
+    ),
 ) -> None:
     """Заведение нового проекта (спека §13.1): Gitea repo + запись в реестр."""
     if kind not in {"product", "service", "tool", "assistant"}:
@@ -177,7 +180,9 @@ def onboard(
     client = GiteaClient(base_url="http://localhost:30080", token=token, owner=owner)
     status = client.ensure_repo(project)
     # The gate corridor (M5): CI check profile + merge policy + protected main.
-    client.apply_check_profile(project, stack=stack, git_url=PLATFORM_GIT_URL)
+    client.apply_check_profile(
+        project, stack=stack, git_url=PLATFORM_GIT_URL, push_whitelist=push_whitelist
+    )
     register_or_update(ProjectRecord(name=project, kind=kind, owner=owner, reason=reason))
     typer.secho(
         f"Project {project}: repo {status}, registered in infra/projects.yaml",
