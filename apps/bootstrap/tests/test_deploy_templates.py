@@ -57,8 +57,10 @@ def test_analysis_thresholds() -> None:
         for metric in tpl["spec"]["metrics"]:
             assert metric["interval"] == "30s"
             assert metric["count"] == 4
-            assert metric["failureLimit"] == 1
             assert metric["provider"]["prometheus"]["address"] == PROM
+            if metric["name"] == "canary-traffic":
+                continue
+            assert metric["failureLimit"] == 1
             assert metric["successCondition"] == "result[0] == 1"
     assert names == {"canary-vs-stable", "post-rollout"}
 
@@ -66,6 +68,8 @@ def test_analysis_thresholds() -> None:
 def test_analysis_queries_have_empty_vector_floor() -> None:
     for tpl in _docs("analysis.yaml"):
         for metric in tpl["spec"]["metrics"]:
+            if metric["name"] == "canary-traffic":
+                continue
             query = metric["provider"]["prometheus"]["query"]
             assert "or vector(0)" in query, metric["name"]
             assert ("0.05" in query) or ("0.3" in query), metric["name"]
@@ -75,6 +79,8 @@ def test_analysis_queries_have_empty_vector_floor() -> None:
 def test_canary_queries_select_by_pod_hash() -> None:
     tpl = next(t for t in _docs("analysis.yaml") if t["metadata"]["name"] == "canary-vs-stable")
     for metric in tpl["spec"]["metrics"]:
+        if metric["name"] == "canary-traffic":
+            continue
         query = metric["provider"]["prometheus"]["query"]
         assert "{{args.canary-hash}}" in query and "{{args.stable-hash}}" in query
 
@@ -97,3 +103,18 @@ def test_kustomization_lists_all_and_image() -> None:
         "k6.yaml",
     }
     assert kust["images"] == [{"name": "isv-product", "newName": "isv-product", "newTag": "seed"}]
+
+
+def test_canary_without_traffic_fails_analysis() -> None:
+    # Live lesson (M6): with keep-alive load the canary got no API traffic and
+    # the floors passed vacuously. The canary must have served real requests.
+    tpl = next(t for t in _docs("analysis.yaml") if t["metadata"]["name"] == "canary-vs-stable")
+    traffic = next(m for m in tpl["spec"]["metrics"] if m["name"] == "canary-traffic")
+    assert traffic["successCondition"] == "result[0] > 0"
+    assert traffic["failureLimit"] == 2  # the first sample may precede the first scrape
+    assert "{{args.canary-hash}}" in traffic["provider"]["prometheus"]["query"]
+
+
+def test_k6_spreads_load_over_new_pods() -> None:
+    script = next(iter(_one("k6.yaml", "ConfigMap")["data"].values()))
+    assert "noConnectionReuse: true" in script

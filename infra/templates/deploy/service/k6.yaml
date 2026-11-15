@@ -8,6 +8,10 @@ data:
   load.js: |
     import http from "k6/http";
     export const options = {
+      // A new connection per request: keep-alive connections stay pinned to the
+      // old pods, and a canary would get no traffic (live lesson, M6).
+      noConnectionReuse: true,
+      noVUConnectionReuse: true,
       scenarios: {
         steady: {
           executor: "constant-arrival-rate",

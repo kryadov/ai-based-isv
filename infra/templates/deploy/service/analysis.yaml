@@ -11,6 +11,18 @@ spec:
     - name: canary-hash
     - name: stable-hash
   metrics:
+    # The canary must actually serve API traffic; otherwise the comparisons
+    # below would pass vacuously on empty vectors (live lesson, M6).
+    - name: canary-traffic
+      interval: 30s
+      count: 4
+      failureLimit: 2
+      successCondition: result[0] > 0
+      provider:
+        prometheus:
+          address: http://kube-prometheus-stack-prometheus.platform:9090
+          query: |
+            sum(rate(http_requests_total{namespace="prod",service="isv-product",route=~"/api/.*",rollouts_pod_template_hash="{{args.canary-hash}}"}[1m])) or vector(0)
     - name: error-ratio
       interval: 30s
       count: 4
