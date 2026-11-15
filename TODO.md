@@ -17,7 +17,7 @@
 - [ ] Docs language sync: README/INSTALL/TODO are EN-base ✓ with `.ru.md` mirrors; the design docs (spec, milestone plans) are still Russian — translate them to EN with `.ru.md` mirrors as backlog.
 - [ ] OpenProject password/basic-auth login broken (v17-slim): rails `check_password?` = true, but web login 422 and API basic 401. Investigate (session store/memcached? Enterprise flags?) or add an OIDC plugin; until then the v0 tracker is Gitea Issues (TaskSource poller → M4 MCP task-source).
 - [x] ~~Vault dev-mode → постоянный backend~~ ✅ 2026-11-08: **OpenBao** (opensource-форк Vault, лицензия без BSL) на raft-хранении в PVC; бутстреппер auto-init/unseal (ключи в `infra/.vault-unseal-keys.json`, gitignored). Апгрейд-путь: raft из 3 узлов / KMS auto-unseal — при выходе за ноутбук.
-- [ ] **Post-rollout metric regression monitoring** (mandatory, M6): after every rollout — automatic comparison of key metrics (error rate, latency p95/p99, saturation) against the pre-rollout baseline; degradation threshold → alert + automatic rollback (Argo Rollouts AnalysisTemplates + k6 synthetic traffic); no silent degradation: a rollout is not considered successful without a positive metrics-analysis verdict.
+- [x] **Post-rollout metric regression monitoring** (mandatory, M6): after every rollout — automatic comparison of key metrics (error rate, latency p95/p99, saturation) against the pre-rollout baseline; degradation threshold → alert + automatic rollback (Argo Rollouts AnalysisTemplates + k6 synthetic traffic); no silent degradation: a rollout is not considered successful without a positive metrics-analysis verdict. **Done in M6 (v0.7.0):** canary-vs-stable + post-rollout analysis, automatic rollback, postmortem draft.
 - [ ] agent_api GUI panel (currently CLI/API) — after M3 stabilizes. Includes the 📁 Projects tab + onboarding wizard (see spec §13).
 - [ ] Vault: migrate from dev-mode to raft/file backend — when real secrets appear (M3).
 - [ ] Taint tracking for untrusted content — post-v0 (trigger: content sources beyond the tracker).
@@ -59,3 +59,12 @@
 - [ ] Task text reaches the agent as the 120-char vertex `name` + the issue via the task-reader MCP: give agent_api a free-text task body field.
 - [ ] HITL approve UX for the platform repo: `org-bootstrap hitl approve <id>` (shared with the M5 item).
 - [ ] Automate task intake for the platform repo (STATE/TODO → tracker issues) — today a human files them.
+
+## M6 follow-ups (2026-11-16)
+
+- [ ] Deploy verdict lists every AnalysisRun of the pod-template hash (including runs of an earlier aborted attempt): filter by rollout revision.
+- [ ] No image registry: the deployer builds on the host engine shared with k3s (Rancher) or imports into k3d; a remote cluster needs a registry push (Gitea packages).
+- [ ] The deployer holds the worker lease during the rollout (~5 min): move rollout watching to the webhook gate controller (M8).
+- [ ] Postmortem drafts stay in the evidence: write them back to episodic project memory (M7).
+- [ ] Operator changes to `deploy/**` are manual Gitea PRs: add `org-bootstrap deploy-config` (or a HITL-gated agent role).
+- [ ] Canary analysis thresholds are hard-coded in the template: per-service SLO file (spec §7.2.6).
