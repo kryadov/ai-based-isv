@@ -88,6 +88,10 @@ Python 3.12 подхватится автоматически (`.python-version`
 - Подтвердить: `curl -X POST $API/hitl/<id>/decision -H 'Content-Type: application/json' -d '{"action":"approve","decided_by":"<you>"}'`. Отклонить — `"reject"`, PR при этом закрывается.
 - `org-bootstrap onboard --project <name> [--stack python]` раскладывает check-профиль CI и политику мержа, выставляет `PLATFORM_GIT_URL` и защищает `main`.
 
+### Самообеспечение (спека §13.7, уровень 2)
+
+Один раз завести этот репо в лабораторный Gitea (Git Bash на хосте; сначала `bootstrap.sh agent-user`): `bash infra/scripts/platform-sync.sh init` — создаёт `swarm-lab/ai-based-isv`, наполняет `main` из GitHub, применяет check-профиль **platform** и защищает `main` (push разрешён только `swarm-admin`). Далее на каждую задачу: `platform-sync.sh pull` → `./infra/scripts/toolbox.sh bash infra/tests/selfdev_flow.sh` (одобрить выведенный HITL-запрос, прочитав PR) → `platform-sync.sh promote` (открывает PR на GitHub) → мерж после GitHub CI → `platform-sync.sh pull`. Подробности — AGENTS.ru.md §12.
+
 ## 6. Troubleshooting
 
 - **Порты 30080/30022/30081/30082 заняты** — освободить или поправить маппинги в `infra/k3d/config.yaml` и values Gitea/ArgoCD.

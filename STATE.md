@@ -3,11 +3,11 @@
 > Read this file FIRST. Then `ARCH.md` (how it works, diagrams), `AGENTS.md` (rules), `TODO.md` (backlog).
 > This file is updated at the end of EVERY increment. If your findings contradict it — verify, then update it.
 
-**Current (2026-11-15): M5 is CLOSED — release [v0.5.0](https://github.com/kryadov/ai-based-isv/releases/tag/v0.5.0)** (PR #26, merge `b581b01`). An agent's change now ships as a merged PR, after CI (python check profile plus gitleaks and semgrep), a cross-family bot review, bounded fix rounds and the HITL merge gate.
-- Design: `docs/superpowers/specs/2026-11-15-m5-gates-review-design.md`.
-- Plan: `docs/superpowers/plans/2026-11-15-m5-gates-review.md`.
-- **In progress: spec §13.7 level 2** (owner chose it before M6, 2026-11-15) on branch `feat/selfdev-level2`. Design `docs/superpowers/specs/2026-11-15-selfdev-level2-design.md`, plan `docs/superpowers/plans/2026-11-15-selfdev-level2.md`. Done (Tasks 1–6): bot reviews always posted as COMMENT (bot is PR author); agents use the NON-admin Gitea user `swarm-agent` (`bootstrap.sh agent-user`, OpenBao `secret/gitea/agent`, no admin fallback); platform check profile (+ repo-root `.gitea/`, `.platform/`; the repo passes its own semgrep/gitleaks); idempotent fail-loud profile seeding + main push whitelist; per-repo platform detection (`platform_repos`); `infra/scripts/platform-sync.sh init|pull|promote`. Next: Task 7 — live dogfood task through the Gitea corridor, promotion to GitHub, release v0.6.0. M6 (canary) follows.
-- Open follow-ups: TODO.md "M5 follow-ups" and "M4c follow-ups".
+**Current (2026-11-15): spec §13.7 LEVEL 2 is ACHIEVED — the platform develops itself through its own corridor; release v0.6.0.** First self-made change: tracker issue `swarm-lab/ai-based-isv#2` → run 20 / vertex 20 → agent `swarm-agent` in a k3s sandbox → Gitea PR #3 → platform CI (`ci / checks`, `ci / security`) green → bot review clean → HITL approved (operator under the owner pre-authorization, after reading the diff) → merged (1069 s) → `platform-sync.sh promote` → GitHub PR #29 → GitHub CI green → merged `df0bed5` → `platform-sync.sh pull`. The change: `org-bootstrap check` no longer reports `[ok]` for a tool whose `--version` exits non-zero (+ tests) — TODO item closed by an agent.
+- Level 2 design `docs/superpowers/specs/2026-11-15-selfdev-level2-design.md`, plan `docs/superpowers/plans/2026-11-15-selfdev-level2.md`; groundwork PR #28: agents use the NON-admin Gitea user `swarm-agent` (`bootstrap.sh agent-user`, OpenBao `secret/gitea/agent`, no admin fallback); bot reviews posted as COMMENT; platform check profile (repo-root `.gitea/`, `.platform/`, auto-merge off; the repo passes its own semgrep/gitleaks); `platform_repos` (always HITL); `infra/scripts/platform-sync.sh init|pull|promote`; `infra/tests/selfdev_flow.sh`. Workflow: AGENTS.md §11.
+- Also 2026-11-15: **OpenRouter only on the z.ai plan limit** (PR #27, `infra/litellm/zai_limit_gate.py`). M5 (gates corridor) closed earlier the same day: [v0.5.0](https://github.com/kryadov/ai-based-isv/releases/tag/v0.5.0).
+- **Next: M6 (canary rollout + post-rollout metric analysis)** — and from now on, suitable platform tasks go through the self-development corridor (AGENTS.md §11); lessons: run 19 failed on the flow's `done_when` (bare `uv run` without `--all-packages`), not on the agent.
+- Open follow-ups: TODO.md "Self-development level 2 follow-ups", "M5 follow-ups", "M4c follow-ups".
 - M4 closed earlier the same day: release [v0.4.0](https://github.com/kryadov/ai-based-isv/releases/tag/v0.4.0).
 Work moved to a no-GPU Windows workstation:
 - **Stand:** Rancher Desktop's built-in k3s plus the toolbox container (AGENTS.md §10; INSTALL.md "Windows (Rancher Desktop + toolbox)").
@@ -16,7 +16,7 @@ Work moved to a no-GPU Windows workstation:
 - **Acceptance on the new stand:** see "Verified acceptance flows".
 - **Previous move:** `docs/superpowers/HANDOFF-2026-11-12.md`.
 
-Last updated: 2026-11-15 (z.ai-only routing until the plan limit; next §13.7 level 2, then M6)
+Last updated: 2026-11-15 (§13.7 level 2 achieved — v0.6.0; next M6)
 
 ## What this project is
 
@@ -133,8 +133,8 @@ The worker drives the tracker status loop (In Progress → Done/Blocked with evi
 
 ## Releases / conventions
 
-- Tags/releases per milestone, changelog from merged PRs: `./infra/scripts/release.sh v0.x.y` (spec §13.8). Published: **v0.1.0** (M1), **v0.2.0** (M2 close), **v0.3.0** (M3 close), **v0.4.0** (M4 close, 2026-11-15), **v0.5.0** (M5 close, 2026-11-15). Next: v0.6.0 at M6 close.
-- Recursive self-development (platform builds itself): spec §13.7 — level 1 (meta-automations on our own logs) after M3, level 2 (this repo as a target project via tracker+pipeline) after M5/M6. Model/subscription routing research for that path: `docs/superpowers/research/2026-11-14-model-subscriptions-routing.md`.
+- Tags/releases per milestone, changelog from merged PRs: `./infra/scripts/release.sh v0.x.y` (spec §13.8). Published: **v0.1.0** (M1), **v0.2.0** (M2 close), **v0.3.0** (M3 close), **v0.4.0** (M4 close, 2026-11-15), **v0.5.0** (M5 close, 2026-11-15), **v0.6.0** (§13.7 level 2: first self-made change, 2026-11-15). Next: v0.7.0 at M6 close.
+- Recursive self-development (platform builds itself): spec §13.7 — level 1 (meta-automations on our own logs) after M3, level 2 (this repo as a target project via tracker+pipeline) — ACHIEVED 2026-11-15 (v0.6.0, AGENTS.md §11). Model/subscription routing research for that path: `docs/superpowers/research/2026-11-14-model-subscriptions-routing.md`.
 - External projects deliver tested release artifacts / Docker images to the org registry (spec §13.5); offboarding in v0 via `org-bootstrap offboard` (spec §13.6).
 - Onboarding per project kind (§13.1): per-kind repo templates + tutorials planned (TODO), wizard v0 in CLI, Projects UI in M10 — confirmed by owner.
 

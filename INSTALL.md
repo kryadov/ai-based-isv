@@ -94,6 +94,9 @@ On the Windows stand, prefix each with `./infra/scripts/toolbox.sh bash`, and ru
 - Approve: `curl -X POST $API/hitl/<id>/decision -H 'Content-Type: application/json' -d '{"action":"approve","decided_by":"<you>"}'`. To reject, use `"reject"`, which closes the PR.
 - `org-bootstrap onboard --project <name> [--stack python]` seeds the CI check profile and merge policy, sets `PLATFORM_GIT_URL` and protects `main`.
 
+### Self-development (spec §13.7 level 2)
+
+Onboard this repo into the lab Gitea once (host Git Bash; needs `bootstrap.sh agent-user` first): `bash infra/scripts/platform-sync.sh init` — creates `swarm-lab/ai-based-isv`, seeds `main` from GitHub, applies the **platform** check profile and protects `main` (push whitelist: `swarm-admin` only). Then per task: `platform-sync.sh pull` → `./infra/scripts/toolbox.sh bash infra/tests/selfdev_flow.sh` (approve the printed HITL request after reading the PR) → `platform-sync.sh promote` (opens the GitHub PR) → merge after GitHub CI → `platform-sync.sh pull`. Details: AGENTS.md §11.
 ## 6. Troubleshooting
 
 - **Ports 30080/30022/30081/30082 busy** — free them or adjust mappings in `infra/k3d/config.yaml` and Gitea/ArgoCD values.
