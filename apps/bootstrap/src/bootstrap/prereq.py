@@ -54,6 +54,10 @@ def _version_of(binary: str) -> str | None:
         )
     except (OSError, subprocess.SubprocessError):
         return None
+    if out.returncode != 0:
+        # Present but unusable (broken/stub binary): treat as missing, never
+        # trust its output as a version.
+        return None
     first = (out.stdout or out.stderr).strip().splitlines()
     return first[0] if first else "installed"
 
