@@ -69,3 +69,22 @@ def test_semgrep_runs_with_a_compatible_pydantic() -> None:
     # semgrep 1.140.0 crashes on import with pydantic>=2.12 (m5 live run 2).
     raw = profile_files("python")[".gitea/workflows/ci.yml"]
     assert '--with "pydantic<2.12"' in raw
+
+
+def test_actions_are_pinned_to_commit_shas() -> None:
+    # semgrep github-actions-mutable-action-tag (the corridor caught it live).
+    import re
+
+    for job in _workflow()["jobs"].values():
+        for step in job["steps"]:
+            if "uses" in step:
+                assert re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", step["uses"]), step["uses"]
+
+
+def test_no_curl_pipe_to_shell_and_uv_checksum_verified() -> None:
+    # semgrep gha-curl-pipe-shell: download, verify the checksum, then extract.
+    import re
+
+    text = _run_text()
+    assert not re.search(r"(curl|wget)[^\n]*\|\s*(sh|bash)\b", text)
+    assert "sha256sum -c" in text
