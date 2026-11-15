@@ -162,12 +162,17 @@ async def run_gates(
                 owner,
                 repo,
                 number,
-                body=result.summary,
+                body=f"**Changes requested**\n\n{result.summary}"
+                if result.blocking
+                else result.summary,
                 comments=[
                     ReviewComment(path=f.path, line=f.line, body=f"[{f.severity}] {f.body}")
                     for f in result.findings
                 ],
-                event="REQUEST_CHANGES" if result.blocking else "COMMENT",
+                # Always COMMENT: the bot also authors the PR, and Gitea refuses
+                # REQUEST_CHANGES on one's own PR. Blocking is decided here, not
+                # by Gitea's review state.
+                event="COMMENT",
             )
             await say(f"review: {result.summary} ({len(result.blocking)} blocking)")
 
