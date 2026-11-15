@@ -38,7 +38,7 @@ for _ in $(seq 1 80); do
   STATE="$(curl -fsS -H "$AUTH" "$API/commits/$SEED/status" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
-print(d["state"] if len(d["statuses"]) >= 2 else "pending")')"
+print(d["state"] if len(d.get("statuses") or []) >= 2 else "pending")')"
   case "$STATE" in success|failure|error) break ;; esac
   sleep 15
 done
