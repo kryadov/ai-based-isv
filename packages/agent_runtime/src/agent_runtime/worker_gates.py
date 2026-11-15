@@ -151,6 +151,12 @@ async def fix_attempt(
     return FixResult(pushed=True, replies=replies)
 
 
+def reviewer_base(settings: WorkerSettings) -> str:
+    """LiteLLM base URL (without ``/v1``) the host-side reviewer calls."""
+    url = settings.reviewer_base_url or settings.litellm_base_url
+    return url.rstrip("/").removesuffix("/v1")
+
+
 def default_gate_runner(settings: WorkerSettings, token: str) -> GateRunner:
     """The production runner: Gitea + LiteLLM reviewer + agent_api HITL."""
     base_url, owner, repo = repo_coords(settings.repo_url)
@@ -171,7 +177,7 @@ def default_gate_runner(settings: WorkerSettings, token: str) -> GateRunner:
             async def review(goal: str, diff: str) -> Review:
                 return await review_diff(
                     http,
-                    base_url=settings.litellm_base_url.removesuffix("/v1"),
+                    base_url=reviewer_base(settings),
                     api_key=settings.litellm_api_key,
                     model=settings.reviewer_model,
                     goal=goal,

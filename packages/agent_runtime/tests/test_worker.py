@@ -1080,6 +1080,19 @@ def test_build_fix_prompt_contains_findings_and_log() -> None:
     assert ".gitea/" in prompt
 
 
+def test_reviewer_base_prefers_the_host_reachable_url(tmp_path: Path) -> None:
+    # The worker runs on the host: the sandbox's in-cluster LiteLLM URL is not
+    # reachable from there, so the reviewer has its own base URL.
+    from agent_runtime.worker_gates import reviewer_base
+
+    settings = _settings(tmp_path, "http://g/o/r.git").model_copy(
+        update={"litellm_base_url": "http://litellm.platform.svc.cluster.local:4000/v1"}
+    )
+    assert reviewer_base(settings) == "http://litellm.platform.svc.cluster.local:4000"
+    override = settings.model_copy(update={"reviewer_base_url": "http://localhost:30084/v1"})
+    assert reviewer_base(override) == "http://localhost:30084"
+
+
 def test_repo_coords() -> None:
     from agent_runtime.worker_gates import repo_coords
 

@@ -54,6 +54,9 @@ class WorkerSettings(BaseSettings):
     ci_timeout_s: float = 1200.0
     hitl_poll_s: float = 15.0
     reviewer_model: str = "reviewer"  # LiteLLM alias (cross-family vs the implementer)
+    # Host-reachable LiteLLM for the reviewer (the worker runs on the host; the
+    # sandbox's litellm_base_url may be in-cluster). Empty = litellm_base_url.
+    reviewer_base_url: str = ""
     gitea_url: str = ""  # Gitea API base when it differs from the repo_url host
     platform_repo: bool = False  # this platform's own repo: never auto-merge (§13.7)
 
