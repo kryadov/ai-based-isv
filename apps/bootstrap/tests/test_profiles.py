@@ -53,3 +53,13 @@ def test_merge_policy_defaults_to_docs_only() -> None:
 def test_unknown_stack_raises() -> None:
     with pytest.raises(ValueError):
         profile_files("cobol")
+
+
+def test_checkout_uses_the_platform_git_url() -> None:
+    # Gitea's ROOT_URL (localhost NodePort) is unreachable from a job container;
+    # the stand sets the org variable PLATFORM_GIT_URL to the in-cluster URL.
+    for job in _workflow()["jobs"].values():
+        checkout = next(
+            s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/checkout")
+        )
+        assert "vars.PLATFORM_GIT_URL" in checkout["with"]["github-server-url"]

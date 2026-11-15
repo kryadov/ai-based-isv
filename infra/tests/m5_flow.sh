@@ -325,6 +325,13 @@ curl -fsS -o /dev/null -X POST -H "$AUTH_HEADER" -H "Content-Type: application/j
   -d "{\"branch_name\":\"main\",\"enable_status_check\":true,\"status_check_contexts\":$CONTEXTS_JSON}" \
   || fail "could not protect main with the CI status checks"
 echo "M5 flow: main protected — required checks $CONTEXTS_JSON"
+# CI job containers reach Gitea in-cluster, not via the host NodePort ROOT_URL.
+PLATFORM_GIT_URL="http://gitea-http.platform.svc.cluster.local:3000"
+curl -fsS -o /dev/null -X POST -H "$AUTH_HEADER" -H "Content-Type: application/json" \
+  "$GITEA/api/v1/orgs/$ORG/actions/variables/PLATFORM_GIT_URL" -d "{\"value\":\"$PLATFORM_GIT_URL\"}" \
+  || curl -fsS -o /dev/null -X PUT -H "$AUTH_HEADER" -H "Content-Type: application/json" \
+  "$GITEA/api/v1/orgs/$ORG/actions/variables/PLATFORM_GIT_URL" -d "{\"value\":\"$PLATFORM_GIT_URL\"}" \
+  || fail "could not set the org variable PLATFORM_GIT_URL"
 
 # ---------------------------------------------------------------------------
 # 3) Control plane: run + vertex, on the live Postgres

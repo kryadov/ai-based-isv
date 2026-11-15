@@ -129,7 +129,9 @@ section_runner() {
     --from-literal="token=$rtok" \
     --dry-run=client -o yaml | kubectl apply -f -
   kubectl apply -f "$ROOT/gitea/act-runner.yaml"
-  kubectl -n "$NS" wait --for=condition=Available deployment/act-runner --timeout=300s
+  # Labels/instance URL live in a ConfigMap: restart so a changed config is picked up.
+  kubectl -n "$NS" rollout restart deploy/act-runner >/dev/null
+  kubectl -n "$NS" rollout status deploy/act-runner --timeout=300s
   n="$(curl -sf -H "Authorization: token $atok" http://localhost:30080/api/v1/admin/actions/runners | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')"
   [ "$n" -ge 1 ] || { echo "runner: not registered"; exit 1; }
   echo "runner: registered ($n)"

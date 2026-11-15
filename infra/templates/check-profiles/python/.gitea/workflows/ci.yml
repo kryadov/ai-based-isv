@@ -20,6 +20,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The stand sets PLATFORM_GIT_URL (in-cluster Gitea): ROOT_URL is a host
+          # NodePort that a job container cannot reach.
+          github-server-url: ${{ vars.PLATFORM_GIT_URL || github.server_url }}
       - name: install uv
         run: curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: sync
@@ -37,6 +41,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The stand sets PLATFORM_GIT_URL (in-cluster Gitea): ROOT_URL is a host
+          # NodePort that a job container cannot reach.
+          github-server-url: ${{ vars.PLATFORM_GIT_URL || github.server_url }}
       - name: install uv
         run: curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: gitleaks (secret scan)
