@@ -6,18 +6,18 @@
 **Current (2026-11-15): M5 is CLOSED — release [v0.5.0](https://github.com/kryadov/ai-based-isv/releases/tag/v0.5.0)** (PR #26, merge `b581b01`). An agent's change now ships as a merged PR, after CI (python check profile plus gitleaks and semgrep), a cross-family bot review, bounded fix rounds and the HITL merge gate.
 - Design: `docs/superpowers/specs/2026-11-15-m5-gates-review-design.md`.
 - Plan: `docs/superpowers/plans/2026-11-15-m5-gates-review.md`.
-- **Next: M6 (canary rollout + post-rollout metric analysis).** After it comes spec §13.7 level 2: seed THIS repo into Gitea via `org-bootstrap onboard`, so the platform develops itself through its own corridor (HITL on every merge).
+- **Next: spec §13.7 level 2 (owner chose it before M6, 2026-11-15)** — seed THIS repo into Gitea via `org-bootstrap onboard`, so the platform develops itself through its own corridor (HITL on every merge; first tasks = TODO follow-ups). M6 (canary rollout + post-rollout metrics) follows or runs in parallel.
 - Start with `brainstorming` → `writing-plans`.
 - Open follow-ups: TODO.md "M5 follow-ups" and "M4c follow-ups".
 - M4 closed earlier the same day: release [v0.4.0](https://github.com/kryadov/ai-based-isv/releases/tag/v0.4.0).
 Work moved to a no-GPU Windows workstation:
 - **Stand:** Rancher Desktop's built-in k3s plus the toolbox container (AGENTS.md §10; INSTALL.md "Windows (Rancher Desktop + toolbox)").
-- **LLM:** external. The z.ai GLM Coding Plan comes first, OpenRouter is the fallback on plan limits, and keys go `.env` → OpenBao (AGENTS.md §10).
+- **LLM:** external. Everything goes to the z.ai GLM Coding Plan; OpenRouter ONLY once the z.ai plan limit is exhausted, and keys go `.env` → OpenBao (AGENTS.md §10).
 - **Final-review findings:** I1–I3 fixed. For I2+I3, sandboxes read tasks through the read-only `task-reader`, and NetworkPolicy keeps the write-capable `task-source` host-only.
 - **Acceptance on the new stand:** see "Verified acceptance flows".
 - **Previous move:** `docs/superpowers/HANDOFF-2026-11-12.md`.
 
-Last updated: 2026-11-15 (M5 merged, v0.5.0 released — M5 closed; next M6)
+Last updated: 2026-11-15 (z.ai-only routing until the plan limit; next §13.7 level 2, then M6)
 
 ## What this project is
 
@@ -36,7 +36,8 @@ The full L0 infrastructure stands up via `org-bootstrap apply` / `infra/scripts/
 - **OpenProject** (deployed healthy; password/basic-auth login broken in v17-slim — see TODO)
 - **LiteLLM gateway** (:30084; master key in OpenBao `secret/litellm/master`; CNPG db `litellm`):
   - aliases: `qwen3` (agent model, real tool_calls) → z.ai `glm-5.3`; `qwen-coder` (light, thinking disabled) → z.ai `glm-5.3-flash`;
-  - on failure or plan limit, router fallbacks go to `qwen3-openrouter` (`z-ai/glm-5.3`) and `qwen-coder-openrouter` (`deepseek/deepseek-v4.1-flash`), and z.ai is cooled down for 300 s;
+  - `reviewer` → z.ai `glm-5.3` (fallback `reviewer-fallback` = OpenRouter `moonshotai/kimi-k3.1-pro`);
+  - **OpenRouter ONLY on the z.ai plan limit** (owner directive, 2026-11-15): the proxy callback `infra/litellm/zai_limit_gate.py` sets `disable_fallbacks` on every request until z.ai answers HTTP 429; then z.ai is parked for 300 s and the fallbacks `qwen3-openrouter` (`z-ai/glm-5.3`), `qwen-coder-openrouter` (`deepseek/deepseek-v4.1-flash`), `reviewer-fallback` carry the traffic. Other z.ai errors are retried on z.ai (`retry_policy`) and never rerouted. Verified live: requests served by `api.z.ai` with 0 attempted fallbacks, a z.ai 400 stays a 400, `/active/callbacks` lists `ZaiLimitGate`;
   - keys: `.env` → OpenBao `secret/litellm/{zai,openrouter}` → Secret `litellm-provider`;
   - the section waits with `rollout status`, not `wait Available`.
 - **Agent sandboxes** (namespace `agents`: PVC, default-deny + allow NetworkPolicies) and **MCP servers** (FastMCP, streamable HTTP):
@@ -116,7 +117,7 @@ The worker drives the tracker status loop (In Progress → Done/Blocked with evi
   - it fails closed on CI timeout, reviewer failure, protected paths (`.gitea/**`, `.platform/**`), HITL reject, or an unconfirmed merge;
   - `fix_rounds_exhausted` files a HITL `escalation`;
   - wiring is in `worker_gates.py`, which stops the implementer sandbox before fix rounds.
-- **Reviewer** (`reviewer.py`, prompt `prompts/reviewer-v1.md`): LiteLLM alias `reviewer` → `moonshotai/kimi-k3.1-pro`, cross-family vs the GLM implementer, with fallback `reviewer-fallback`. Output is structured JSON; invalid output gets one retry and is then treated as unavailable, which blocks the merge.
+- **Reviewer** (`reviewer.py`, prompt `prompts/reviewer-v1.md`): LiteLLM alias `reviewer` → z.ai `glm-5.3` (OpenRouter only on the z.ai limit); the limit-time fallback `reviewer-fallback` is cross-family `moonshotai/kimi-k3.1-pro`. Output is structured JSON; invalid output gets one retry and is then treated as unavailable, which blocks the merge.
 - **MCP `ci` server** (read-only `get_pr_checks` / `get_job_log`). The `agent_api` gets `GET /hitl/{id}`, plus `HITLClient` and `GiteaPRClient` (PRs, statuses, reviews, job-log tail, merge).
 - **Tracker stage comments:** `[platform] PR opened / CI / review / fix round / merged`. Done carries the PR link.
 

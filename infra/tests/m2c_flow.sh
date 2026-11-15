@@ -51,10 +51,12 @@ H2="$(cksum < /tmp/m2c-last-payload.json)"
 
 # 5) LiteLLM: completion через шлюз
 MK="$(kubectl -n "$NS" exec "$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=openbao -o jsonpath='{.items[0].metadata.name}')" -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$(cat infra/.vault-root-token)" bao kv get -field=master-key secret/litellm/master)"
+# max_tokens 256: z.ai glm-5.3-flash sometimes reasons despite thinking=disabled
+# (observed 4/6 identical calls, 2026-11-15); 16 tokens then come back empty.
 LIT="$(mktemp)"
 curl -sf -m 120 -X POST http://localhost:30084/v1/chat/completions \
   -H "Authorization: Bearer $MK" -H 'Content-Type: application/json' \
-  -d '{"model":"qwen-coder","messages":[{"role":"user","content":"Reply with exactly: GATEWAY-OK"}],"max_tokens":16}' > "$LIT" 2>/dev/null \
+  -d '{"model":"qwen-coder","messages":[{"role":"user","content":"Reply with exactly: GATEWAY-OK"}],"max_tokens":256}' > "$LIT" 2>/dev/null \
   || fail "litellm недоступен"
 python3 - "$LIT" <<'EOF' || fail "пустой completion от модели"
 import json, sys
