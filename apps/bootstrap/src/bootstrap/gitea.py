@@ -6,6 +6,7 @@ import base64
 import json
 import urllib.error
 import urllib.request
+from collections.abc import Sequence
 
 REPO_NAME = "isv-product"
 README_CONTENT = """# isv-product
@@ -74,12 +75,19 @@ class GiteaClient:
         return "created" if self.create_repo(repo) else "exists"
 
     def put_file(self, repo: str, path: str, content: str) -> None:
-        """Create/update a file in the repo (contents API, base64)."""
+        """Create/update a file in the repo (contents API, base64).
+
+        Identical content is left alone (no empty commit), and any HTTP error
+        raises — a silently missing gate file would leave the corridor open.
+        """
         b64 = base64.b64encode(content.encode()).decode()
         sha = ""
         code, body = self._request("GET", f"/repos/{self.owner}/{repo}/contents/{path}")
         if code == 200:
             sha = str(body.get("sha", ""))
+            current = str(body.get("content", "")).replace("\n", "")
+            if current and base64.b64decode(current) == content.encode():
+                return
         payload: dict[str, object] = {
             "message": f"bootstrap: seed {path}",
             "content": b64,
@@ -87,9 +95,13 @@ class GiteaClient:
         if sha:
             payload["sha"] = sha
         method = "PUT" if sha else "POST"
-        self._request(method, f"/repos/{self.owner}/{repo}/contents/{path}", payload)
+        code, _ = self._request(method, f"/repos/{self.owner}/{repo}/contents/{path}", payload)
+        if code >= 400:
+            raise RuntimeError(f"gitea: could not write {path} in {repo} ({code})")
 
-    def apply_check_profile(self, repo: str, *, stack: str, git_url: str) -> None:
+    def apply_check_profile(
+        self, repo: str, *, stack: str, git_url: str, push_whitelist: Sequence[str] = ()
+    ) -> None:
         """Seed the stack's CI corridor + merge policy and protect ``main`` (M5).
 
         Order matters: files first, then the PLATFORM_GIT_URL variable (in-cluster
@@ -111,6 +123,14 @@ class GiteaClient:
             "enable_status_check": True,
             "status_check_contexts": list(REQUIRED_CONTEXTS),
         }
+        if push_whitelist:
+            # Only these users may push main directly (the platform repo's
+            # GitHub → Gitea fast-forward); everyone else goes through PRs.
+            protection.update(
+                enable_push=True,
+                enable_push_whitelist=True,
+                push_whitelist_usernames=list(push_whitelist),
+            )
         base = f"/repos/{self.owner}/{repo}/branch_protections"
         code, _ = self._request("POST", base, protection)
         if code in (409, 422):  # already protected: update it

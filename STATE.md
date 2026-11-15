@@ -6,8 +6,7 @@
 **Current (2026-11-15): M5 is CLOSED — release [v0.5.0](https://github.com/kryadov/ai-based-isv/releases/tag/v0.5.0)** (PR #26, merge `b581b01`). An agent's change now ships as a merged PR, after CI (python check profile plus gitleaks and semgrep), a cross-family bot review, bounded fix rounds and the HITL merge gate.
 - Design: `docs/superpowers/specs/2026-11-15-m5-gates-review-design.md`.
 - Plan: `docs/superpowers/plans/2026-11-15-m5-gates-review.md`.
-- **Next: spec §13.7 level 2 (owner chose it before M6, 2026-11-15)** — seed THIS repo into Gitea via `org-bootstrap onboard`, so the platform develops itself through its own corridor (HITL on every merge; first tasks = TODO follow-ups). M6 (canary rollout + post-rollout metrics) follows or runs in parallel.
-- Start with `brainstorming` → `writing-plans`.
+- **In progress: spec §13.7 level 2** (owner chose it before M6, 2026-11-15) on branch `feat/selfdev-level2`. Design `docs/superpowers/specs/2026-11-15-selfdev-level2-design.md`, plan `docs/superpowers/plans/2026-11-15-selfdev-level2.md`. Done (Tasks 1–6): bot reviews always posted as COMMENT (bot is PR author); agents use the NON-admin Gitea user `swarm-agent` (`bootstrap.sh agent-user`, OpenBao `secret/gitea/agent`, no admin fallback); platform check profile (+ repo-root `.gitea/`, `.platform/`; the repo passes its own semgrep/gitleaks); idempotent fail-loud profile seeding + main push whitelist; per-repo platform detection (`platform_repos`); `infra/scripts/platform-sync.sh init|pull|promote`. Next: Task 7 — live dogfood task through the Gitea corridor, promotion to GitHub, release v0.6.0. M6 (canary) follows.
 - Open follow-ups: TODO.md "M5 follow-ups" and "M4c follow-ups".
 - M4 closed earlier the same day: release [v0.4.0](https://github.com/kryadov/ai-based-isv/releases/tag/v0.4.0).
 Work moved to a no-GPU Windows workstation:

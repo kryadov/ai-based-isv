@@ -58,7 +58,9 @@ class WorkerSettings(BaseSettings):
     # sandbox's litellm_base_url may be in-cluster). Empty = litellm_base_url.
     reviewer_base_url: str = ""
     gitea_url: str = ""  # Gitea API base when it differs from the repo_url host
-    platform_repo: bool = False  # this platform's own repo: never auto-merge (§13.7)
+    platform_repo: bool = False  # force "platform repo" semantics: never auto-merge (§13.7)
+    # Repos ("owner/repo") that ARE this platform (self-dev level 2): always HITL.
+    platform_repos: list[str] = ["swarm-lab/ai-based-isv"]
 
     @model_validator(mode="after")
     def _required_at_runtime(self) -> "WorkerSettings":

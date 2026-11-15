@@ -52,7 +52,7 @@ Python 3.12 подхватится автоматически (`.python-version`
 
 Если git-репозиторий приватный, Argo CD подключается через `gh auth token` (нужен `gh auth login` или `GITHUB_TOKEN`); для публичного репо клонирует анонимно. Основной путь — CLI (`org-bootstrap`); альтернатива — `./infra/bootstrap.sh`.
 
-Факты стенда фиксируются в `infra/env.yaml` (генерируется автоматически — артефакт VET, руками не редактировать). Секции можно гонять по отдельности: `./infra/scripts/bootstrap.sh [vault|cnpg|gitea|runner|argocd|monitoring|loki|demo]`.
+Факты стенда фиксируются в `infra/env.yaml` (генерируется автоматически — артефакт VET, руками не редактировать). Секции можно гонять по отдельности: `./infra/scripts/bootstrap.sh [vault|cnpg|gitea|agent-user|runner|argocd|monitoring|loki|demo|openproject|litellm]`. **`agent-user`** (в `all` идёт сразу после `gitea`) создаёт НЕ-админского пользователя Gitea `swarm-agent` (команда `agents`, запись во все репо `swarm-lab`; токен в OpenBao `secret/gitea/agent`). Воркеры и песочницы работают от его имени, а не с админ-токеном, поэтому агент не может поменять защиту ветки или собственные гейты. На уже поднятом стенде запустите секцию один раз перед агентными флоу (m4a+).
 
 ## 4. Доступ к сервисам
 

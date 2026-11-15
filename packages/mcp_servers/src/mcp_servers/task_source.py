@@ -158,6 +158,8 @@ def main() -> None:
         token=os.environ["GITEA_TOKEN"],
         read_only=read_only_from_env(os.environ),
     )
+    # FastMCP (not Flask) bound in a pod; the NetworkPolicy is the boundary.
+    # nosemgrep: python.flask.security.audit.app-run-param-config.avoid_app_run_with_bad_host
     app.run(
         transport="http",
         host="0.0.0.0",  # noqa: S104 - in-cluster service, fronted by NetworkPolicy

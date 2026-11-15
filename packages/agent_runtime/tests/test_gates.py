@@ -193,7 +193,9 @@ async def test_blocking_review_triggers_fix_and_replies_posted() -> None:
     outcome, _, fixes, _ = await _run(pr, reviews=[blocking_review(), clean_review()])
     assert outcome.status == "merged"
     assert [f.body for f in fixes[0].blocking] == ["off by one"]
-    assert pr.reviews[0][0] == "REQUEST_CHANGES"
+    # The bot authors the PR, and Gitea refuses REQUEST_CHANGES on one's own PR.
+    assert pr.reviews[0][0] == "COMMENT"
+    assert pr.reviews[0][1].startswith("**Changes requested**")
     assert any("fixed" in c for c in pr.comments)
 
 

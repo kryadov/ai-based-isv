@@ -1,0 +1,8 @@
+# Merge policy of the platform repo itself (self-dev level 2, spec §13.7):
+# HITL on every merge into main — auto-merge is off for every path. The
+# worker also forces this for the platform repo (platform_repos), so the file
+# and the code agree. Agents cannot change this file (.platform/** is a
+# protected gate path).
+auto_merge:
+  enabled: false
+  paths: []

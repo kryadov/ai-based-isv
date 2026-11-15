@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 import yaml
-from bootstrap.profiles import CI_CONTEXT, profile_files
+from bootstrap.profiles import CI_CONTEXT, PROFILES_DIR, profile_files
 
 
 def _workflow() -> dict[str, Any]:
@@ -88,3 +88,46 @@ def test_no_curl_pipe_to_shell_and_uv_checksum_verified() -> None:
     text = _run_text()
     assert not re.search(r"(curl|wget)[^\n]*\|\s*(sh|bash)\b", text)
     assert "sha256sum -c" in text
+
+
+# --- platform profile: this repo through its own corridor (self-dev level 2) ---
+
+REPO_ROOT = PROFILES_DIR.parents[2]
+
+
+def _platform_steps(job: str) -> str:
+    data: dict[str, Any] = yaml.safe_load(profile_files("platform")[".gitea/workflows/ci.yml"])
+    return "\n".join(str(s.get("run", "")) for s in data["jobs"][job]["steps"])
+
+
+def test_platform_profile_runs_workspace_gates() -> None:
+    text = _platform_steps("checks")
+    for gate in (
+        "uv sync --all-packages --locked",
+        "ruff check .",
+        "ruff format --check .",
+        "mypy packages apps",
+        "pytest",
+    ):
+        assert gate in text, gate
+
+
+def test_platform_profile_reports_required_contexts() -> None:
+    data: dict[str, Any] = yaml.safe_load(profile_files("platform")[".gitea/workflows/ci.yml"])
+    assert data["name"] == "ci"
+    assert set(data["jobs"]) == {"checks", "security"}
+    security = _platform_steps("security")
+    assert "gitleaks" in security and "semgrep" in security
+
+
+def test_repo_root_carries_platform_profile() -> None:
+    # One source of truth: Gitea main never diverges from GitHub on onboarding.
+    for path, content in profile_files("platform").items():
+        assert (REPO_ROOT / path).read_text(encoding="utf-8") == content, path
+
+
+def test_platform_policy_never_auto_merges() -> None:
+    from agent_runtime.merge_policy import load_policy
+
+    text = profile_files("platform")[".platform/merge-policy.yaml"]
+    assert load_policy(text, platform_repo=False).auto_merge_enabled is False

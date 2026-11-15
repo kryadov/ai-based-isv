@@ -50,4 +50,4 @@
 - [ ] HITL approve UX: a CLI command (`org-bootstrap hitl approve <id>`) until the M10 panel.
 - [ ] Gate wait ignores lease loss: stop the corridor when the heartbeat reports the lease lost (today a worker could still merge).
 - [ ] A HITL-rejected merge should be terminal for the vertex (today agent_api requeues it and the agent retries, asking the human again).
-- [ ] `bootstrap.gitea.GiteaClient.put_file` ignores HTTP errors (pre-existing): raise, so seeding onto a protected `main` is visible.
+- [x] `bootstrap.gitea.GiteaClient.put_file` ignores HTTP errors (pre-existing): raise, so seeding onto a protected `main` is visible. Done in self-dev level 2 (also skips identical content).
