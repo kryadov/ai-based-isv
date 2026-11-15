@@ -46,15 +46,15 @@ flowchart TB
             KS["kube-prometheus-stack\nGrafana 30082 / Prometheus"]
             LK["Loki + Alloy\ndaemonset: логи подов"]
             OP["OpenProject\nтрекер UI 30083\nauth сломан — см. TODO"]
-            LL["LiteLLM-шлюз\n30084 → хостовая Ollama"]
+            LL["LiteLLM-шлюз\n30084 → OpenRouter"]
         end
         subgraph prod["namespace: prod"]
             PODINFO["podinfo demo\nGitOps-sync, debug-логи"]
         end
         AG["agent-воркеры\n(M3+: claim вершин)"]
     end
-    OLL["(Хостовая Ollama\nqwen2.5-coder:7b\ncolima VM 6CPU/24GB)"]
-    LL -->|hostAliases 192.168.5.2| OLL
+    ORT["(OpenRouter API\nqwen3 → glm-5.3\nqwen-coder → deepseek-v4.1-flash)"]
+    LL -->|HTTPS, ключ из OpenBao| ORT
     GH["GitHub (public)\nканонический репо платформы + CI"] -.-> AR
     TRK(("Трекер\n(задача на входе)")) -.-> API
 ```

@@ -43,15 +43,15 @@ flowchart TB
             KS["kube-prometheus-stack\nGrafana 30082 / Prometheus"]
             LK["Loki + Alloy\ndaemonset: pod logs"]
             OP["OpenProject\ntracker UI 30083\nauth broken — see TODO"]
-            LL["LiteLLM gateway\n30084 → host Ollama"]
+            LL["LiteLLM gateway\n30084 → OpenRouter"]
         end
         subgraph prod["namespace: prod"]
             PODINFO["podinfo demo\nGitOps-synced, debug logs"]
         end
         AG["agent workers\n(M3+: claim vertices)"]
     end
-    OLL["(Host Ollama\nqwen2.5-coder:7b\ncolima VM 6CPU/24GB)"]
-    LL -->|hostAliases 192.168.5.2| OLL
+    ORT["(OpenRouter API\nqwen3 → glm-5.3\nqwen-coder → deepseek-v4.1-flash)"]
+    LL -->|HTTPS, key from OpenBao| ORT
     GH["GitHub (public)\ncanonical repo of this platform + CI"] -.-> AR
     TRK(("Tracker\n(task in)")) -.-> API
 ```

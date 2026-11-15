@@ -51,3 +51,23 @@ def test_bootstrap_has_no_host_ollama_wiring() -> None:
     assert "getent hosts" not in text  # no host-IP discovery for a host model server
     # The key lives in OpenBao and is synced into the Secret by section_litellm.
     assert "secret/litellm/openrouter" in text
+
+
+def test_env_example_documents_the_key_without_a_value() -> None:
+    example = (ROOT / ".env.example").read_text(encoding="utf-8")
+    lines = [ln.strip() for ln in example.splitlines()]
+    assert "OPENROUTER_API_KEY=" in lines  # placeholder only, never a real value
+
+
+def test_dotenv_is_gitignored_but_example_is_not() -> None:
+    ignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert ".env" in ignore
+    assert "!.env.example" in ignore
+
+
+def test_bootstrap_imports_the_key_from_dotenv() -> None:
+    # The owner keeps the key in the repo-root .env (gitignored); the
+    # bootstrapper moves it into OpenBao when OpenBao has none yet.
+    text = BOOTSTRAP.read_text(encoding="utf-8")
+    assert "OPENROUTER_API_KEY" in text
+    assert '/.env"' in text

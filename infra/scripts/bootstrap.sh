@@ -256,7 +256,11 @@ section_litellm() {
   [ -n "$mk" ] || { mk="sk-lab-$(openssl rand -hex 12)"; vcli kv put secret/litellm/master "master-key=$mk" >/dev/null; }
   [ -n "$mk" ] || { echo "litellm: пустой master key — прерываю"; exit 1; }
   okey="$(vcli kv get -field=api-key secret/litellm/openrouter 2>/dev/null || true)"
-  [ -n "$okey" ] || { echo "litellm: no OpenRouter key at secret/litellm/openrouter — run: ./infra/scripts/toolbox.sh bash infra/scripts/bootstrap.sh llm-key"; exit 1; }
+  if [ -z "$okey" ] && [ -n "$(dotenv_get OPENROUTER_API_KEY)" ]; then
+    dotenv_get OPENROUTER_API_KEY | store_llm_key
+    okey="$(vcli kv get -field=api-key secret/litellm/openrouter 2>/dev/null || true)"
+  fi
+  [ -n "$okey" ] || { echo "litellm: no OpenRouter key — set OPENROUTER_API_KEY in .env (see .env.example) or run: bootstrap.sh llm-key"; exit 1; }
   kubectl -n "$NS" create secret generic litellm-provider \
     --from-literal="openrouter-api-key=$okey" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
@@ -291,25 +295,40 @@ section_litellm() {
   echo "litellm: ready (api http://localhost:30084/v1)"
 }
 
+# Value of KEY from the repo-root .env (gitignored; template: .env.example).
+# Quotes and a trailing CR are stripped; prints nothing when unset.
+dotenv_get() {
+  local f="$ROOT/../.env"
+  [ -f "$f" ] || return 0
+  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$f" | tail -n1 \
+    | tr -d '\r' | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
+}
+
 section_llm_key() {
-  # Owner-only: store the OpenRouter API key in OpenBao. Read silently from
-  # the terminal (or stdin when piped) so it never lands in argv, shell
-  # history, git or a transcript. Re-run `litellm` afterwards to sync it.
+  # Store the OpenRouter API key in OpenBao: from OPENROUTER_API_KEY in .env
+  # when set, else read silently from the terminal (or stdin when piped), so
+  # it never lands in argv, shell history, git or a transcript.
   local key
-  if [ -t 0 ]; then
+  key="$(dotenv_get OPENROUTER_API_KEY)"
+  if [ -z "$key" ] && [ -t 0 ]; then
     read -rsp "OpenRouter API key: " key; echo
-  else
+  elif [ -z "$key" ]; then
     IFS= read -r key || true
   fi
   [ -n "$key" ] || { echo "llm-key: empty key — nothing stored"; exit 1; }
+  printf '%s' "$key" | store_llm_key
+  echo "llm-key: stored at secret/litellm/openrouter (now: bootstrap.sh litellm)"
+}
+
+# stdin → OpenBao secret/litellm/openrouter (api-key); never via argv.
+store_llm_key() {
   local POD RTOK
   POD="$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=openbao -o jsonpath='{.items[0].metadata.name}')"
   RTOK="$(cat "$ROOT/.vault-root-token" 2>/dev/null || true)"
   [ -n "$RTOK" ] || { echo "openbao: нет root-токена ($ROOT/.vault-root-token)"; exit 2; }
   # `api-key=-` makes bao read the value from stdin (exec -i), never from argv.
-  printf '%s' "$key" | kubectl -n "$NS" exec -i "$POD" -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$RTOK" \
+  kubectl -n "$NS" exec -i "$POD" -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$RTOK" \
     bao kv put secret/litellm/openrouter api-key=- >/dev/null
-  echo "llm-key: stored at secret/litellm/openrouter (now: bootstrap.sh litellm)"
 }
 
 section_agents() {
