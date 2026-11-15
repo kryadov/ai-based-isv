@@ -191,6 +191,9 @@ class FakeControlPlane:
         self.complete_called = asyncio.Event()
         self.fail_called = asyncio.Event()
         self.heartbeat_called = asyncio.Event()
+        # swarm (M8): pending HITL merges (backpressure) and the run graph (handoffs)
+        self.pending_merges: list[int] = []
+        self.run_graph: list[dict[str, Any]] | None = None
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -236,6 +239,15 @@ class FakeControlPlane:
         if path == "/audit" and method == "POST":
             self.audit_calls.append(body)
             return httpx.Response(200, json={"event_id": len(self.audit_calls)})
+
+        if path == "/hitl/pending" and method == "GET":
+            pending = [{"id": i, "kind": "merge", "subject": "pr"} for i in self.pending_merges]
+            return httpx.Response(200, json={"pending": pending})
+
+        if re.match(r"/runs/\d+/vertices", path) and method == "GET":
+            if self.run_graph is None:
+                return httpx.Response(404)
+            return httpx.Response(200, json={"vertices": self.run_graph})
 
         return httpx.Response(404)
 
@@ -1374,3 +1386,58 @@ async def test_exhausted_attempts_write_one_failure_episode(tmp_path: Path) -> N
     assert [(a["kind"], a["vertex_id"]) for a in memory.added] == [("failure", 8)]
     assert "max_attempts_exceeded" in memory.added[0]["title"]
     assert memory.added[0]["paths"] == ["*.md"]
+
+
+# --- swarm (M8): handoffs + backpressure ----------------------------------------
+
+
+async def test_dependent_vertex_gets_handoffs_from_deps(tmp_path: Path) -> None:
+    vertex = {**_greet_vertex(), "deps": ["slug", "words"]}
+    executor = FakeExecutor(diff=_GREET_DIFF, diff_files=["greeting.py"])
+    bare = _init_bare_repo(tmp_path)
+    plane = FakeControlPlane(vertices=[vertex])
+    plane.run_graph = [
+        {"name": "slug", "status": "done",
+         "result": {"diff_files": ["src/slug.py"], "pr_url": "http://g/pulls/1",
+                    "review_summary": "clean"}},
+        {"name": "words", "status": "done",
+         "result": {"diff_files": ["src/words.py"], "pr_url": "http://g/pulls/2"}},
+        {"name": vertex["name"], "status": "running", "result": {}},
+    ]  # fmt: skip
+    stop = asyncio.Event()
+    transport = httpx.MockTransport(plane.handler)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
+        task = asyncio.create_task(
+            worker_loop(_settings(tmp_path, str(bare)), executor, http=http, stop=stop)
+        )
+        await asyncio.wait_for(plane.complete_called.wait(), timeout=3.0)
+        stop.set()
+        await asyncio.wait_for(task, timeout=3.0)
+    prompt = executor.calls[0].prompt
+    assert "Handoff from upstream vertices (already merged into main):" in prompt
+    assert "- slug: files src/slug.py; PR http://g/pulls/1" in prompt
+    assert "- words: files src/words.py; PR http://g/pulls/2" in prompt
+
+
+async def test_backpressure_waits_while_merges_pile_up(tmp_path: Path) -> None:
+    bare = _init_bare_repo(tmp_path)
+    plane = FakeControlPlane(vertices=[_greet_vertex()])
+    plane.pending_merges = [1, 2, 3]
+    stop = asyncio.Event()
+    transport = httpx.MockTransport(plane.handler)
+    settings = _settings(tmp_path, str(bare)).model_copy(update={"max_pending_merges": 3})
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
+        task = asyncio.create_task(
+            worker_loop(
+                settings, FakeExecutor(diff=_GREET_DIFF, diff_files=["greeting.py"]),
+                http=http, stop=stop,
+            )
+        )  # fmt: skip
+        await asyncio.sleep(0.3)
+        assert plane.claim_calls == 0
+        assert any(a.get("action") == "backpressure" for a in plane.audit_calls)
+        plane.pending_merges = []  # a human decided: the flow resumes
+        await asyncio.wait_for(plane.complete_called.wait(), timeout=3.0)
+        stop.set()
+        await asyncio.wait_for(task, timeout=3.0)
+    assert plane.claim_calls >= 1
