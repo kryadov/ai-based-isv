@@ -1,8 +1,9 @@
 # LiteLLM gateway — single entry point for agent model access (spec §7.8).
 # Models: external APIs only — the stand has no GPU, so no local inference.
 # Primary: z.ai GLM Coding Plan (owner's subscription, OpenAI-compatible
-# coding endpoint). On its plan limit (HTTP 429) or any other failure the
-# router falls back to OpenRouter (metered) and cools z.ai down for a while.
+# coding endpoint). OpenRouter (metered) is used ONLY after z.ai reports its
+# plan limit (HTTP 429) — other z.ai errors are retried on z.ai and surface
+# to the caller; see zai_limit_gate.py.
 # The alias names are historical and kept stable: the acceptance flows
 # (`litellm/qwen3`) and the llm MCP server address them.
 #   qwen3      — the executor/agent model: must emit real OpenAI tool_calls.
@@ -40,28 +41,43 @@ data:
         litellm_params:
           model: openrouter/deepseek/deepseek-v4.1-flash
           api_key: os.environ/OPENROUTER_API_KEY
-      # Bot reviewer (M5): a different model family than the GLM implementer
-      # (cross-family review, research 2026-11-14); metered via OpenRouter.
+      # Bot reviewer (M5): z.ai first like everything else (owner directive:
+      # OpenRouter only on the plan limit). The limit-time fallback is a
+      # different family (kimi) — cross-family review, research 2026-11-14.
       - model_name: reviewer
+        litellm_params:
+          model: openai/glm-5.3
+          api_base: https://api.z.ai/api/coding/paas/v4
+          api_key: os.environ/ZAI_API_KEY
+      - model_name: reviewer-fallback
         litellm_params:
           model: openrouter/moonshotai/kimi-k3.1-pro
           api_key: os.environ/OPENROUTER_API_KEY
-      - model_name: reviewer-fallback
-        litellm_params:
-          model: openrouter/z-ai/glm-5.3
-          api_key: os.environ/OPENROUTER_API_KEY
+    # OpenRouter ONLY when the z.ai plan limit is exhausted (owner directive,
+    # 2026-11-15). LiteLLM fallbacks fire on any error, so zai_limit_gate.py
+    # disables them per request until z.ai answers 429; then z.ai is parked
+    # for cooldown_time and the fallbacks below carry the traffic.
     router_settings:
       fallbacks:
         - qwen3: ["qwen3-openrouter"]
         - qwen-coder: ["qwen-coder-openrouter"]
         - reviewer: ["reviewer-fallback"]
-      num_retries: 1
-      allowed_fails: 1      # one plan-limit error ...
-      cooldown_time: 300    # ... parks z.ai for 5 min; traffic goes to OpenRouter
+      retry_policy:
+        RateLimitErrorRetries: 0        # an exhausted plan: no point retrying
+        DefaultRetries: 2               # transient z.ai errors: retry z.ai itself
+      allowed_fails_policy:
+        RateLimitErrorAllowedFails: 0   # the first 429 parks z.ai ...
+        AuthenticationErrorAllowedFails: 1000
+        BadRequestErrorAllowedFails: 1000
+        TimeoutErrorAllowedFails: 1000
+        InternalServerErrorAllowedFails: 1000
+        ContentPolicyViolationErrorAllowedFails: 1000
+      cooldown_time: 300                # ... for 5 min (= zai_limit_gate COOLDOWN_S)
     general_settings:
       master_key: os.environ/LITELLM_MASTER_KEY
     litellm_settings:
       drop_params: true
+      callbacks: ["zai_limit_gate.gate"]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -137,9 +153,15 @@ spec:
             limits:
               memory: 768Mi
       volumes:
+        # config.yaml + the z.ai limit gate callback (ConfigMap litellm-hooks
+        # is built from infra/litellm/zai_limit_gate.py by section_litellm).
         - name: config
-          configMap:
-            name: litellm-config
+          projected:
+            sources:
+              - configMap:
+                  name: litellm-config
+              - configMap:
+                  name: litellm-hooks
 ---
 apiVersion: v1
 kind: Service

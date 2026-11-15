@@ -252,7 +252,7 @@ section_openproject() {
 section_litellm() {
   # Model gateway. Master key → OpenBao + Secret. Models come from external
   # APIs (no GPU on the stand): z.ai GLM Coding Plan first, OpenRouter as the
-  # fallback on plan limits (infra/litellm/deployment.yaml). Provider keys:
+  # fallback ONLY on the z.ai plan limit (infra/litellm/deployment.yaml). Provider keys:
   # .env (owner) → OpenBao secret/litellm/{zai,openrouter} → Secret litellm-provider.
   local mk zkey okey
   mk="$(vcli kv get -field=master-key secret/litellm/master 2>/dev/null || true)"
@@ -280,6 +280,11 @@ section_litellm() {
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   kubectl -n "$NS" create secret generic litellm-master \
     --from-literal="master-key=$mk" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  # OpenRouter only on the z.ai plan limit: the gate callback is mounted next
+  # to config.yaml (infra/litellm/zai_limit_gate.py).
+  kubectl -n "$NS" create configmap litellm-hooks \
+    --from-file=zai_limit_gate.py="$ROOT/litellm/zai_limit_gate.py" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   kubectl apply -f "$ROOT/litellm/deployment.yaml"
   # Drop the host-alias pin left by the former host-Ollama setup (no-op if absent).

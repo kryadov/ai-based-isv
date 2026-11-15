@@ -54,7 +54,7 @@ flowchart TB
         AG["agent-воркеры\n(M3+: claim вершин)"]
     end
     ZAI["(z.ai GLM Coding Plan\nqwen3 → glm-5.3\nqwen-coder → glm-5.3-flash)"]
-    ORT["(OpenRouter API — запасной\nglm-5.3 / deepseek-v4.1-flash)"]
+    ORT["(OpenRouter API — только при лимите z.ai\nglm-5.3 / deepseek-v4.1-flash / kimi)"]
     LL -->|основной, ключи из OpenBao| ZAI
     LL -.->|при лимите плана 429| ORT
     GH["GitHub (public)\nканонический репо платформы + CI"] -.-> AR
@@ -105,7 +105,7 @@ sequenceDiagram
   - задача `checks`: ruff, mypy, pytest;
   - задача `security`: gitleaks, semgrep.
   `main` защищён обеими проверками.
-- Ревьюер — модель другого семейства, чем у исполнителя (алиас LiteLLM `reviewer`).
+- Ревьюер (алиас LiteLLM `reviewer`) работает на z.ai `glm-5.3`, как и всё остальное — OpenRouter только при исчерпании лимита z.ai (директива владельца); запасной на время лимита — модель другого семейства (`moonshotai/kimi-k3.1-pro`). Пока работаем на z.ai, независимость ревью держится на промпте ревьюера, а не на семействе модели.
 - Любое неизвестное или сбойное состояние блокирует мерж. Агент никогда не меняет `.gitea/**` и `.platform/**`.
 
 ```mermaid

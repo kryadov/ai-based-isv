@@ -61,7 +61,7 @@ def test_rate_limited_deployment_cools_down() -> None:
     # After z.ai reports its plan limit, skip it for a while instead of
     # paying a failed round-trip on every request.
     router = _config()["router_settings"]
-    assert router["allowed_fails"] >= 1
+    assert router["allowed_fails_policy"]["RateLimitErrorAllowedFails"] == 0
     assert router["cooldown_time"] >= 60
 
 
@@ -129,13 +129,49 @@ def test_litellm_pod_is_ready_only_when_serving() -> None:
     assert probe["httpGet"]["port"] == 4000
 
 
-def test_reviewer_alias_is_cross_family_with_fallback() -> None:
-    # The implementer is GLM (z.ai); review by a different family (research 2026-11-14).
-    models = _models()
-    assert models["reviewer"]["model"].startswith("openrouter/moonshotai/")
-    assert models["reviewer"]["api_key"] == "os.environ/OPENROUTER_API_KEY"
+def _fallbacks() -> dict[str, list[str]]:
     fallbacks: dict[str, list[str]] = {}
     for entry in _config()["router_settings"]["fallbacks"]:
         fallbacks.update(entry)
-    assert fallbacks["reviewer"] == ["reviewer-fallback"]
+    return fallbacks
+
+
+def test_reviewer_goes_to_zai_first_openrouter_only_on_limit() -> None:
+    # Owner directive: OpenRouter only when the z.ai plan limit is exhausted —
+    # the reviewer too. Cross-family review (kimi) is the limit-time fallback.
+    models = _models()
+    assert models["reviewer"]["api_base"] == ZAI_BASE
+    assert models["reviewer"]["api_key"] == "os.environ/ZAI_API_KEY"
+    assert _fallbacks()["reviewer"] == ["reviewer-fallback"]
     assert models["reviewer-fallback"]["model"].startswith("openrouter/")
+
+
+def test_every_openrouter_model_is_only_a_fallback_target() -> None:
+    models = _models()
+    targets = {t for ts in _fallbacks().values() for t in ts}
+    for name, params in models.items():
+        if params["model"].startswith("openrouter/"):
+            assert name in targets, f"{name} is reachable directly"
+        else:
+            assert params.get("api_base") == ZAI_BASE, name
+
+
+def test_limit_gate_callback_is_loaded_and_mounted() -> None:
+    config = _config()
+    assert "zai_limit_gate.gate" in config["litellm_settings"]["callbacks"]
+    deploy = next(d for d in _docs() if d["kind"] == "Deployment")
+    vols = {v["name"]: v for v in deploy["spec"]["template"]["spec"]["volumes"]}
+    sources = vols["config"]["projected"]["sources"]
+    assert {s["configMap"]["name"] for s in sources} == {"litellm-config", "litellm-hooks"}
+    text = BOOTSTRAP.read_text(encoding="utf-8")
+    assert "litellm-hooks" in text and "zai_limit_gate.py" in text
+
+
+def test_zai_cools_down_on_first_429_only() -> None:
+    router = _config()["router_settings"]
+    policy = router["allowed_fails_policy"]
+    for key, value in policy.items():
+        if key != "RateLimitErrorAllowedFails":
+            assert value >= 100, key
+    assert router["retry_policy"]["RateLimitErrorRetries"] == 0
+    assert router["cooldown_time"] == 300

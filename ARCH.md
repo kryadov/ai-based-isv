@@ -51,7 +51,7 @@ flowchart TB
         AG["agent workers\n(M3+: claim vertices)"]
     end
     ZAI["(z.ai GLM Coding Plan\nqwen3 → glm-5.3\nqwen-coder → glm-5.3-flash)"]
-    ORT["(OpenRouter API — fallback\nglm-5.3 / deepseek-v4.1-flash)"]
+    ORT["(OpenRouter API — only on the z.ai limit\nglm-5.3 / deepseek-v4.1-flash / kimi)"]
     LL -->|primary, keys from OpenBao| ZAI
     LL -.->|on plan limit 429| ORT
     GH["GitHub (public)\ncanonical repo of this platform + CI"] -.-> AR
@@ -101,7 +101,7 @@ not generation. Merge queue + backpressure throttle the swarm to integration spe
   - job `checks`: ruff, mypy, pytest;
   - job `security`: gitleaks, semgrep.
   `main` is protected by both contexts.
-- The reviewer is a different model family from the implementer (LiteLLM alias `reviewer`).
+- The reviewer (LiteLLM alias `reviewer`) runs on z.ai `glm-5.3` like everything else — OpenRouter is used only on the z.ai plan limit (owner directive); its limit-time fallback is a different family (`moonshotai/kimi-k3.1-pro`). The reviewer prompt, not the model family, carries the independence while on z.ai.
 - Every unknown or failed state blocks the merge. Agents can never change `.gitea/**` or `.platform/**`.
 
 ```mermaid
