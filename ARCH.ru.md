@@ -207,6 +207,21 @@ flowchart TB
 Права записи по ролям; изменения semantic — только через PR; «опубликован» ≠
 «улучшает результат» (eval-гейт). TTL/консолидация защищают от дрейфа и отравления.
 
+
+**Сделано в M7 (v0.8.0):**
+- **Эпизодическое хранилище:** таблица `memory_episodes` в БД control plane, API `/memory/episodes`, `/memory/slice`.
+  - Ранжирование: пересечение путей +3, общие слова задачи до +5, последние 7 дней +1, postmortem/failure +2.
+  - Эпизод без пересечения путей и слов не возвращается никогда.
+- **Запись** воркером при закрытии вершины, fail-open:
+  - `deploy` (маркер успеха) или `postmortem` (откат);
+  - `failure` (терминальный провал, исчерпанные попытки);
+  - `lesson` от **memory-extractor** (лёгкая модель, не больше 2 на задачу).
+- **Retrieval на старте вершины:** срез попадает в промпт агента («Project memory (lessons from earlier tasks — follow them)»), а его id — в session log (`memory_slice`).
+- **Org-память:** репо Gitea `swarm-lab/org-memory` с `lessons/` и `reuse-catalog.yaml` (reuse-каталог v1), под check-профилем docs.
+  - `org-bootstrap memory promote --episode N` открывает PR на ревью человеку.
+  - Агенты в org-память не пишут.
+- **Отложено** (TODO): working-память (M8), эмбеддинги, индексация кода, self-evals спек, автопромоция.
+
 ## 6. Внутренности control plane (текущее состояние, M3)
 
 `agent_api` (FastAPI + SQLAlchemy async):

@@ -9,6 +9,7 @@ workspace-level dev tools, so the seed gets its own standalone one.
 from __future__ import annotations
 
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
@@ -97,7 +98,14 @@ def seed_tree(dest: Path) -> list[str]:
     )
 
 
-def push_seed(repo_url: str, token: str, workdir: Path, *, message: str) -> None:
+def push_seed(
+    repo_url: str,
+    token: str,
+    workdir: Path,
+    *,
+    message: str,
+    build: Callable[[Path], list[str]] | None = None,
+) -> None:
     """Clone ``repo_url`` (auto-initialised main), lay the seed over it, push main.
 
     The token travels as an http.extraHeader in ``GIT_CONFIG_*`` env — never in
@@ -122,7 +130,7 @@ def push_seed(repo_url: str, token: str, workdir: Path, *, message: str) -> None
 
     clone = workdir / "repo"
     git("clone", "-q", repo_url, str(clone))
-    seed_tree(clone)
+    (build or seed_tree)(clone)
     git("add", "-A", cwd=clone)
     git("commit", "-qm", message, cwd=clone)
     git("push", "-q", "origin", "HEAD:main", cwd=clone)

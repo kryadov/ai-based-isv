@@ -201,6 +201,38 @@ def _revision(rollout: dict[str, Any]) -> str:
     return str(annotations.get("rollout.argoproj.io/revision", ""))
 
 
+async def remember_verdict(
+    memory: Any,
+    project: str,
+    verdict: DeployVerdict,
+    paths: list[str],
+    *,
+    run_id: int | None = None,
+    vertex_id: int | None = None,
+) -> None:
+    """Project memory write-back of a deploy (M7): success marker or postmortem."""
+    if verdict.status == "succeeded":
+        await memory.add(
+            project,
+            "deploy",
+            f"deployed {verdict.image}: succeeded (revision {verdict.revision})",
+            f"Canary passed analysis; previous {verdict.previous_image}.",
+            paths,
+            run_id=run_id,
+            vertex_id=vertex_id,
+        )
+    elif verdict.postmortem:
+        await memory.add(
+            project,
+            "postmortem",
+            f"canary {verdict.image} rolled back",
+            verdict.postmortem,
+            paths,
+            run_id=run_id,
+            vertex_id=vertex_id,
+        )
+
+
 def write_postmortem(verdict: DeployVerdict) -> str:
     """Markdown postmortem draft for a rolled-back canary (episodic memory: M7)."""
     lines = [
@@ -366,6 +398,8 @@ async def _main(argv: list[str] | None = None) -> int:
     parser.add_argument("--prometheus", default="http://localhost:30090")
     parser.add_argument("--evidence-dir", type=Path)
     parser.add_argument("--timeout", type=float, default=900.0)
+    parser.add_argument("--memory-api", help="agent_api URL: write the verdict to project memory")
+    parser.add_argument("--project", default="swarm-lab/isv-product")
     ns = parser.parse_args(argv)
     async with httpx.AsyncClient(timeout=30.0) as http:
 
@@ -382,6 +416,18 @@ async def _main(argv: list[str] | None = None) -> int:
             fault=_parse_fault(ns.fault),
             timeout_s=ns.timeout,
         )
+    if ns.memory_api:
+        from agent_runtime.memory import MemoryClient
+
+        # The episode's paths: what the deployed commit changed (vs its first parent).
+        changed = subprocess.run(  # noqa: S603, S607
+            ["git", "-C", str(ns.repo_dir), "diff", "--name-only", "HEAD~1", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.split()
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            await remember_verdict(MemoryClient(http, ns.memory_api), ns.project, result, changed)
     if ns.evidence_dir:
         ns.evidence_dir.mkdir(parents=True, exist_ok=True)
         (ns.evidence_dir / "deploy_verdict.json").write_text(

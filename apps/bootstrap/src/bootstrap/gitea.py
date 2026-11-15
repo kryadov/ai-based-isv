@@ -103,6 +103,25 @@ class GiteaClient:
         if code >= 400:
             raise RuntimeError(f"gitea: could not write {path} in {repo} ({code})")
 
+    def propose_file(
+        self, repo: str, path: str, content: str, *, branch: str, title: str, body: str
+    ) -> str:
+        """Commit ``path`` on a new ``branch`` off main and open a PR; return its URL."""
+        payload: dict[str, object] = {
+            "message": title,
+            "content": base64.b64encode(content.encode()).decode(),
+            "branch": "main",
+            "new_branch": branch,
+        }
+        code, _ = self._request("POST", f"/repos/{self.owner}/{repo}/contents/{path}", payload)
+        if code >= 400:
+            raise RuntimeError(f"gitea: could not commit {path} on {branch} ({code})")
+        pr: dict[str, object] = {"title": title, "head": branch, "base": "main", "body": body}
+        code, data = self._request("POST", f"/repos/{self.owner}/{repo}/pulls", pr)
+        if code >= 400:
+            raise RuntimeError(f"gitea: could not open PR {branch} → main ({code})")
+        return str(data.get("html_url", ""))
+
     def apply_check_profile(
         self, repo: str, *, stack: str, git_url: str, push_whitelist: Sequence[str] = ()
     ) -> None:

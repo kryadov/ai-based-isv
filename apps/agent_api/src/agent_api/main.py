@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -244,6 +245,58 @@ def create_app() -> FastAPI:
                 project=str(payload["project"]),
             )
             return {"entry_id": entry_id}
+
+    # --- project episodic memory (M7, ADR-0003) -------------------------------
+
+    @app.post("/memory/episodes")
+    async def add_episode(payload: dict[str, Any]) -> dict[str, Any]:
+        kind = str(payload.get("kind", ""))
+        if kind not in store.EPISODE_KINDS:
+            raise HTTPException(status_code=422, detail=f"unknown episode kind {kind!r}")
+        project = str(payload.get("project", "")).strip()
+        if not project:
+            raise HTTPException(status_code=422, detail="project is required")
+
+        def _opt_int(key: str) -> int | None:
+            value = payload.get(key)
+            return int(value) if isinstance(value, int) else None
+
+        async with app.state.session_factory() as session:
+            episode_id = await store.add_episode(
+                session,
+                project=project,
+                kind=kind,
+                title=str(payload.get("title", "")),
+                body=str(payload.get("body", "")),
+                paths=list(payload.get("paths") or []),
+                tags=list(payload.get("tags") or []),
+                run_id=_opt_int("run_id"),
+                vertex_id=_opt_int("vertex_id"),
+            )
+            return {"id": episode_id}
+
+    @app.get("/memory/episodes/{episode_id}")
+    async def get_episode(episode_id: int) -> dict[str, Any]:
+        async with app.state.session_factory() as session:
+            episode = await store.get_episode(session, episode_id)
+        if episode is None:
+            raise HTTPException(status_code=404, detail="not found")
+        return episode
+
+    @app.get("/memory/slice")
+    async def memory_slice(
+        project: str, paths: str = "", q: str = "", limit: int = 5
+    ) -> dict[str, Any]:
+        async with app.state.session_factory() as session:
+            episodes = await store.list_project_episodes(session, project)
+        ranked = store.rank_episodes(
+            episodes,
+            paths=[p for p in paths.split(",") if p],
+            text=q,
+            now=datetime.now(UTC),
+            limit=limit,
+        )
+        return {"episodes": ranked}
 
     return app
 
