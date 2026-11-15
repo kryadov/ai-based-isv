@@ -1,0 +1,47 @@
+# Platform check profile: python (seeded by the bootstrapper; spec §7.2 item 4).
+# One corridor, no skip switches: every job must pass for the PR to merge.
+# Agents cannot change this file (.gitea/** is a protected gate path).
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  UV_VERSION: "0.13.8"
+  RUFF_VERSION: "0.17.4"
+  MYPY_VERSION: "2.4.1"
+  PYTEST_VERSION: "9.2.0"
+  GITLEAKS_VERSION: "8.28.0"
+  SEMGREP_VERSION: "1.140.0"
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install uv
+        run: curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: sync
+        run: uv sync --all-groups
+      - name: ruff check
+        run: uv run --with "ruff==${RUFF_VERSION}" ruff check .
+      - name: ruff format
+        run: uv run --with "ruff==${RUFF_VERSION}" ruff format --check .
+      - name: mypy
+        run: uv run --with "mypy==${MYPY_VERSION}" mypy .
+      - name: pytest
+        run: uv run --with "pytest==${PYTEST_VERSION}" pytest -q
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install uv
+        run: curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: gitleaks (secret scan)
+        run: |
+          curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | tar -xz -C /usr/local/bin gitleaks
+          gitleaks detect --no-git --redact --source .
+      - name: semgrep (SAST)
+        run: uvx "semgrep==${SEMGREP_VERSION}" scan --config p/ci --error --metrics off .
