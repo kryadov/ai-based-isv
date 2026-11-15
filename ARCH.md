@@ -118,6 +118,21 @@ flowchart LR
     M --> DONE["tracker Done<br/>+ PR link"]
 ```
 
+### 3b. Canary rollout (M6)
+
+```mermaid
+flowchart LR
+    M["merge in Gitea"] --> B["deployer: build isv-product:sha7<br/>+ pre-rollout baseline"]
+    B --> H{"first rollout or<br/>deploy/** change?"}
+    H -->|"yes"| HITL["HITL #3"]
+    H -->|"no"| P
+    HITL --> P["Argo CD Application<br/>image override"]
+    P --> R["Argo Rollouts canary<br/>20 → 50 → 100 %"]
+    R --> A{"analysis: canary vs stable<br/>+ post-rollout window<br/>(Prometheus, k6 traffic)"}
+    A -->|"pass"| OK["succeeded:<br/>verdict in evidence + tracker"]
+    A -->|"fail"| RB["abort → rollback to stable<br/>+ postmortem.md"]
+```
+
 ### 3a. Self-development loop (spec §13.7 level 2)
 
 The platform repo itself is a target project. GitHub stays canonical; Gitea `swarm-lab/ai-based-isv` is the agents' working copy, synced by `infra/scripts/platform-sync.sh`. Agents act as the non-admin `swarm-agent`; every merge needs HITL (no auto-merge for `platform_repos`).
