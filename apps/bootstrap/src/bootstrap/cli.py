@@ -19,6 +19,10 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 PROFILE_PATH = REPO_ROOT / "infra" / "env.local.yaml"
 
 
+# In-cluster Gitea for CI job checkout (ROOT_URL is a host NodePort).
+PLATFORM_GIT_URL = "http://gitea-http.platform.svc.cluster.local:3000"
+
+
 def _gitea_token() -> str:
     """Gitea admin token from OpenBao (secret gitea/admin, field apitoken)."""
     pod = subprocess.run(  # noqa: S603
@@ -152,6 +156,7 @@ def seed_demo() -> None:
     client = GiteaClient(base_url="http://localhost:30080", token=token, owner="swarm-admin")
     status = client.ensure_repo(REPO_NAME)
     client.put_file(REPO_NAME, "README.md", README_CONTENT)
+    client.apply_check_profile(REPO_NAME, stack="python", git_url=PLATFORM_GIT_URL)
     url = f"{client.base_url}/{client.owner}/{REPO_NAME}"
     typer.secho(f"Demo repo: {status} → {url}", fg=typer.colors.GREEN)
 
@@ -162,6 +167,7 @@ def onboard(
     kind: str = typer.Option("service", help="тип: product | service | tool | assistant"),
     owner: str = typer.Option("swarm-admin", help="владелец проекта"),
     reason: str = typer.Option("new project", help="зачем создается"),
+    stack: str = typer.Option("python", help="check profile (CI corridor) for the repo"),
 ) -> None:
     """Заведение нового проекта (спека §13.1): Gitea repo + запись в реестр."""
     if kind not in {"product", "service", "tool", "assistant"}:
@@ -170,6 +176,8 @@ def onboard(
     token = _gitea_token()
     client = GiteaClient(base_url="http://localhost:30080", token=token, owner=owner)
     status = client.ensure_repo(project)
+    # The gate corridor (M5): CI check profile + merge policy + protected main.
+    client.apply_check_profile(project, stack=stack, git_url=PLATFORM_GIT_URL)
     register_or_update(ProjectRecord(name=project, kind=kind, owner=owner, reason=reason))
     typer.secho(
         f"Project {project}: repo {status}, registered in infra/projects.yaml",
