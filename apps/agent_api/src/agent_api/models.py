@@ -98,3 +98,20 @@ class MergeQueueRow(Base):
     enqueued_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class EpisodeRow(Base):
+    """Project episodic memory (M7, ADR-0003): what earlier tasks learned."""
+
+    __tablename__ = "memory_episodes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project: Mapped[str] = mapped_column(String(200), index=True)
+    kind: Mapped[str] = mapped_column(String(20))
+    title: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text)
+    paths_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    tags_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    vertex_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

@@ -6,6 +6,8 @@ All functions take an AsyncSession; vertex claim is atomic
 
 from __future__ import annotations
 
+import fnmatch
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -16,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from agent_api.models import (
     AuditRow,
     BudgetRow,
+    EpisodeRow,
     HITLRow,
     IdentityRow,
     MergeQueueRow,
@@ -259,3 +262,161 @@ async def enqueue_merge(session: AsyncSession, pr_ref: str, project: str) -> int
     await session.flush()
     await session.commit()
     return row.id
+
+
+# --------------------------------------------------------------------------- memory (M7)
+
+EPISODE_KINDS = frozenset({"lesson", "deploy", "postmortem", "failure", "decision"})
+_TITLE_MAX = 200
+_BODY_MAX = 8000
+_SLICE_MAX = 20
+_STOP_WORDS = frozenset(
+    [
+        "this",
+        "that",
+        "with",
+        "from",
+        "have",
+        "will",
+        "into",
+        "when",
+        "then",
+        "than",
+        "they",
+        "them",
+        "their",
+        "there",
+        "were",
+        "what",
+        "which",
+        "while",
+        "about",
+        "after",
+        "before",
+        "should",
+        "could",
+        "would",
+        "only",
+        "also",
+        "just",
+        "more",
+        "most",
+        "some",
+        "task",
+        "make",
+        "sure",
+        "each",
+        "other",
+        "test",
+        "tests",
+        "file",
+        "files",
+    ]
+)
+
+
+async def add_episode(
+    session: AsyncSession,
+    *,
+    project: str,
+    kind: str,
+    title: str,
+    body: str,
+    paths: list[str],
+    tags: list[str],
+    run_id: int | None = None,
+    vertex_id: int | None = None,
+) -> int:
+    if kind not in EPISODE_KINDS:
+        raise ValueError(f"unknown episode kind {kind!r}")
+    row = EpisodeRow(
+        project=project,
+        kind=kind,
+        title=title[:_TITLE_MAX],
+        body=body[:_BODY_MAX],
+        paths_json=[str(p) for p in paths][:50],
+        tags_json=[str(t) for t in tags][:20],
+        run_id=run_id,
+        vertex_id=vertex_id,
+    )
+    session.add(row)
+    await session.flush()
+    await session.commit()
+    return row.id
+
+
+def _episode_dict(row: EpisodeRow) -> dict[str, Any]:
+    created = row.created_at if row.created_at.tzinfo else row.created_at.replace(tzinfo=UTC)
+    return {
+        "id": row.id,
+        "project": row.project,
+        "kind": row.kind,
+        "title": row.title,
+        "body": row.body,
+        "paths": list(row.paths_json or []),
+        "tags": list(row.tags_json or []),
+        "run_id": row.run_id,
+        "vertex_id": row.vertex_id,
+        "created_at": created.isoformat(),
+    }
+
+
+async def get_episode(session: AsyncSession, episode_id: int) -> dict[str, Any] | None:
+    row = (await session.scalars(select(EpisodeRow).where(EpisodeRow.id == episode_id))).first()
+    return None if row is None else _episode_dict(row)
+
+
+async def list_project_episodes(
+    session: AsyncSession, project: str, limit: int = 500
+) -> list[dict[str, Any]]:
+    rows = await session.scalars(
+        select(EpisodeRow)
+        .where(EpisodeRow.project == project)
+        .order_by(EpisodeRow.id.desc())
+        .limit(limit)
+    )
+    return [_episode_dict(r) for r in rows]
+
+
+def _words(text: str) -> set[str]:
+    return {
+        w for w in re.findall(r"[a-z0-9_]+", text.lower()) if len(w) >= 4 and w not in _STOP_WORDS
+    }
+
+
+def _path_match(episode_path: str, task_glob: str) -> bool:
+    if fnmatch.fnmatch(episode_path, task_glob):
+        return True
+    prefix = [s for s in task_glob.split("/") if s and "*" not in s][:2]
+    own = episode_path.split("/")[:2]
+    return len(prefix) == 2 and prefix == own
+
+
+def rank_episodes(
+    episodes: list[dict[str, Any]],
+    *,
+    paths: list[str],
+    text: str,
+    now: datetime,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Score episodes for a task: +3 per path match, +1 per shared word (cap 5),
+    +1 if newer than 7 days, +2 for postmortem/failure; drop score 0; newest first
+    on ties. Path and word signals are required — kind/recency alone never qualify."""
+    query = _words(text)
+    ranked: list[tuple[int, str, dict[str, Any]]] = []
+    for episode in episodes:
+        path_hits = sum(
+            1 for p in episode.get("paths", []) if any(_path_match(p, g) for g in paths)
+        )
+        word_hits = min(5, len(query & _words(f"{episode['title']} {episode['body']}")))
+        relevance = 3 * path_hits + word_hits
+        if relevance == 0:
+            continue
+        created = datetime.fromisoformat(str(episode["created_at"]))
+        score = relevance
+        score += 1 if now - created <= timedelta(days=7) else 0
+        score += 2 if episode.get("kind") in ("postmortem", "failure") else 0
+        ranked.append((score, str(episode["created_at"]), {**episode, "score": score}))
+    ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [item[2] for item in ranked[: max(1, min(limit, _SLICE_MAX))]]
