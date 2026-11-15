@@ -53,11 +53,11 @@ Verified acceptance flows (run them through the toolbox: `./infra/scripts/toolbo
 ./infra/tests/m4c_flow.sh          # Gitea issue → run → agent in pod via MCP → branch + evidence → tracker In Progress → Done; MCP netpol (I2/I3)
 ```
 
-Status on the Rancher/toolbox stand (2026-11-15):
-- PASS: m2a, m2b (after the Alloy mount fix), m3.
-- PASS on the z.ai gateway: m4a and m4b. m4b now passes; on the old stand's local qwen3 it failed on model quality.
-- m2c and m4c: re-run in progress after the live fixes (thinking off for the light alias, LiteLLM rollout wait, teardown wait). In the first run m4c's agent part succeeded (branch, evidence, verdict), and only the teardown race failed.
-- m2d: not re-run on this stand.
+Status on the Rancher/toolbox stand (2026-11-15): **all eight PASS**, run one at a time:
+- m2a, m2b, m2c, m2d, m3, m4a, m4b, m4c.
+- m4c includes the I2/I3 NetworkPolicy evidence: the reader lists no write tools; `task-source` is denied from `agents` and from another namespace; host NodePort 30085 works.
+- The OpenRouter fallback aliases also return real `tool_calls` (checked directly).
+- m4b used to fail on the old stand's local qwen3 model quality; on glm-5.3 via z.ai it passes.
 
 Code gates: `ruff check` / `ruff format --check` / `mypy packages apps` / `pytest` are green (prefix each with `./infra/scripts/toolbox.sh uv run`).
 
@@ -102,7 +102,7 @@ The worker drives the tracker status loop (In Progress → Done/Blocked with evi
 - ✅ **M4b — sandbox in k3s (DONE 2026-11-10)**. Plan: `docs/superpowers/plans/2026-11-10-m4b-k3s-sandbox.md`; spike notes: `docs/superpowers/research/2026-11-10-m4b-*.md`.
 - 🔄 **M4c — MCP servers + tracker status loop**:
   - implemented; final review: 0 Critical, I1–I3 fixed, minors in TODO.md;
-  - live acceptance on the new stand: see above;
+  - live acceptance on the new stand: all eight flows PASS (see above);
   - PR `feat/m4c-mcp-servers` → main;
   - after merge, release **v0.4.0** closes M4 (owner approval).
   - Then M5 (gates + review), M6 (canary), M7 (memory), M8 (swarm mode), M9 (polyglot dogfood), M10 (UI panel + Automations).
