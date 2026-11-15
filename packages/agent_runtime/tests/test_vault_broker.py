@@ -30,7 +30,8 @@ def test_read_gitea_token_returns_field() -> None:
     exec_calls = [c for c in calls if "exec" in c[0]]
     assert len(exec_calls) == 1
     argv_text = " ".join(exec_calls[0][0])
-    assert "bao kv get -field=token secret/gitea/admin" in argv_text
+    assert "bao kv get -field=token secret/gitea/agent" in argv_text
+    assert "secret/gitea/admin" not in argv_text, "agents never get the admin token"
     # NO token may travel in argv — the root token reaches the pod via stdin.
     assert _ROOT not in argv_text, "root token in argv is visible in process listings"
     assert _GITEA not in argv_text
@@ -56,3 +57,20 @@ def test_no_pod_found_raises() -> None:
 
     with pytest.raises(VaultBrokerError):
         read_gitea_token(run, root_token=_ROOT)
+
+
+def test_missing_agent_secret_fails_closed() -> None:
+    calls: list[list[str]] = []
+
+    def run(argv: list[str], stdin: str | None) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        if "get" in argv and "pods" in argv:
+            return subprocess.CompletedProcess(argv, 0, stdout=_pod_list_json(), stderr="")
+        return subprocess.CompletedProcess(argv, 2, stdout="", stderr="No value found")
+
+    with pytest.raises(VaultBrokerError) as excinfo:
+        read_gitea_token(run, root_token=_ROOT)
+    message = str(excinfo.value)
+    assert "secret/gitea/agent" in message and "bootstrap.sh agent-user" in message
+    # Fail closed: exactly one secret read, never a retry against the admin path.
+    assert not any("secret/gitea/admin" in " ".join(c) for c in calls)

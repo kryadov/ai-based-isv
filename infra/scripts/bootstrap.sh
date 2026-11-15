@@ -119,6 +119,62 @@ section_gitea() {
   [ "$code" = "200" ] || { echo "gitea: api not reachable ($code)"; exit 1; }
 }
 
+section_agent_user() {
+  # Non-admin Gitea identity for agents (self-dev level 2, design §3):
+  # `swarm-agent` gets write on every repo of org `swarm-lab` through team
+  # `agents`, and NO admin rights — so an agent cannot touch branch protection
+  # or its own gates. Token → OpenBao secret/gitea/agent (read by the worker's
+  # vault broker; no fallback to the admin token). Idempotent.
+  local api="http://localhost:30080/api/v1" atok pw tok code tid out
+  ensure_admin_token
+  atok="$(vcli kv get -field=token secret/gitea/admin)"
+  out="$(mktemp)"
+  pw="$(vcli kv get -field=password secret/gitea/agent 2>/dev/null || true)"
+  [ -n "$pw" ] || pw="$(openssl rand -hex 16)"
+  code="$(curl -s -o "$out" -w '%{http_code}' -X POST -H "Authorization: token $atok" \
+    -H 'Content-Type: application/json' "$api/admin/users" \
+    -d "{\"username\":\"swarm-agent\",\"email\":\"swarm-agent@lab.local\",\"password\":\"$pw\",\"must_change_password\":false}")"
+  case "$code" in
+    201) echo "agent-user: swarm-agent created" ;;
+    422) echo "agent-user: swarm-agent exists" ;;
+    *) echo "agent-user: create failed ($code): $(cat "$out")"; exit 1 ;;
+  esac
+  # The stored password must work (a user created by an older run keeps its own).
+  curl -s -o /dev/null -X PATCH -H "Authorization: token $atok" -H 'Content-Type: application/json' \
+    "$api/admin/users/swarm-agent" \
+    -d "{\"login_name\":\"swarm-agent\",\"source_id\":0,\"password\":\"$pw\",\"must_change_password\":false,\"admin\":false}"
+  tok="$(vcli kv get -field=token secret/gitea/agent 2>/dev/null || true)"
+  if [ -n "$tok" ] && [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: token $tok" "$api/user")" = "200" ]; then
+    echo "agent-user: existing token valid"
+  else
+    code="$(curl -s -o "$out" -w '%{http_code}' -u "swarm-agent:$pw" -X POST \
+      -H 'Content-Type: application/json' "$api/users/swarm-agent/tokens" \
+      -d "{\"name\":\"agent-$(date +%s)\",\"scopes\":[\"write:repository\",\"write:issue\",\"read:user\",\"read:organization\"]}")"
+    [ "$code" = "201" ] || { echo "agent-user: token create failed ($code)"; exit 1; }
+    tok="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["sha1"])' "$out")"
+  fi
+  vcli kv put secret/gitea/agent username=swarm-agent "password=$pw" "token=$tok" >/dev/null
+  # Org swarm-lab (flows and the platform repo live there) + team agents.
+  if [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: token $atok" "$api/orgs/swarm-lab")" != "200" ]; then
+    curl -sf -o /dev/null -X POST -H "Authorization: token $atok" -H 'Content-Type: application/json' \
+      "$api/orgs" -d '{"username":"swarm-lab","visibility":"private"}' \
+      || { echo "agent-user: could not create org swarm-lab"; exit 1; }
+  fi
+  tid="$(curl -sf -H "Authorization: token $atok" "$api/orgs/swarm-lab/teams" \
+    | python3 -c 'import json,sys;print(next((t["id"] for t in json.load(sys.stdin) if t["name"]=="agents"),""))')"
+  if [ -z "$tid" ]; then
+    curl -sf -o "$out" -X POST -H "Authorization: token $atok" -H 'Content-Type: application/json' \
+      "$api/orgs/swarm-lab/teams" \
+      -d '{"name":"agents","permission":"write","includes_all_repositories":true,"units":["repo.code","repo.pulls","repo.issues","repo.actions"]}' \
+      || { echo "agent-user: could not create team agents"; exit 1; }
+    tid="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["id"])' "$out")"
+  fi
+  curl -sf -o /dev/null -X PUT -H "Authorization: token $atok" "$api/teams/$tid/members/swarm-agent" \
+    || { echo "agent-user: could not add swarm-agent to team agents"; exit 1; }
+  rm -f "$out"
+  echo "agent-user: swarm-agent (non-admin) → team agents (write, swarm-lab); token in secret/gitea/agent"
+}
+
 section_runner() {
   # Регистрационный токен runner'а из Gitea admin API → secret → apply.
   local rtok n
@@ -423,6 +479,7 @@ case "${1:-all}" in
   cnpg)   section_cnpg ;;
   cluster) cluster_up ;;
   gitea)  section_gitea ;;
+  agent-user) section_agent_user ;;
   runner) section_runner ;;
   argocd) section_argocd ;;
   monitoring) section_monitoring ;;
@@ -434,6 +491,6 @@ case "${1:-all}" in
   agents) section_agents ;;
   mcp)    section_mcp ;;
   # `all` brings the stand cluster (k3d / Rancher Desktop) up first so `org-bootstrap apply` works on a fresh machine.
-  all)    cluster_up; section_vault; section_cnpg; section_gitea; section_runner; section_argocd; section_monitoring; section_loki; section_demo; section_openproject; section_litellm; section_agents; section_mcp ;;
-  *) echo "usage: $0 [cluster|vault|cnpg|gitea|runner|argocd|monitoring|loki|demo|openproject|litellm|llm-key [zai|openrouter]|agents|mcp|all]"; exit 2 ;;
+  all)    cluster_up; section_vault; section_cnpg; section_gitea; section_agent_user; section_runner; section_argocd; section_monitoring; section_loki; section_demo; section_openproject; section_litellm; section_agents; section_mcp ;;
+  *) echo "usage: $0 [cluster|vault|cnpg|gitea|agent-user|runner|argocd|monitoring|loki|demo|openproject|litellm|llm-key [zai|openrouter]|agents|mcp|all]"; exit 2 ;;
 esac

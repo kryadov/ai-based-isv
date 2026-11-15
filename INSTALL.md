@@ -58,7 +58,7 @@ Idempotent: repeated runs do not destroy data. It creates the `swarm-lab` k3d cl
 
 If the git repository is private, Argo CD is wired with `gh auth token` (requires `gh auth login` or `GITHUB_TOKEN`); for a public repo it clones anonymously.
 
-Stand facts are recorded in `infra/env.yaml` (auto-generated — a VET artifact, do not edit by hand). Individual sections: `./infra/scripts/bootstrap.sh [vault|cnpg|gitea|runner|argocd|monitoring|loki|demo|openproject|litellm]` or `uv run org-bootstrap apply --section <name>`. Alternative without the CLI: `./infra/bootstrap.sh` (calls the same sections).
+Stand facts are recorded in `infra/env.yaml` (auto-generated — a VET artifact, do not edit by hand). Individual sections: `./infra/scripts/bootstrap.sh [vault|cnpg|gitea|agent-user|runner|argocd|monitoring|loki|demo|openproject|litellm]` or `uv run org-bootstrap apply --section <name>`. Alternative without the CLI: `./infra/bootstrap.sh` (calls the same sections). **`agent-user`** (runs right after `gitea` in `all`) creates the NON-admin Gitea user `swarm-agent` (team `agents`, write on every `swarm-lab` repo; token in OpenBao `secret/gitea/agent`). Workers and sandboxes act as this user — never with the admin token — so an agent cannot change branch protection or its own gates. On an existing stand run it once before the agent flows (m4a+).
 
 ## 4. Service access
 
