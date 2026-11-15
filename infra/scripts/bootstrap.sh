@@ -319,6 +319,13 @@ section_demo() {
   echo "demo: isv-product Healthy in prod (Argo CD Synced, Argo Rollouts canary ready)"
 }
 
+section_org_memory() {
+  # Org semantic memory (M7, ADR-0003): swarm-lab/org-memory with lessons/ and
+  # the reuse catalog v1, docs check profile, protected main. Lessons arrive
+  # only through human-reviewed promotion PRs (`org-bootstrap memory promote`).
+  (cd "$ROOT/.." && uv run org-bootstrap memory seed)
+}
+
 section_openproject() {
   # Трекер задач. Пароль админа — из Vault → secret openproject-admin (используется при ПЕРВОЙ установке).
   helm repo add openproject https://charts.openproject.org >/dev/null 2>&1 || true
@@ -527,12 +534,13 @@ case "${1:-all}" in
   monitoring) section_monitoring ;;
   loki)   section_loki ;;
   demo)   section_demo ;;
+  org-memory) section_org_memory ;;
   openproject) section_openproject ;;
   litellm) section_litellm ;;
   llm-key) section_llm_key "${2:-}" ;;
   agents) section_agents ;;
   mcp)    section_mcp ;;
   # `all` brings the stand cluster (k3d / Rancher Desktop) up first so `org-bootstrap apply` works on a fresh machine.
-  all)    cluster_up; section_vault; section_cnpg; section_gitea; section_agent_user; section_runner; section_argocd; section_rollouts; section_monitoring; section_loki; section_demo; section_openproject; section_litellm; section_agents; section_mcp ;;
-  *) echo "usage: $0 [cluster|vault|cnpg|gitea|agent-user|runner|argocd|rollouts|monitoring|loki|demo|openproject|litellm|llm-key [zai|openrouter]|agents|mcp|all]"; exit 2 ;;
+  all)    cluster_up; section_vault; section_cnpg; section_gitea; section_agent_user; section_runner; section_argocd; section_rollouts; section_monitoring; section_loki; section_demo; section_org_memory; section_openproject; section_litellm; section_agents; section_mcp ;;
+  *) echo "usage: $0 [cluster|vault|cnpg|gitea|agent-user|runner|argocd|rollouts|monitoring|loki|demo|org-memory|openproject|litellm|llm-key [zai|openrouter]|agents|mcp|all]"; exit 2 ;;
 esac

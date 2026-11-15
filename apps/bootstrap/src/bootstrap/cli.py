@@ -14,6 +14,10 @@ from bootstrap.profile import Profile, save
 from bootstrap.registry import ProjectRecord, offboard_project, register_or_update
 
 app = typer.Typer(help="AI-Organisation bootstrapper", no_args_is_help=True)
+memory_app = typer.Typer(
+    help="Org memory (M7): seed the repo, promote lessons", no_args_is_help=True
+)
+app.add_typer(memory_app, name="memory")
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 PROFILE_PATH = REPO_ROOT / "infra" / "env.local.yaml"
@@ -228,3 +232,66 @@ def offboard(
 
 if __name__ == "__main__":
     app()
+
+
+def _fetch_episode(api: str, episode_id: int) -> dict[str, object] | None:
+    """Episode from the control plane (agent_api ``/memory/episodes/{id}``)."""
+    import json as _json
+    import urllib.error as _err
+    import urllib.request as _req
+
+    try:
+        with _req.urlopen(f"{api.rstrip('/')}/memory/episodes/{episode_id}", timeout=30) as r:  # noqa: S310
+            data: dict[str, object] = _json.load(r)
+            return data
+    except _err.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise
+
+
+@memory_app.command("seed")
+def memory_seed() -> None:
+    """Seed swarm-lab/org-memory (lessons/, reuse catalog v1, docs profile; idempotent)."""
+    import tempfile
+
+    from bootstrap.org_memory import ORG_MEMORY_REPO, seed_tree
+    from bootstrap.seed import push_seed
+
+    token = _gitea_token()
+    client = GiteaClient(base_url="http://localhost:30080", token=token, owner="swarm-lab")
+    status = client.ensure_repo(ORG_MEMORY_REPO)
+    url = f"{client.base_url}/{client.owner}/{ORG_MEMORY_REPO}"
+    if status == "created":
+        with tempfile.TemporaryDirectory() as tmp:
+            push_seed(f"{url}.git", token, Path(tmp), message="seed: org memory", build=seed_tree)
+    client.apply_check_profile(ORG_MEMORY_REPO, stack="docs", git_url=PLATFORM_GIT_URL)
+    typer.secho(f"Org memory: {status} → {url}", fg=typer.colors.GREEN)
+
+
+@memory_app.command("promote")
+def memory_promote(
+    episode: int = typer.Option(..., "--episode", help="episode id in project memory"),
+    api: str = typer.Option("http://127.0.0.1:8472", help="control plane (agent_api) URL"),
+) -> None:
+    """Open a PR promoting an episode into org memory (human-reviewed, ADR-0003)."""
+    from bootstrap.org_memory import ORG_MEMORY_REPO, lesson_markdown, lesson_path
+
+    found = _fetch_episode(api, episode)
+    if found is None:
+        typer.secho(f"episode {episode} not found at {api}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    path = lesson_path(found)
+    client = GiteaClient(base_url="http://localhost:30080", token=_gitea_token(), owner="swarm-lab")
+    pr_url = client.propose_file(
+        ORG_MEMORY_REPO,
+        path,
+        lesson_markdown(found),
+        branch=f"lesson/{path.removeprefix('lessons/').removesuffix('.md')}",
+        title=f"lesson: {found['title']}",
+        body=(
+            f"Promotion of project episode {episode} ({found['project']}, kind "
+            f"{found['kind']}) into org memory. Review: is it reusable beyond this task?"
+        ),
+    )
+    typer.secho(f"Promotion PR: {pr_url}", fg=typer.colors.GREEN)

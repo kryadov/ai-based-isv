@@ -1,0 +1,5 @@
+# Merge policy (docs profile). Org memory changes are human-reviewed
+# (ADR-0003): no auto-merge.
+auto_merge:
+  enabled: false
+  paths: []

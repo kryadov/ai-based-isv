@@ -1,0 +1,23 @@
+# Reuse catalog v1 (spec §7.4): components to reuse instead of re-building.
+# Every entry: name, kind, repo (canonical), path, description.
+components:
+  - name: check-profile-python
+    kind: ci-profile
+    repo: kryadov/ai-based-isv
+    path: infra/templates/check-profiles/python
+    description: Gitea Actions corridor for Python projects (ruff, mypy, pytest, gitleaks, semgrep) + merge policy.
+  - name: check-profile-docs
+    kind: ci-profile
+    repo: kryadov/ai-based-isv
+    path: infra/templates/check-profiles/docs
+    description: Corridor for repos without code (YAML validity + gitleaks + semgrep).
+  - name: deploy-canary-service
+    kind: deploy-template
+    repo: kryadov/ai-based-isv
+    path: infra/templates/deploy/service
+    description: Argo Rollouts canary 20/50/100 with canary-vs-stable and post-rollout analysis, k6 traffic, ServiceMonitor.
+  - name: isv-product-service-template
+    kind: service-template
+    repo: swarm-lab/isv-product
+    path: .
+    description: FastAPI service with Prometheus metrics per route/code, fault injection and a Dockerfile.
