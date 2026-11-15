@@ -159,6 +159,21 @@ def create_app() -> FastAPI:
             rows = await session.scalars(select(HITLRow).where(HITLRow.status == "pending"))
             return {"pending": [{"id": r.id, "kind": r.kind, "subject": r.subject} for r in rows]}
 
+    @app.get("/hitl/{request_id}")
+    async def get_hitl(request_id: int) -> dict[str, Any]:
+        # The gate corridor (M5) polls its merge request here.
+        async with app.state.session_factory() as session:
+            row = (await session.scalars(select(HITLRow).where(HITLRow.id == request_id))).first()
+            if row is None:
+                raise HTTPException(status_code=404, detail="not found")
+            return {
+                "id": row.id,
+                "kind": row.kind,
+                "subject": row.subject,
+                "status": row.status,
+                "context": row.context_json or {},
+            }
+
     @app.post("/hitl/{request_id}/decision")
     async def decide_hitl(request_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         async with app.state.session_factory() as session:

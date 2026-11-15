@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 from agent_api.main import create_app
@@ -10,8 +11,11 @@ from httpx2 import ASGITransport, AsyncClient
 
 
 @pytest.fixture
-async def client() -> AsyncIterator[AsyncClient]:
+async def client(tmp_path: Path) -> AsyncIterator[AsyncClient]:
     app = create_app()
+    # A fresh database per test: the default ./agent-api.db outlives runs, so
+    # a request left pending by one test (or an aborted run) broke another.
+    app.state.override_database_url = f"sqlite+aiosqlite:///{tmp_path / 'api.db'}"
     async with (
         app.router.lifespan_context(app),
         AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c,
@@ -86,3 +90,25 @@ async def test_audit_append_and_list(client: AsyncClient) -> None:
     r = await client.get("/audit", params={"target": "vertex:3"})
     events = r.json()["events"]
     assert events and events[0]["target"] == "vertex:3"
+
+
+async def test_get_hitl_returns_status_after_decision(client: AsyncClient) -> None:
+    r = await client.post(
+        "/hitl", json={"kind": "merge", "subject": "PR #3", "context": {"pr_url": "u"}}
+    )
+    rid = r.json()["request_id"]
+    r = await client.get(f"/hitl/{rid}")
+    assert r.status_code == 200
+    assert r.json() == {
+        "id": rid,
+        "kind": "merge",
+        "subject": "PR #3",
+        "status": "pending",
+        "context": {"pr_url": "u"},
+    }
+    await client.post(f"/hitl/{rid}/decision", json={"action": "approve", "decided_by": "k"})
+    assert (await client.get(f"/hitl/{rid}")).json()["status"] == "approved"
+
+
+async def test_get_hitl_unknown_404(client: AsyncClient) -> None:
+    assert (await client.get("/hitl/999")).status_code == 404
