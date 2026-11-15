@@ -115,3 +115,19 @@ class EpisodeRow(Base):
     run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     vertex_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AutomationRunRow(Base):
+    """One run of an organization automation (M10, addendum §2)."""
+
+    __tablename__ = "automation_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), index=True)
+    status: Mapped[str] = mapped_column(String(30), default="requested", index=True)
+    requested_by: Mapped[str] = mapped_column(String(120), default="")
+    report_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    hitl_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_issues_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

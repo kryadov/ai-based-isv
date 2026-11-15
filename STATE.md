@@ -3,9 +3,12 @@
 > Read this file FIRST. Then `ARCH.md` (how it works, diagrams), `AGENTS.md` (rules), `TODO.md` (backlog).
 > This file is updated at the end of EVERY increment. If your findings contradict it — verify, then update it.
 
-**Current (2026-11-16): M9 is CLOSED — polyglot dogfood; release v0.10.0.** The corridor is stack-agnostic: a `typescript` check profile (npm ci, tsc, eslint, node:test + the shared gitleaks/semgrep job) and a `ts-service` template (node:http, no framework) under `infra/templates/{check-profiles,projects}`; `org-bootstrap onboard --stack typescript --template ts-service` seeds the code before protection. Acceptance `infra/tests/m9_flow.sh` PASS live: `swarm-lab/ts-greeter` onboarded (seed CI green) → agent adds GET /api/time with a node:test test (done_when = node in docker) → PR #2 merged after CI + review + HITL → merged main green in a clean node container.
+**Current (2026-11-16): M10 is CLOSED — organization panel + Automations; release v1.0.0 (all milestones M1–M10).** The control plane serves a panel at `/ui` for humans only: signed-session login with local users (`AGENT_API_UI_USERS`, `AGENT_API_SESSION_SECRET`; no users → disabled, never open), tabs Inbox (decisions under the human's name), Projects, Swarm, Automations, Metrics, Memory, EN/RU. Automations are code (`infra/automations/*.yaml`), runs live in the control plane, the host engine `python -m agent_runtime.automations run|poll` works and files an Inbox card — actions only after approval. `vuln-scan` (semgrep + gitleaks) → card → one `[vuln-scan]` fix task per repo. Acceptance `infra/tests/m10_flow.sh` PASS live: login/refusals, all 8 tabs, merge card decided as `operator` (second decision 409), vuln-scan on `swarm-lab/vuln-demo` found the shell=True call → card → approved → fix task created.
+- Design `docs/superpowers/specs/2026-11-16-m10-ui-automations-design.md`, plan `docs/superpowers/plans/2026-11-16-m10-ui-automations.md`. Deferred: TODO "M10 follow-ups" (OIDC, Pipeline kanban, browser e2e, cron, more automations, charts, in-cluster agent_api).
+- **Next:** the roadmap of spec §8 is complete. Further work = TODO follow-ups, routed through the self-development corridor (AGENTS.md §11) where suitable.
+
+**Earlier (2026-11-16): M9 closed — polyglot dogfood; release v0.10.0.** The corridor is stack-agnostic: a `typescript` check profile (npm ci, tsc, eslint, node:test + the shared gitleaks/semgrep job) and a `ts-service` template (node:http, no framework) under `infra/templates/{check-profiles,projects}`; `org-bootstrap onboard --stack typescript --template ts-service` seeds the code before protection. Acceptance `infra/tests/m9_flow.sh` PASS live: `swarm-lab/ts-greeter` onboarded (seed CI green) → agent adds GET /api/time with a node:test test (done_when = node in docker) → PR #2 merged after CI + review + HITL → merged main green in a clean node container.
 - Design `docs/superpowers/specs/2026-11-16-m9-polyglot-design.md`, plan `docs/superpowers/plans/2026-11-16-m9-polyglot.md`. Deferred: Java and React profiles, assistant eval profile, per-kind tutorials (TODO "M9 follow-ups").
-- **Next: M10 (organization UI panel + Automations).** Usage: TUTORIAL.md §5.
 
 **Earlier (2026-11-16): M8 closed — swarm mode; release v0.9.0.** A task now becomes a planned vertex graph executed by parallel agents: `swarm plan` (coordinator LLM; the platform validates the graph — acyclic, paths inside the allowed area, no shared files between concurrent vertices, platform-supplied done_when, single-vertex fallback), `swarm run --workers N` (separate lease identities and workspaces on the existing lease queue), handoffs from upstream vertices into dependent prompts, merge backpressure (no new claims while >= 3 merges wait for HITL), `swarm judge` (all done + merged main passes → run done + decision episode), control-plane `/metrics`. Acceptance `infra/tests/m8_flow.sh` PASS live: issue `isv-product#6` → 4 vertices (3 parallel + docs depending on them) → 3 workers (all three independent vertices overlapped) → every vertex merged through the corridor → handoff in the docs vertex prompt → judge done in 469 s.
 - Design `docs/superpowers/specs/2026-11-16-m8-swarm-design.md`, plan `docs/superpowers/plans/2026-11-16-m8-swarm.md`. Found while wiring: the claim response never carried `deps` (fixed). Deferred: TODO "M8 follow-ups".
@@ -31,7 +34,7 @@ Work moved to a no-GPU Windows workstation:
 - **Acceptance on the new stand:** see "Verified acceptance flows".
 - **Previous move:** `docs/superpowers/HANDOFF-2026-11-12.md`.
 
-Last updated: 2026-11-16 (M9 closed — v0.10.0; next M10)
+Last updated: 2026-11-16 (M10 closed — v1.0.0; roadmap M1–M10 complete)
 
 ## What this project is
 
@@ -148,7 +151,7 @@ The worker drives the tracker status loop (In Progress → Done/Blocked with evi
 
 ## Releases / conventions
 
-- Tags/releases per milestone, changelog from merged PRs: `./infra/scripts/release.sh v0.x.y` (spec §13.8). Published: **v0.1.0** (M1), **v0.2.0** (M2 close), **v0.3.0** (M3 close), **v0.4.0** (M4 close, 2026-11-15), **v0.5.0** (M5 close, 2026-11-15), **v0.6.0** (§13.7 level 2: first self-made change, 2026-11-15). **v0.7.0** (M6 close, 2026-11-16), **v0.8.0** (M7 close, 2026-11-16), **v0.9.0** (M8 close, 2026-11-16), **v0.10.0** (M9 close, 2026-11-16). Next: v1.0.0 at M10 close.
+- Tags/releases per milestone, changelog from merged PRs: `./infra/scripts/release.sh v0.x.y` (spec §13.8). Published: **v0.1.0** (M1), **v0.2.0** (M2 close), **v0.3.0** (M3 close), **v0.4.0** (M4 close, 2026-11-15), **v0.5.0** (M5 close, 2026-11-15), **v0.6.0** (§13.7 level 2: first self-made change, 2026-11-15). **v0.7.0** (M6 close, 2026-11-16), **v0.8.0** (M7 close, 2026-11-16), **v0.9.0** (M8 close, 2026-11-16), **v0.10.0** (M9 close, 2026-11-16), **v1.0.0** (M10 close, 2026-11-16).
 - Recursive self-development (platform builds itself): spec §13.7 — level 1 (meta-automations on our own logs) after M3, level 2 (this repo as a target project via tracker+pipeline) — ACHIEVED 2026-11-15 (v0.6.0, AGENTS.md §11). Model/subscription routing research for that path: `docs/superpowers/research/2026-11-14-model-subscriptions-routing.md`.
 - External projects deliver tested release artifacts / Docker images to the org registry (spec §13.5); offboarding in v0 via `org-bootstrap offboard` (spec §13.6).
 - Onboarding per project kind (§13.1): per-kind repo templates + tutorials planned (TODO), wizard v0 in CLI, Projects UI in M10 — confirmed by owner.
