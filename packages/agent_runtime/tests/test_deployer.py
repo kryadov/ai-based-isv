@@ -264,3 +264,33 @@ async def test_same_image_fault_waits_for_the_new_template() -> None:
     # restore: same image, faults cleared
     assert kube.set_calls[-1][0] == NEW
     assert kube.set_calls[-1][2] == {"FAULT_ERROR_RATE": "0", "FAULT_LATENCY_MS": "0"}
+
+
+async def test_remember_verdict_writes_postmortem_or_deploy_episode() -> None:
+    from agent_runtime.deployer import DeployVerdict, remember_verdict
+
+    added: list[tuple[str, str, str, list[str]]] = []
+
+    class Mem:
+        async def add(self, project: str, kind: str, title: str, body: str,
+                      paths: list[str], **_: Any) -> int:  # fmt: skip
+            added.append((project, kind, title, paths))
+            return 1
+
+    base: dict[str, Any] = {
+        "image": NEW,
+        "previous_image": OLD,
+        "revision": "7",
+        "baseline": Slo(error_ratio=0.0, p95_s=0.0),
+        "started": "a",
+        "finished": "b",
+    }
+    rolled = DeployVerdict(status="rolled_back", postmortem="# Postmortem (draft)", **base)
+    ok = DeployVerdict(status="succeeded", **base)
+    await remember_verdict(Mem(), "swarm-lab/isv-product", rolled, ["src/isv_product/main.py"])
+    await remember_verdict(Mem(), "swarm-lab/isv-product", ok, ["src/isv_product/main.py"])
+    assert [(k, p) for _, k, _, p in added] == [
+        ("postmortem", ["src/isv_product/main.py"]),
+        ("deploy", ["src/isv_product/main.py"]),
+    ]
+    assert added[0][2] == f"canary {NEW} rolled back"

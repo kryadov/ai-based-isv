@@ -21,6 +21,7 @@ from typing import Any, Protocol, cast
 
 import httpx
 
+from agent_runtime.deployer import remember_verdict
 from agent_runtime.done_when import (
     DoneWhenUnparseable,
     DoneWhenVerdict,
@@ -748,19 +749,14 @@ async def _process_vertex(
                 session.session_log.append("deploy", deployed.model_dump())
                 result["deploy_verdict"] = deployed.model_dump(exclude={"postmortem"})
                 await client.note(f"deployed {deployed.image} to prod: {deployed.status}")
-                if deployed.status == "succeeded":
-                    await remember(
-                        "deploy",
-                        f"deployed {deployed.image}: succeeded (revision {deployed.revision})",
-                        f"Canary passed analysis; previous {deployed.previous_image}.",
+                if memory is not None:
+                    await remember_verdict(
+                        memory,
+                        project,
+                        deployed,
                         changed,
-                    )
-                elif deployed.postmortem:
-                    await remember(
-                        "postmortem",
-                        f"canary {deployed.image} rolled back",
-                        deployed.postmortem,
-                        changed,
+                        run_id=settings.run_id,
+                        vertex_id=vertex_id,
                     )
                 if deployed.postmortem:
                     manifest = result.get("manifest_path")
