@@ -257,7 +257,11 @@ def resolve_gitea_token(settings: WorkerSettings, kube_runner: Any | None = None
 
 def _mcp_servers(settings: WorkerSettings) -> dict[str, str]:
     """Harness MCP registrations: server name -> URL, configured ones only."""
-    configured = {"tracker": settings.mcp_task_source_url, "llm": settings.mcp_llm_url}
+    configured = {
+        "tracker": settings.mcp_task_source_url,
+        "llm": settings.mcp_llm_url,
+        "observability": settings.mcp_observability_url,
+    }
     return {name: url for name, url in configured.items() if url}
 
 

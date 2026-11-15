@@ -274,6 +274,8 @@ section_rollouts() {
   helm repo update argo >/dev/null
   helm upgrade --install argo-rollouts argo/argo-rollouts \
     --version 2.43.8 \
+    --set controller.metrics.enabled=true \
+    --set controller.metrics.serviceMonitor.enabled=true \
     --namespace "$NS" --wait --timeout 5m
   kubectl -n "$NS" rollout status deploy/argo-rollouts --timeout=300s
   echo "rollouts: argo-rollouts controller ready"
@@ -492,12 +494,14 @@ section_mcp() {
   kubectl apply -f "$ROOT/mcp/task-reader.yaml"
   kubectl apply -f "$ROOT/mcp/llm.yaml"
   kubectl apply -f "$ROOT/mcp/ci.yaml"
+  kubectl apply -f "$ROOT/mcp/observability.yaml"
   # Same tag re-imported: restart so the pods pick up the fresh image.
-  kubectl -n agents rollout restart deploy/task-source deploy/task-reader deploy/llm deploy/ci >/dev/null
+  kubectl -n agents rollout restart deploy/task-source deploy/task-reader deploy/llm deploy/ci deploy/observability >/dev/null
   kubectl -n agents rollout status deploy/task-source --timeout=180s
   kubectl -n agents rollout status deploy/task-reader --timeout=180s
   kubectl -n agents rollout status deploy/llm --timeout=180s
   kubectl -n agents rollout status deploy/ci --timeout=180s
+  kubectl -n agents rollout status deploy/observability --timeout=180s
   # Host access for the worker's tracker loop: publish NodePort 30085 once.
   cluster_publish_nodeport 30085
   local code i

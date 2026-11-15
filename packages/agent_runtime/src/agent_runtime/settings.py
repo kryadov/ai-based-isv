@@ -45,6 +45,7 @@ class WorkerSettings(BaseSettings):
     # --- MCP servers registered into the sandbox harness (M4c; empty = omit) ---
     mcp_task_source_url: str = ""
     mcp_llm_url: str = ""
+    mcp_observability_url: str = ""  # M6: read-only rollout/metrics view
     # --- tracker status loop (M4c): task_ref "owner/repo#N"; empty = disabled ---
     task_ref: str = ""
     task_source_url: str = ""  # task-source MCP endpoint reachable from the worker host

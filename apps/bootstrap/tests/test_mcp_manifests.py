@@ -110,3 +110,58 @@ def test_section_mcp_applies_ci() -> None:
     )
     assert '"$ROOT/mcp/ci.yaml"' in text
     assert "deploy/ci " in text or "deploy/ci\n" in text
+
+
+# --- observability (M6): read-only deploy/metrics view, Prometheus egress only ---
+
+
+def test_observability_server_is_sandbox_accessible_and_secretless() -> None:
+    docs = _docs("mcp/observability.yaml")
+    deploy = _one(docs, "Deployment", "observability")
+    assert _pod_labels(deploy)[SANDBOX_ACCESS] == "yes"
+    container = deploy["spec"]["template"]["spec"]["containers"][0]
+    assert container["command"] == ["python", "-m", "mcp_servers.observability_server"]
+    env = _env(deploy)
+    assert (
+        env["PROMETHEUS_URL"]
+        == "http://kube-prometheus-stack-prometheus.platform.svc.cluster.local:9090"
+    )
+    assert not any("secretKeyRef" in str(e) for e in container.get("env", []))
+    assert deploy["spec"]["template"]["spec"]["automountServiceAccountToken"] is False
+    assert _one(docs, "Service", "observability")["spec"]["ports"][0]["port"] == 8000
+
+
+def test_only_observability_pods_reach_prometheus() -> None:
+    policy = _one(
+        _docs("mcp/observability.yaml"), "NetworkPolicy", "allow-observability-prometheus"
+    )
+    assert policy["spec"]["podSelector"]["matchLabels"] == {
+        "app.kubernetes.io/name": "observability"
+    }
+    rule = policy["spec"]["egress"][0]
+    assert rule["to"][0]["namespaceSelector"]["matchLabels"] == {
+        "kubernetes.io/metadata.name": "platform"
+    }
+    assert rule["ports"] == [{"protocol": "TCP", "port": 9090}]
+    shared = _one(_docs("agents/netpol-allow.yaml"), "NetworkPolicy", "allow-agent-egress")
+    ports = {p["port"] for r in shared["spec"]["egress"] for p in r.get("ports", [])}
+    assert 9090 not in ports, "sandboxes must not reach Prometheus directly"
+
+
+def test_mcp_section_applies_observability_and_rollouts_export_metrics() -> None:
+    text = (INFRA / "scripts" / "bootstrap.sh").read_text(encoding="utf-8")
+    assert 'kubectl apply -f "$ROOT/mcp/observability.yaml"' in text
+    assert "deploy/observability" in text
+    rollouts = text[text.index("section_rollouts() {") :]
+    rollouts = rollouts[: rollouts.index("\n}\n")]
+    assert "controller.metrics.serviceMonitor.enabled=true" in rollouts
+
+
+def test_worker_registers_observability_mcp() -> None:
+    from agent_runtime.settings import WorkerSettings
+    from agent_runtime.worker import _mcp_servers
+
+    settings = WorkerSettings.model_construct(
+        mcp_task_source_url="", mcp_llm_url="", mcp_observability_url="http://o:8000/mcp"
+    )
+    assert _mcp_servers(settings) == {"observability": "http://o:8000/mcp"}

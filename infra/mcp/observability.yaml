@@ -1,0 +1,83 @@
+# observability MCP server (M6): READ-ONLY deploy and service-metrics view for
+# agents — canary rollout phase + analysis runs (Argo Rollouts controller
+# metrics) and service SLOs / instant PromQL. Backed by Prometheus only: no
+# secrets, no Kubernetes API access, no write tools.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: observability
+  namespace: agents
+  labels: &labels
+    app.kubernetes.io/name: observability
+    app.kubernetes.io/component: mcp-server
+    app.kubernetes.io/part-of: agent-runtime
+    agent-runtime.io/sandbox-access: "yes"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: observability
+  template:
+    metadata:
+      labels: *labels
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: server
+          image: mcp-servers:0.1.0
+          imagePullPolicy: Never
+          command: ["python", "-m", "mcp_servers.observability_server"]
+          env:
+            - name: PROMETHEUS_URL
+              value: http://kube-prometheus-stack-prometheus.platform.svc.cluster.local:9090
+            - name: PORT
+              value: "8000"
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 20m, memory: 96Mi}
+            limits: {memory: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: observability
+  namespace: agents
+  labels:
+    app.kubernetes.io/name: observability
+    app.kubernetes.io/component: mcp-server
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: observability
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+# Only the observability pods may reach Prometheus (policies are additive: the
+# namespace default-deny keeps sandboxes away from 9090).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-observability-prometheus
+  namespace: agents
+  labels:
+    app.kubernetes.io/part-of: agent-runtime
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: observability
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: platform
+      ports:
+        - protocol: TCP
+          port: 9090
