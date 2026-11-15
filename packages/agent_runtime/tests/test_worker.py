@@ -1133,3 +1133,21 @@ def test_repo_coords() -> None:
     )
     with pytest.raises(ValueError):
         repo_coords("/tmp/origin.git")
+
+
+async def test_hitl_rejected_fails_terminal(tmp_path: Path) -> None:
+    # A human said no: the vertex must not be retried (and ask the human again).
+    async def runner(ctx: Any, stop: asyncio.Event) -> Any:
+        return _outcome("blocked", "hitl_rejected")
+
+    plane, _ = await _run_gated(tmp_path, runner=runner)
+    body = plane.fail_calls[0][1]
+    assert body["reason"] == "gate:hitl_rejected" and body["terminal"] is True
+
+
+async def test_transient_gate_block_is_not_terminal(tmp_path: Path) -> None:
+    async def runner(ctx: Any, stop: asyncio.Event) -> Any:
+        return _outcome("blocked", "ci_timeout")
+
+    plane, _ = await _run_gated(tmp_path, runner=runner)
+    assert "terminal" not in plane.fail_calls[0][1]

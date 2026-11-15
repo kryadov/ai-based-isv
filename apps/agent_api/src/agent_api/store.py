@@ -152,14 +152,17 @@ async def complete_vertex(
     return cast(CursorResult[Any], result).rowcount > 0
 
 
-async def fail_vertex(session: AsyncSession, vertex_id: int, agent: str) -> bool:
-    """Requeue the vertex (lease lost / done_when not satisfied)."""
+async def fail_vertex(
+    session: AsyncSession, vertex_id: int, agent: str, *, terminal: bool = False
+) -> bool:
+    """Requeue the vertex (lease lost / done_when not satisfied), or — ``terminal``
+    (a human rejection, a canary rollback) — mark it ``failed`` for good."""
     result = await session.execute(
         update(VertexRow)
         .where(
             VertexRow.id == vertex_id, VertexRow.leased_by == agent, VertexRow.status == "running"
         )
-        .values(status="queued", leased_by=None, lease_until=None)
+        .values(status="failed" if terminal else "queued", leased_by=None, lease_until=None)
     )
     await session.commit()
     return cast(CursorResult[Any], result).rowcount > 0

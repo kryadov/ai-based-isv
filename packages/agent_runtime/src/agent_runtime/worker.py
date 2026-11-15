@@ -93,10 +93,14 @@ class ControlPlaneClient:
         )
         response.raise_for_status()
 
-    async def fail(self, vertex_id: int, reason: str | None = None) -> None:
+    async def fail(
+        self, vertex_id: int, reason: str | None = None, *, terminal: bool = False
+    ) -> None:
         payload: dict[str, Any] = {"agent": self._settings.agent}
         if reason is not None:
             payload["reason"] = reason
+        if terminal:
+            payload["terminal"] = True
         response = await self._http.post(
             f"/vertices/{vertex_id}/fail",
             json=payload,
@@ -177,8 +181,10 @@ class TrackedControlPlaneClient(ControlPlaneClient):
             note += f"\nPR: {result['pr_url']}"
         await self._track("done", note, vertex_id)
 
-    async def fail(self, vertex_id: int, reason: str | None = None) -> None:
-        await super().fail(vertex_id, reason=reason)
+    async def fail(
+        self, vertex_id: int, reason: str | None = None, *, terminal: bool = False
+    ) -> None:
+        await super().fail(vertex_id, reason=reason, terminal=terminal)
         note = f"run {self._settings.run_id}: vertex {vertex_id} failed: {reason or 'unknown'}"
         await self._track("blocked", note, vertex_id)
 
@@ -651,7 +657,10 @@ async def _process_vertex(
                         outcome.pr_url,
                         {"pr_url": outcome.pr_url, "vertex_id": vertex_id, "reason": reason},
                     )
-                await client.fail(vertex_id, reason=reason)
+                # A human rejection is final: retrying would ask the human again.
+                await client.fail(
+                    vertex_id, reason=reason, terminal=outcome.reason == "hitl_rejected"
+                )
                 await client.audit(
                     action="fail",
                     target=f"vertex:{vertex_id}",
