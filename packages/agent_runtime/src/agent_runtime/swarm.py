@@ -157,10 +157,15 @@ async def judge_run(
 
 
 def _check_main_factory(
-    repo_url: str, branch: str, done_cmd: str, token: str | None
+    repo_url: str, branch: str, done_cmd: str, token: str | None, *, workdir: Path | None = None
 ) -> Callable[[], Awaitable[tuple[bool, str]]]:
+    """``workdir``: parent of the clone — must be docker-visible when ``done_cmd``
+    mounts ``$PWD`` into a container (the daemon's /tmp is not, M11)."""
+
     async def check() -> tuple[bool, str]:
-        with tempfile.TemporaryDirectory() as tmp:
+        if workdir is not None:
+            workdir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=workdir) as tmp:
             dest = Path(tmp) / "main"
             await asyncio.to_thread(
                 subprocess.run,

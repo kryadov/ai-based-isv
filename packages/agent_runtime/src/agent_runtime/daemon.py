@@ -257,6 +257,7 @@ class StandPorts:
                 "main",
                 cfg.done_when,
                 self.secrets.gitea_token or None,
+                workdir=self.settings.workspace_dir / "judge",
             ),
         )
 
