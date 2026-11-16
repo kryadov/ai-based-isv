@@ -32,6 +32,7 @@ from typing import Any, Literal, Protocol
 
 import httpx
 
+from agent_runtime.api_auth import api_headers
 from agent_runtime.done_when import parse_done_when, validate_done_when
 from agent_runtime.gitops import _git_env
 from agent_runtime.memory import MemoryClient
@@ -199,7 +200,7 @@ async def _main(argv: list[str] | None = None) -> int:
     ns = parser.parse_args(argv)
     api = _env("API_URL", "http://127.0.0.1:8472")
 
-    async with httpx.AsyncClient(base_url=api, timeout=60.0) as http:
+    async with httpx.AsyncClient(base_url=api, timeout=60.0, headers=api_headers()) as http:
         if ns.cmd == "plan":
             llm = (_env("REVIEWER_BASE_URL") or _env("LITELLM_BASE_URL")).rstrip("/")
             async with httpx.AsyncClient() as llm_http:

@@ -24,6 +24,10 @@ spec:
               valueFrom: {secretKeyRef: {name: agent-api, key: ui-users}}
             - name: AGENT_API_SESSION_SECRET
               valueFrom: {secretKeyRef: {name: agent-api, key: session-secret}}
+            # Service endpoints need this bearer token: stand NodePorts bind
+            # 0.0.0.0 (LAN-reachable); the panel keeps its own login.
+            - name: AGENT_API_SERVICE_TOKEN
+              valueFrom: {secretKeyRef: {name: agent-api, key: service-token}}
           readinessProbe:
             httpGet: {path: /healthz, port: http}
             periodSeconds: 5

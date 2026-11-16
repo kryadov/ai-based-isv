@@ -21,6 +21,7 @@ from typing import Any, Protocol, cast
 
 import httpx
 
+from agent_runtime.api_auth import api_headers
 from agent_runtime.deployer import remember_verdict
 from agent_runtime.done_when import (
     DoneWhenUnparseable,
@@ -883,7 +884,7 @@ async def worker_loop(
     """
     stop_event = stop or asyncio.Event()
     own_http = http is None
-    http = http or httpx.AsyncClient(base_url=settings.api_url)
+    http = http or httpx.AsyncClient(base_url=settings.api_url, headers=api_headers())
     tracker_http: httpx.AsyncClient | None = None
     if settings.task_ref and tracker is None and settings.task_source_url:
         tracker_http = httpx.AsyncClient(timeout=30.0)

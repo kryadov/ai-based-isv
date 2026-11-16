@@ -38,6 +38,7 @@ from agent_runtime.swarm import JudgeVerdict, _check_main_factory, judge_run, po
 from agent_runtime.vault_broker import AGENT_TOKEN_PATH, read_gitea_token
 
 LITELLM_MASTER_PATH = "secret/litellm/master"
+SERVICE_TOKEN_PATH = "secret/platform/api"
 INTAKE_LABEL = "swarm"
 
 
@@ -64,6 +65,7 @@ class DaemonSettings(BaseSettings):
 class Secrets:
     litellm_key: str = field(default="", repr=False)
     gitea_token: str = field(default="", repr=False)
+    api_token: str = field(default="", repr=False)
 
 
 def build_worker_env(
@@ -82,6 +84,7 @@ def build_worker_env(
     env.update(
         {
             "AGENT_RUNTIME_API_URL": settings.api_url,
+            "AGENT_RUNTIME_API_TOKEN": secrets.api_token,
             "AGENT_RUNTIME_RUN_ID": str(run_id),
             "AGENT_RUNTIME_AGENT": "swarm",
             "AGENT_RUNTIME_REPO_URL": f"{settings.gitea_url}/{repo}.git",
@@ -283,6 +286,7 @@ def load_secrets(settings: DaemonSettings) -> Secrets:
             _kubectl, root_token=root, path=LITELLM_MASTER_PATH, field="master-key"
         ),
         gitea_token=read_gitea_token(_kubectl, root_token=root, path=AGENT_TOKEN_PATH),
+        api_token=read_gitea_token(_kubectl, root_token=root, path=SERVICE_TOKEN_PATH),
     )
 
 
@@ -291,6 +295,7 @@ def _start_poller(settings: DaemonSettings, secrets: Secrets) -> subprocess.Pope
     env.update(
         {
             "AGENT_RUNTIME_API_URL": settings.api_url,
+            "AGENT_RUNTIME_API_TOKEN": secrets.api_token,
             "AUTOMATIONS_GITEA_URL": settings.gitea_url,
             "AUTOMATIONS_GITEA_TOKEN": secrets.gitea_token,
             "AUTOMATIONS_WORKDIR": str(settings.workspace_dir / "automations"),
@@ -316,7 +321,11 @@ async def _main() -> int:
     poller = _start_poller(settings, secrets)
     log(f"automation poller pid={poller.pid}")
     async with (
-        httpx.AsyncClient(base_url=settings.api_url, timeout=60.0) as api,
+        httpx.AsyncClient(
+            base_url=settings.api_url,
+            headers={"Authorization": f"Bearer {secrets.api_token}"},
+            timeout=60.0,
+        ) as api,
         httpx.AsyncClient(
             base_url=settings.gitea_url,
             headers={"Authorization": f"token {secrets.gitea_token}"},

@@ -18,6 +18,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from agent_runtime.api_auth import api_headers
+
 logger = logging.getLogger(__name__)
 
 MAX_LESSONS = 2
@@ -62,7 +64,9 @@ class MemoryClient:
             "vertex_id": vertex_id,
         }
         try:
-            response = await self._http.post(f"{self._base}/memory/episodes", json=payload)
+            response = await self._http.post(
+                f"{self._base}/memory/episodes", json=payload, headers=api_headers()
+            )
             response.raise_for_status()
             return int(response.json()["id"])
         except (httpx.HTTPError, KeyError, ValueError) as exc:
@@ -74,7 +78,9 @@ class MemoryClient:
     ) -> list[dict[str, Any]]:
         params = {"project": project, "paths": ",".join(paths), "q": text, "limit": str(limit)}
         try:
-            response = await self._http.get(f"{self._base}/memory/slice", params=params)
+            response = await self._http.get(
+                f"{self._base}/memory/slice", params=params, headers=api_headers()
+            )
             response.raise_for_status()
             episodes: list[dict[str, Any]] = response.json().get("episodes", [])
             return episodes

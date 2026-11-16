@@ -28,6 +28,7 @@ from typing import Any
 
 import httpx
 
+from agent_runtime.api_auth import api_headers
 from agent_runtime.cron import cron_matches, latest_tick
 from agent_runtime.gitops import _git_env
 
@@ -310,7 +311,7 @@ async def _main(argv: list[str] | None = None) -> int:
     token = os.environ["AUTOMATIONS_GITEA_TOKEN"]
     workroot = Path(os.environ.get("AUTOMATIONS_WORKDIR", "./.agent-runtime-workspace/automations"))
     async with (
-        httpx.AsyncClient(base_url=api_url, timeout=60.0) as api,
+        httpx.AsyncClient(base_url=api_url, timeout=60.0, headers=api_headers()) as api,
         httpx.AsyncClient(
             base_url=gitea_url, headers={"Authorization": f"token {token}"}, timeout=60.0
         ) as gitea,

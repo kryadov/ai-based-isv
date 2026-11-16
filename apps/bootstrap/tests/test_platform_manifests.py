@@ -40,7 +40,12 @@ def test_deployment_local_image_and_secret_env_only() -> None:
         assert "value" not in env, f"{env['name']} must come from a Secret"
         assert env["valueFrom"]["secretKeyRef"]["name"] == "agent-api"
     names = {e["name"] for e in container["env"]}
-    assert names == {"AGENT_API_DATABASE_URL", "AGENT_API_UI_USERS", "AGENT_API_SESSION_SECRET"}
+    assert names == {
+        "AGENT_API_DATABASE_URL",
+        "AGENT_API_UI_USERS",
+        "AGENT_API_SESSION_SECRET",
+        "AGENT_API_SERVICE_TOKEN",
+    }
     assert container["readinessProbe"]["httpGet"]["path"] == "/healthz"
     assert container["securityContext"]["runAsNonRoot"] is True
 

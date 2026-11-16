@@ -90,3 +90,17 @@ async def test_daemon_loop_survives_tick_error() -> None:
     assert len(calls) == 3
     assert any("gitea down" in line for line in logged)
     assert logged.count("ok") == 2
+
+
+def test_worker_env_carries_the_service_token() -> None:
+    settings = DaemonSettings(repo_root=Path("/repo"), workspace_dir=Path("/repo/ws"))
+    env = build_worker_env(
+        settings,
+        Secrets(litellm_key="mk", api_token="svc-token"),
+        run_id=1,
+        repo="swarm-lab/demo",
+        cfg=parse_project_config(CFG),
+        base={},
+    )
+    assert env["AGENT_RUNTIME_API_TOKEN"] == "svc-token"
+    assert "svc-token" not in repr(Secrets(api_token="svc-token"))

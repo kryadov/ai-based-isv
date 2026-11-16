@@ -532,7 +532,7 @@ section_platform() {
   #   - the pinned commit must be reachable in the lab Gitea copy: when it is
   #     not on main yet (acceptance before merge) it is pushed to the unprotected
   #     branch platform-live; the Application is pinned to that commit.
-  local sha="${1:-}" tag pw sess hash pgpw tok atok rel api="http://localhost:30080/api/v1" phase i
+  local sha="${1:-}" tag pw sess svc hash pgpw tok atok rel api="http://localhost:30080/api/v1" phase i
   [ -n "$sha" ] || { echo "platform: usage: bootstrap.sh platform <commit sha>"; exit 2; }
   tag="${sha:0:7}"
   docker image inspect "swarm-platform:$tag" >/dev/null 2>&1 \
@@ -542,12 +542,17 @@ section_platform() {
   sess="$(vcli kv get -field=session-secret secret/platform/ui 2>/dev/null || true)"
   [ -n "$sess" ] || sess="$(openssl rand -hex 32)"
   vcli kv put secret/platform/ui username=owner "password=$pw" "session-secret=$sess" >/dev/null
+  # Service-API bearer token (M11): stand NodePorts bind 0.0.0.0, so the
+  # control plane's service endpoints are never open; the daemon reads it here.
+  svc="$(vcli kv get -field=token secret/platform/api 2>/dev/null || true)"
+  [ -n "$svc" ] || svc="$(openssl rand -hex 32)"
+  vcli kv put secret/platform/api "token=$svc" >/dev/null
   hash="$(printf '%s' "$pw" | sha256sum | cut -d' ' -f1)"
   pgpw="$(kubectl -n "$NS" get secret postgres-platform-app -o jsonpath='{.data.password}' | base64 -d)"
   kubectl -n "$NS" create secret generic agent-api \
     --from-literal="database-url=postgresql+asyncpg://gitea:$pgpw@postgres-platform-rw.$NS.svc.cluster.local:5432/swarm" \
     --from-literal="ui-users=owner:$hash:admin" \
-    --from-literal="session-secret=$sess" \
+    --from-literal="session-secret=$sess"     --from-literal="service-token=$svc" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   # Argo CD reads the platform repo's lab copy as the non-admin agent user.
   tok="$(vcli kv get -field=token secret/gitea/agent 2>/dev/null || true)"
