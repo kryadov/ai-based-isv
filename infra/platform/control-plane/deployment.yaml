@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-api
+  labels: {app: agent-api}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: agent-api}
+  template:
+    metadata:
+      labels: {app: agent-api}
+    spec:
+      containers:
+        - name: agent-api
+          image: swarm-platform:unset
+          imagePullPolicy: Never  # built on the shared moby engine (no registry)
+          ports:
+            - {name: http, containerPort: 8000}
+          env:
+            - name: AGENT_API_DATABASE_URL
+              valueFrom: {secretKeyRef: {name: agent-api, key: database-url}}
+            - name: AGENT_API_UI_USERS
+              valueFrom: {secretKeyRef: {name: agent-api, key: ui-users}}
+            - name: AGENT_API_SESSION_SECRET
+              valueFrom: {secretKeyRef: {name: agent-api, key: session-secret}}
+            # Service endpoints need this bearer token: stand NodePorts bind
+            # 0.0.0.0 (LAN-reachable); the panel keeps its own login.
+            - name: AGENT_API_SERVICE_TOKEN
+              valueFrom: {secretKeyRef: {name: agent-api, key: service-token}}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+            failureThreshold: 6
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false

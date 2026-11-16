@@ -2,7 +2,8 @@
 # Findings → Inbox card; approving it creates one fix task per affected repo.
 name: vuln-scan
 description: Semgrep + gitleaks over the selected repos; approve to file fix tasks.
-trigger: manual
+trigger: cron
+schedule: "0 6 * * 1"  # Mondays 06:00 UTC; the panel can still request a run
 scope: [swarm-lab/vuln-demo, swarm-lab/isv-product, swarm-lab/ts-greeter]
 role: security-specialist
 budget_minutes: 20

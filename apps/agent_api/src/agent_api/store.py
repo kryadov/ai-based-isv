@@ -32,6 +32,16 @@ def _now() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
+def lease_expired(lease_until: datetime | None, now: datetime) -> bool:
+    """True when a lease ended before ``now`` (naive UTC). Postgres timestamptz
+    comes back aware; SQLite naive — normalise before comparing (M11, live)."""
+    if lease_until is None:
+        return False
+    if lease_until.tzinfo is not None:
+        lease_until = lease_until.astimezone(UTC).replace(tzinfo=None)
+    return lease_until < now
+
+
 async def create_run(
     session: AsyncSession, project: str, task_ref: str, budget_tokens: int = 200_000
 ) -> int:
@@ -40,6 +50,40 @@ async def create_run(
     await session.flush()
     await session.commit()
     return row.id
+
+
+async def list_runs(
+    session: AsyncSession,
+    *,
+    task_ref: str = "",
+    project: str = "",
+    status: str = "",
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Runs newest first, optionally filtered — the dispatcher's dedup lookup (M11)."""
+    query = select(RunRow)
+    if task_ref:
+        query = query.where(RunRow.task_ref == task_ref)
+    if project:
+        query = query.where(RunRow.project == project)
+    if status:
+        query = query.where(RunRow.status == status)
+    rows = list(await session.scalars(query.order_by(RunRow.id.desc()).limit(limit)))
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        count = len(
+            list(await session.scalars(select(VertexRow.id).where(VertexRow.run_id == row.id)))
+        )
+        out.append(
+            {
+                "id": row.id,
+                "project": row.project,
+                "task_ref": row.task_ref,
+                "status": row.status,
+                "vertex_count": count,
+            }
+        )
+    return out
 
 
 async def add_vertex(
@@ -85,8 +129,10 @@ async def claim_vertex(
     )
     now = _now()
     candidate: VertexRow | None = None
+    seen: tuple[str, int] = ("", 0)
     for r in rows:
-        expired = r.lease_until is not None and r.lease_until < now
+        snapshot = (r.status, r.attempts)  # what this claim decided on
+        expired = lease_expired(r.lease_until, now)
         if r.status == "queued":
             pass  # candidate
         elif r.status in ("leased", "running") and expired:
@@ -95,18 +141,25 @@ async def claim_vertex(
             continue
         if not await _deps_satisfied(session, run_id, list(r.deps_json or [])):
             continue
-        candidate = r
+        candidate, seen = r, snapshot
         break
     if candidate is None:
         return None
     result = await session.execute(
         update(VertexRow)
-        .where(VertexRow.id == candidate.id, VertexRow.status == candidate.status)
+        # Optimistic guard: `attempts` grows on every claim, so a competing
+        # claim between our read and this write makes the row miss (an expired
+        # `running` vertex keeps its status — status alone let two workers win).
+        .where(
+            VertexRow.id == candidate.id,
+            VertexRow.status == seen[0],
+            VertexRow.attempts == seen[1],
+        )
         .values(
             status="running",
             leased_by=agent,
             lease_until=_now() + timedelta(seconds=ttl_seconds),
-            attempts=candidate.attempts + 1,
+            attempts=seen[1] + 1,
         )
         .returning(
             VertexRow.id,
@@ -117,8 +170,10 @@ async def claim_vertex(
             VertexRow.attempts,
         )
     )
-    row = result.one()
+    row = result.one_or_none()
     await session.commit()
+    if row is None:
+        return None  # lost the race; the worker polls again
     return {
         "id": row.id,
         "name": row.name,

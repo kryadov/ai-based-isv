@@ -1,0 +1,21 @@
+# Application platform-control (M11): the control plane from the platform repo's
+# lab working copy (Gitea swarm-lab/ai-based-isv, fast-forwarded from GitHub by
+# platform-sync.sh). `platform.sh up` sets the image override per deploy.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-control
+  namespace: platform
+spec:
+  project: swarm-platform
+  source:
+    repoURL: http://gitea-http.platform.svc.cluster.local:3000/swarm-lab/ai-based-isv.git
+    targetRevision: main
+    path: infra/platform/control-plane
+  destination:
+    namespace: platform
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

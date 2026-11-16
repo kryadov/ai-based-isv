@@ -1,0 +1,7 @@
+# Intake config (M11): the platform picks up open issues labelled `swarm`.
+# `done_when` runs node in docker (the stand has no host node); agents cannot
+# change this file (.platform/** is a protected gate path).
+intake: true
+paths: ["src/**", "test/**"]
+done_when: "docker run --rm -v \"$PWD\":/w -w /w node:22.12.0-alpine sh -c 'npm ci --no-audit --no-fund && npm test'"
+workers_per_run: 3

@@ -1,0 +1,19 @@
+# AppProject swarm-platform (M11): the platform's own components. Kept apart
+# from swarm-lab (target projects → prod/staging) so a target project can never
+# deploy into the platform namespace.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: swarm-platform
+  namespace: platform
+spec:
+  description: "The platform itself (namespace platform)"
+  sourceRepos:
+    - http://gitea-http.platform.svc.cluster.local:3000/swarm-lab/ai-based-isv.git
+  destinations:
+    - namespace: platform
+      server: https://kubernetes.default.svc
+  namespaceResourceWhitelist:
+    - {group: apps, kind: Deployment}
+    - {group: "", kind: Service}
+    - {group: monitoring.coreos.com, kind: ServiceMonitor}

@@ -63,3 +63,4 @@ agent-api.db
 .agent-runtime-workspace
 .agent_runtime
 .venv-*/
+.platform-live

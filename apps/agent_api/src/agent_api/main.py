@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import hmac
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -22,7 +23,7 @@ from agent_api.automations import register_automations
 from agent_api.models import AuditRow, Base, HITLRow, RunRow, VertexRow
 from agent_api.settings import Settings, settings
 from agent_api.ui import register_ui
-from agent_api.ui_auth import parse_users
+from agent_api.ui_auth import COOKIE, parse_users, verify
 
 
 def create_engine_session() -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
@@ -44,6 +45,42 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await engine.dispose()
 
 
+# Paths outside the service-token guard: liveness, the Prometheus scrape
+# (aggregates only) and the panel, which has its own human login (M10).
+OPEN_PATHS = ("/healthz", "/metrics")
+PANEL_PREFIX = "/ui"
+
+
+def _panel_user(app: FastAPI, request: Request) -> str | None:
+    session = request.cookies.get(COOKIE, "")
+    user = verify(session, app.state.session_secret) if session else None
+    return user if user and user in app.state.ui_users else None
+
+
+def _guard_service_api(app: FastAPI, token: str) -> None:
+    """Require ``Authorization: Bearer <token>`` on every service endpoint (M11)."""
+    if not token:
+        return
+    expected = f"Bearer {token}".encode()
+
+    @app.middleware("http")
+    async def service_token(request: Request, call_next: Any) -> Response:
+        path = request.url.path
+        if path in OPEN_PATHS or path == PANEL_PREFIX or path.startswith(PANEL_PREFIX + "/"):
+            response: Response = await call_next(request)
+            return response
+        given = request.headers.get("authorization", "").encode()
+        if request.method == "GET" and _panel_user(app, request):
+            # The panel reads a few service listings (automations); a logged-in
+            # human may READ them, while actions go through /ui/api (decided_by).
+            response = await call_next(request)
+            return response
+        if not hmac.compare_digest(given, expected):
+            return JSONResponse({"detail": "service token required"}, status_code=401)
+        response = await call_next(request)
+        return response
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="agent_api", lifespan=lifespan)
     current = Settings()
@@ -53,6 +90,7 @@ def create_app() -> FastAPI:
     app.state.automations_dir = current.automations_dir
     register_automations(app)
     register_ui(app)
+    _guard_service_api(app, current.service_token)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
@@ -68,6 +106,16 @@ def create_app() -> FastAPI:
                 budget_tokens=int(payload.get("budget_tokens", 200_000)),
             )
             return {"run_id": run_id}
+
+    @app.get("/runs")
+    async def get_runs(
+        task_ref: str = "", project: str = "", status: str = "", limit: int = 50
+    ) -> dict[str, Any]:
+        async with app.state.session_factory() as session:
+            runs = await store.list_runs(
+                session, task_ref=task_ref, project=project, status=status, limit=limit
+            )
+        return {"runs": runs}
 
     @app.post("/runs/{run_id}/vertices")
     async def add_vertex(run_id: int, payload: dict[str, Any]) -> dict[str, Any]:

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from agent_api.models import AuditRow
+from datetime import datetime
+from typing import Any
+
+from agent_api.models import AuditRow, VertexRow
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent_api import store
@@ -137,3 +141,44 @@ async def test_claim_returns_deps_for_handoffs(session: AsyncSession) -> None:
     assert await store.complete_vertex(session, first["id"], agent="w", result_data={})
     second = await store.claim_vertex(session, run_id, agent="w")
     assert second is not None and second["deps"] == ["a"]
+
+
+async def test_reclaim_race_hands_an_expired_vertex_to_one_worker(
+    session: AsyncSession, monkeypatch: Any
+) -> None:
+    """M11, live: two workers reclaimed the same expired lease (the UPDATE only
+    re-checked `status`, which stays `running`). A competing claim landing between
+    the read and the write must make this claim lose."""
+    run_id = await _make_run_with_vertices(session)
+    first = await store.claim_vertex(session, run_id, agent="dead-worker")
+    assert first is not None
+    await session.execute(
+        update(VertexRow)
+        .where(VertexRow.id == first["id"])
+        .values(lease_until=datetime(2000, 1, 1))
+    )
+    await session.commit()
+
+    real = store._deps_satisfied
+    raced = False
+
+    async def competing(sess: AsyncSession, rid: int, deps: list[str]) -> bool:
+        nonlocal raced
+        if not raced:
+            raced = True  # another worker wins the reclaim between our read and write
+            await sess.execute(
+                update(VertexRow)
+                .where(VertexRow.id == first["id"])
+                .values(
+                    leased_by="worker-a",
+                    attempts=VertexRow.attempts + 1,
+                    lease_until=datetime(2999, 1, 1),
+                )
+            )
+        return await real(sess, rid, deps)
+
+    monkeypatch.setattr(store, "_deps_satisfied", competing)
+    lost = await store.claim_vertex(session, run_id, agent="worker-b")
+    assert lost is None
+    row = (await session.scalars(select(VertexRow).where(VertexRow.id == first["id"]))).one()
+    assert row.leased_by == "worker-a" and row.attempts == 2

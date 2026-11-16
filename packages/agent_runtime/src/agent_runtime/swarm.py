@@ -32,6 +32,7 @@ from typing import Any, Literal, Protocol
 
 import httpx
 
+from agent_runtime.api_auth import api_headers
 from agent_runtime.done_when import parse_done_when, validate_done_when
 from agent_runtime.gitops import _git_env
 from agent_runtime.memory import MemoryClient
@@ -156,10 +157,15 @@ async def judge_run(
 
 
 def _check_main_factory(
-    repo_url: str, branch: str, done_cmd: str, token: str | None
+    repo_url: str, branch: str, done_cmd: str, token: str | None, *, workdir: Path | None = None
 ) -> Callable[[], Awaitable[tuple[bool, str]]]:
+    """``workdir``: parent of the clone — must be docker-visible when ``done_cmd``
+    mounts ``$PWD`` into a container (the daemon's /tmp is not, M11)."""
+
     async def check() -> tuple[bool, str]:
-        with tempfile.TemporaryDirectory() as tmp:
+        if workdir is not None:
+            workdir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=workdir) as tmp:
             dest = Path(tmp) / "main"
             await asyncio.to_thread(
                 subprocess.run,
@@ -199,7 +205,7 @@ async def _main(argv: list[str] | None = None) -> int:
     ns = parser.parse_args(argv)
     api = _env("API_URL", "http://127.0.0.1:8472")
 
-    async with httpx.AsyncClient(base_url=api, timeout=60.0) as http:
+    async with httpx.AsyncClient(base_url=api, timeout=60.0, headers=api_headers()) as http:
         if ns.cmd == "plan":
             llm = (_env("REVIEWER_BASE_URL") or _env("LITELLM_BASE_URL")).rstrip("/")
             async with httpx.AsyncClient() as llm_http:

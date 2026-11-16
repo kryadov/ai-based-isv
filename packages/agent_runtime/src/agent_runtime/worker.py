@@ -21,6 +21,7 @@ from typing import Any, Protocol, cast
 
 import httpx
 
+from agent_runtime.api_auth import api_headers
 from agent_runtime.deployer import remember_verdict
 from agent_runtime.done_when import (
     DoneWhenUnparseable,
@@ -340,18 +341,23 @@ def startup_executor(
     """Worker-startup executor construction: token resolution + orphan sweep.
 
     k3s only: BEFORE the first claim, sweep sandbox objects orphaned by dead
-    workers (they hold credentials and NodePorts). v0 is single-worker per
-    run — the age-based sweep is safe under that contract (see STATE.md).
+    workers (they hold credentials and NodePorts). The age window is longer
+    than any live session, so concurrent workers never sweep each other.
     """
     if settings.sandbox_backend != "k3s":
         if repo_dir is None:
             raise ValueError("the docker backend needs repo_dir")
         return build_executor(settings, repo_dir=repo_dir, gitea_token="", kube_runner=kube_runner)
     kubectl: Any = kube_runner if kube_runner is not None else _kubectl_runner
+    # A sandbox lives for one executor session; a sibling worker's live sandbox
+    # (swarm/dispatcher: workers start at different times) must never look
+    # orphaned — the window exceeds the longest session plus pod startup.
     reconcile_orphans(
         kubectl,
         namespace=settings.k8s_namespace,
-        max_age_seconds=float(settings.lease_ttl_seconds) * 2,
+        max_age_seconds=max(
+            float(settings.lease_ttl_seconds) * 2, settings.session_timeout_seconds + 600.0
+        ),
     )
     return build_executor(
         settings,
@@ -883,7 +889,7 @@ async def worker_loop(
     """
     stop_event = stop or asyncio.Event()
     own_http = http is None
-    http = http or httpx.AsyncClient(base_url=settings.api_url)
+    http = http or httpx.AsyncClient(base_url=settings.api_url, headers=api_headers())
     tracker_http: httpx.AsyncClient | None = None
     if settings.task_ref and tracker is None and settings.task_source_url:
         tracker_http = httpx.AsyncClient(timeout=30.0)
@@ -997,6 +1003,10 @@ def _default_extractor(settings: WorkerSettings, http: httpx.AsyncClient) -> Ext
 
 def main() -> None:
     """Entry point for ``python -m agent_runtime.worker``."""
+    # Daemon-spawned workers log to <workspace>/w<N>.log (M11): make warnings visible.
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
     settings = WorkerSettings()
     if settings.litellm_api_key:
         os.environ["LITELLM_API_KEY"] = settings.litellm_api_key

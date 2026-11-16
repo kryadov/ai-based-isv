@@ -197,7 +197,11 @@ def test_start_happy_path_returns_handle() -> None:
     assert applied_pod["spec"]["containers"][0]["image"].startswith("opencode-git:"), (
         "the spawned pod must use the git-enabled derived image"
     )
-    assert kube.calls_with("delete") == [], "happy path must not tear anything down"
+    # The only deletes on the happy path are the pre-start sweep of leftovers
+    # (a dead worker's sandbox of the same vertex, M11) — all before the first apply.
+    first_apply = next(i for i, c in enumerate(kube.calls) if "apply" in c[0])
+    deletes = [i for i, c in enumerate(kube.calls) if "delete" in c[0]]
+    assert deletes and max(deletes) < first_apply
 
 
 def test_start_registers_mcp_servers_in_the_pod_config() -> None:
@@ -295,9 +299,10 @@ def test_stop_deletes_service_pod_secret_idempotent() -> None:
     )
     sandbox = KubeSandbox(kube_runner=kube, **_sandbox_args())
     sandbox.start(timeout_seconds=5.0)
+    before = len(kube.calls)
     sandbox.stop()
     sandbox.stop()
-    deletes = kube.calls_with("delete")
+    deletes = [c for c in kube.calls[before:] if "delete" in c[0]]
     assert len(deletes) == 6, "three deletes per stop, idempotent across two stops"
     targets = " ".join(" ".join(argv) for argv, _ in deletes)
     for name in ("service/agent-30-29", "pod/agent-30-29", "secret/agent-30-29"):
@@ -626,13 +631,15 @@ def test_teardown_reports_all_delete_failures() -> None:
                 "kubectl -n agents logs",
                 subprocess.CompletedProcess([], 0, stdout="server password tok\n", stderr=""),
             ),
-            ("delete service", subprocess.CompletedProcess([], 1, stdout="", stderr="e-svc")),
-            ("delete pod", subprocess.CompletedProcess([], 1, stdout="", stderr="e-pod")),
-            ("delete secret", subprocess.CompletedProcess([], 1, stdout="", stderr="e-secret")),
         ]
     )
     sandbox = KubeSandbox(kube_runner=kube, **_sandbox_args())
     sandbox.start(timeout_seconds=5.0)
+    kube.script += [
+        ("delete service", subprocess.CompletedProcess([], 1, stdout="", stderr="e-svc")),
+        ("delete pod", subprocess.CompletedProcess([], 1, stdout="", stderr="e-pod")),
+        ("delete secret", subprocess.CompletedProcess([], 1, stdout="", stderr="e-secret")),
+    ]
     with pytest.raises(KubeSandboxError) as excinfo:
         sandbox.stop()
     message = str(excinfo.value)
@@ -710,3 +717,29 @@ def test_manifests_honor_custom_namespace() -> None:
     assert pod["metadata"]["namespace"] == "agents-x"
     assert secret["metadata"]["namespace"] == "agents-x"
     assert svc["metadata"]["namespace"] == "agents-x"
+
+
+def test_start_clears_a_dead_workers_leftovers_first() -> None:
+    """M11, live: a reclaimed vertex's sandbox name was taken by the dead worker's
+    Secret/Pod (AlreadyExists). The lease holder owns the name: sweep, wait, apply."""
+    kube = FakeKube(
+        [
+            (
+                "get svc",
+                subprocess.CompletedProcess([], 0, stdout=json.dumps({"items": []}), stderr=""),
+            ),
+            ("get pod", subprocess.CompletedProcess([], 0, stdout=_ready_pod_json(), stderr="")),
+            (
+                "kubectl -n agents logs",
+                subprocess.CompletedProcess([], 0, stdout="server password p\n", stderr=""),
+            ),
+        ]
+    )
+    KubeSandbox(kube_runner=kube, **_sandbox_args()).start(timeout_seconds=5.0)
+    argv = [" ".join(c[0]) for c in kube.calls]
+    sweep = [a for a in argv if "delete" in a or "--for=delete" in a]
+    assert any("delete secret/agent-30-29" in a for a in sweep)
+    assert any("delete pod/agent-30-29" in a for a in sweep)
+    assert any("wait --for=delete pod/agent-30-29" in a for a in sweep)
+    first_apply = next(i for i, a in enumerate(argv) if "apply" in a)
+    assert all(argv.index(a) < first_apply for a in sweep)

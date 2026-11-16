@@ -9,6 +9,8 @@ from typing import Any
 
 import httpx
 
+from agent_runtime.api_auth import api_headers
+
 
 class HITLError(RuntimeError):
     """The HITL inbox call failed."""
@@ -37,7 +39,9 @@ class HITLClient:
 
     async def _call(self, method: str, path: str, json: dict[str, Any] | None = None) -> Any:
         try:
-            response = await self._http.request(method, f"{self._base}{path}", json=json)
+            response = await self._http.request(
+                method, f"{self._base}{path}", json=json, headers=api_headers()
+            )
         except httpx.HTTPError as exc:
             raise HITLError(f"{method} {path} failed: {type(exc).__name__}") from None
         if response.status_code >= 400:

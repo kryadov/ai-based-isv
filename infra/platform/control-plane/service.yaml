@@ -1,0 +1,12 @@
+# NodePort 30400: the panel (/ui) and the service API for the host daemon.
+# Rancher Desktop forwards NodePorts to 127.0.0.1 only (m11_flow asserts it).
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-api
+  labels: {app: agent-api}
+spec:
+  type: NodePort
+  selector: {app: agent-api}
+  ports:
+    - {name: http, port: 8000, targetPort: http, nodePort: 30400}

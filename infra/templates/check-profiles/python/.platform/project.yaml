@@ -1,0 +1,8 @@
+# Intake config (M11): the platform picks up open issues labelled `swarm`.
+# `done_when` is the platform-supplied acceptance command for every vertex and
+# for the final judge on merged main; agents cannot change this file
+# (.platform/** is a protected gate path).
+intake: true
+paths: ["src/**", "tests/**", "docs/**"]
+done_when: "uv sync --quiet --all-groups && uv run --quiet pytest -q"
+workers_per_run: 3

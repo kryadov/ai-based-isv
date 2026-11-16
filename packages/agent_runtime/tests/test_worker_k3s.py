@@ -198,7 +198,9 @@ def test_startup_reconciles_orphan_pods(tmp_path: Path, monkeypatch: pytest.Monk
     )
     executor = startup_executor(settings)
     assert isinstance(executor, KubeSandboxExecutorFactory)
-    assert calls == ["reconcile:600.0"], "2 x lease_ttl_seconds sweep window"
+    # session_timeout (900 default) + 600 s pod-startup margin > 2 x lease_ttl (600):
+    # concurrent workers (M8/M11) must never sweep a sibling's live sandbox.
+    assert calls == ["reconcile:1500.0"]
 
 
 async def test_built_k3s_executor_starts_sandbox_per_request(

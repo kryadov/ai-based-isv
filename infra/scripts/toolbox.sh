@@ -53,13 +53,22 @@ tty_flags=(-i)
 [ -t 0 ] && [ -t 1 ] && tty_flags=(-it)
 [ "$#" -gt 0 ] || set -- bash
 
+# Detached mode (M11, platform.sh): TOOLBOX_DETACH=<container name> runs the
+# command as a long-lived container restarted with Rancher Desktop; it gets its
+# own venv volume (TOOLBOX_VENV) so dev runs never re-sync the running
+# platform's environment, and TOOLBOX_WORKDIR (relative to the repo) as cwd.
+run_flags=(--rm "${tty_flags[@]}")
+[ -n "${TOOLBOX_DETACH:-}" ] && run_flags=(-d --restart unless-stopped --name "$TOOLBOX_DETACH")
+venv="${TOOLBOX_VENV:-swarm-toolbox-venv}"
+workdir="$REPO${TOOLBOX_WORKDIR:+/$TOOLBOX_WORKDIR}"
+
 # MSYS must not rewrite the Linux paths below into Windows paths.
-MSYS_NO_PATHCONV=1 exec docker run --rm "${tty_flags[@]}" \
+MSYS_NO_PATHCONV=1 exec docker run "${run_flags[@]}" \
   --network host \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -v "$REPO:$REPO" -w "$REPO" \
+  -v "$REPO:$REPO" -w "$workdir" \
   -v "$KUBECONFIG_DAEMON:/root/.kube/config:ro" \
-  -v swarm-toolbox-venv:/opt/venv \
+  -v "$venv:/opt/venv" \
   -v swarm-toolbox-uv-cache:/root/.cache/uv \
   -v swarm-toolbox-uv-python:/opt/uv-python \
   -e UV_PROJECT_ENVIRONMENT=/opt/venv \

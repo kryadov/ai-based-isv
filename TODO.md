@@ -86,7 +86,7 @@
 - [ ] Specialist consult roles (architecture/security/tests) beyond the bot reviewer; judge as an LLM role for non-test criteria.
 - [ ] Working-memory scratchpad for the coordinator (today: deps' results are the handoff).
 - [ ] Workers on several hosts (today: one host, N processes); NodePort pool 30100–30110 caps concurrent sandboxes at 11.
-- [ ] Scrape the control-plane `/metrics` when agent_api runs in-cluster (today it runs on the host in flows).
+- [x] Scrape the control-plane `/metrics` — **done in M11** (ServiceMonitor `agent-api`).
 
 ## M9 follow-ups (2026-11-16)
 
@@ -96,12 +96,22 @@
 - [ ] Per-kind templates and tutorials `docs/tutorials/onboard-<kind>.md` (spec §13.1.5).
 - [ ] Canary deploy for non-Python services: the M6 deploy templates are service-agnostic but only isv-product is wired.
 
+## M11 follow-ups (2026-11-16)
+
+- [ ] **Stand LAN exposure:** Rancher Desktop forwards every NodePort on `0.0.0.0` and the Windows firewall allows `host-switch.exe` inbound on Private/Domain networks. The control plane now requires a token, but the task-source MCP (:30085) and Prometheus (:30090) have no auth. Owner decision: restrict the two "Rancher Desktop Networking … Exception" rules, or add auth to those services.
+- [ ] Per-identity service tokens (today one shared `secret/platform/api` token for the daemon, workers and poller); rotation.
+- [ ] Retry of a failed task: today one issue = one run (dedup by `task_ref`, any status); a `swarm-retry` label or a panel action.
+- [ ] Graceful worker shutdown on daemon restart (SIGTERM → finish/abandon the session, tear the sandbox down); today leases expire and the orphan sweep reclaims sandboxes.
+- [ ] Browser e2e in CI (Playwright against a local agent_api with SQLite).
+- [ ] Baseline invalidation and coordinator reset (spec §7.3): re-plan vertices when `main` moves under them.
+- [ ] Remove the stale Gitea branch `platform-live` once the pinned commit is on `main` (`platform.sh up` from main does not need it).
+
 ## M10 follow-ups (2026-11-16)
 
 - [ ] OIDC/SSO for the panel; server-side user profiles (language preference).
 - [ ] Pipeline kanban (task → spec → code → gates → review → canary → prod) and Settings tab.
-- [ ] Browser e2e tests of the panel (today: HTTP-level acceptance + `node --check` of app.js).
-- [ ] Cron scheduling of automations (k8s CronJob once agent_api runs in-cluster).
+- [x] Browser e2e tests of the panel — **done in M11** (Playwright, `infra/tests/e2e`); running it in CI: open.
+- [x] Cron scheduling of automations — **done in M11** (the daemon's poller evaluates `trigger: cron`).
 - [ ] The other starter automations (dep-updates, log-analysis, feedback-ingest) and the 26-item catalogue as workflow functions.
 - [ ] Charts in Metrics (trusted change, time-to-accept, DORA, verification debt).
-- [ ] Deploy agent_api + the panel in-cluster (Ingress/NodePort, Postgres secret) instead of running on the host in flows.
+- [x] Deploy agent_api + the panel in-cluster — **done in M11** (Argo CD app `platform-control`, NodePort 30400).
