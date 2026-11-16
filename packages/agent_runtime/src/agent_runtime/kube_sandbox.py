@@ -333,7 +333,26 @@ class KubeSandbox:
 
     # -- lifecycle ----------------------------------------------------------
 
+    def _clear_leftovers(self) -> None:
+        """The name is per (run, vertex) and this worker holds the vertex lease, so
+        an existing Secret/Pod/Service of that name belongs to a dead worker of an
+        earlier attempt (M11: daemon restart). Remove it and wait for the Pod."""
+        self.teardown()
+        self._kube(
+            [
+                "kubectl",
+                "-n",
+                self._namespace,
+                "wait",
+                "--for=delete",
+                f"pod/{self._name}",
+                "--timeout=120s",
+            ],
+            None,
+        )
+
     def start(self, timeout_seconds: float = 300.0) -> SandboxHandle:
+        self._clear_leftovers()
         used = _used_node_ports(self._kube)
         free = [p for p in range(self._low, self._high + 1) if p not in used]
         if not free:

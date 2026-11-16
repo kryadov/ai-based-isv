@@ -129,7 +129,9 @@ async def claim_vertex(
     )
     now = _now()
     candidate: VertexRow | None = None
+    seen: tuple[str, int] = ("", 0)
     for r in rows:
+        snapshot = (r.status, r.attempts)  # what this claim decided on
         expired = lease_expired(r.lease_until, now)
         if r.status == "queued":
             pass  # candidate
@@ -139,18 +141,25 @@ async def claim_vertex(
             continue
         if not await _deps_satisfied(session, run_id, list(r.deps_json or [])):
             continue
-        candidate = r
+        candidate, seen = r, snapshot
         break
     if candidate is None:
         return None
     result = await session.execute(
         update(VertexRow)
-        .where(VertexRow.id == candidate.id, VertexRow.status == candidate.status)
+        # Optimistic guard: `attempts` grows on every claim, so a competing
+        # claim between our read and this write makes the row miss (an expired
+        # `running` vertex keeps its status — status alone let two workers win).
+        .where(
+            VertexRow.id == candidate.id,
+            VertexRow.status == seen[0],
+            VertexRow.attempts == seen[1],
+        )
         .values(
             status="running",
             leased_by=agent,
             lease_until=_now() + timedelta(seconds=ttl_seconds),
-            attempts=candidate.attempts + 1,
+            attempts=seen[1] + 1,
         )
         .returning(
             VertexRow.id,
@@ -161,8 +170,10 @@ async def claim_vertex(
             VertexRow.attempts,
         )
     )
-    row = result.one()
+    row = result.one_or_none()
     await session.commit()
+    if row is None:
+        return None  # lost the race; the worker polls again
     return {
         "id": row.id,
         "name": row.name,
