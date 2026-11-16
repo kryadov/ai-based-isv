@@ -50,7 +50,7 @@ class Ports(Protocol):
     async def list_tasks(self, repo: str) -> list[Task]: ...
     async def comment(self, repo: str, number: int, text: str) -> None: ...
     async def plan(self, run_id: int, task: Task, cfg: ProjectConfig) -> int: ...
-    def spawn(self, run_id: int, repo: str, cfg: ProjectConfig, workers: int) -> list[Any]: ...
+    def spawn(self, run_id: int, task_ref: str, cfg: ProjectConfig, workers: int) -> list[Any]: ...
     async def judge(self, run_id: int, repo: str, cfg: ProjectConfig) -> JudgeVerdict: ...
     async def api_get(self, path: str, params: dict[str, Any]) -> dict[str, Any]: ...
     async def api_post(self, path: str, json: dict[str, Any]) -> dict[str, Any]: ...
@@ -81,11 +81,11 @@ class Dispatcher:
     def _sandboxes_free(self) -> int:
         return self.sandbox_cap - sum(self._live(r) for r in self.procs)
 
-    def _spawn(self, run_id: int, repo: str, cfg: ProjectConfig, open_vertices: int) -> int:
+    def _spawn(self, run_id: int, task_ref: str, cfg: ProjectConfig, open_vertices: int) -> int:
         workers = min(open_vertices, cfg.workers_per_run, self._sandboxes_free())
         if workers <= 0:
             return 0
-        self.procs.setdefault(run_id, []).extend(self.ports.spawn(run_id, repo, cfg, workers))
+        self.procs.setdefault(run_id, []).extend(self.ports.spawn(run_id, task_ref, cfg, workers))
         return workers
 
     # --- steps -------------------------------------------------------------------
@@ -110,7 +110,7 @@ class Dispatcher:
         except Exception as exc:  # the run stays vertex-less; the next tick re-plans it
             events.append(f"run {run_id} ({task.ref}): planning failed: {exc}")
             return 0
-        workers = self._spawn(run_id, task.repo, cfg, count)
+        workers = self._spawn(run_id, task.ref, cfg, count)
         await self.ports.comment(
             task.repo,
             task.number,
@@ -172,7 +172,7 @@ class Dispatcher:
             events.append(await self._judge(run, repo, cfg))
             return False
         if not live and task is not None:
-            workers = self._spawn(run_id, repo, cfg, open_vertices)
+            workers = self._spawn(run_id, str(run["task_ref"]), cfg, open_vertices)
             if workers:
                 events.append(f"run {run_id}: {workers} worker(s) (re)started")
         return True

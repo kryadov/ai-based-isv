@@ -31,8 +31,9 @@ def read_gitea_token(
     namespace: str = "platform",
     pod_label: str = "app.kubernetes.io/name=openbao",
     path: str = AGENT_TOKEN_PATH,
+    field: str = "token",
 ) -> str:
-    """Return the agent Gitea token stored at ``path`` (field: token)."""
+    """Return the secret stored at ``path`` (default: the agent Gitea token, field ``token``)."""
     listing = kubectl_runner(
         ["kubectl", "-n", namespace, "get", "pods", "-l", pod_label, "-o", "json"], None
     )
@@ -46,7 +47,7 @@ def read_gitea_token(
     # shell), never through argv — process listings must not see it.
     remote_script = (
         "BAO_TOKEN=$(head -c 128); export BAO_TOKEN; "
-        "BAO_ADDR=http://127.0.0.1:8200 bao kv get -field=token " + path
+        f"BAO_ADDR=http://127.0.0.1:8200 bao kv get -field={field} " + path
     )
     result = kubectl_runner(
         [

@@ -63,7 +63,7 @@ class FakePorts:
         self._run(run_id)["vertex_count"] = self.plan_size
         return self.plan_size
 
-    def spawn(self, run_id: int, repo: str, cfg: ProjectConfig, workers: int) -> list[FakeProc]:
+    def spawn(self, run_id: int, task_ref: str, cfg: ProjectConfig, workers: int) -> list[FakeProc]:
         self.spawned.append((run_id, workers))
         new = [FakeProc() for _ in range(workers)]
         self.procs.extend(new)
