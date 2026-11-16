@@ -73,6 +73,7 @@ Stand facts are recorded in `infra/env.yaml` (auto-generated — a VET artifact,
 | Argo CD UI | http://localhost:30081 | `admin` / password from secret `argocd-initial-admin-secret` |
 | Grafana | http://localhost:30082 | `admin` / password in Vault `secret/grafana/admin` |
 | Prometheus | http://localhost:30090 | no auth (lab); the M6 deployer reads the pre-rollout baseline here |
+| Panel + control plane | http://localhost:30400/ui | user `owner`, password: `bash infra/scripts/platform.sh password`; service endpoints need the bearer token in Vault `secret/platform/api` (M11, TUTORIAL.md §12) |
 | isv-product (prod) | `kubectl -n prod get rollout isv-product` | Argo Rollouts canary; sections `rollouts` + `demo` (TUTORIAL.md §8) |
 
 ## 5. L0 acceptance tests
@@ -95,6 +96,12 @@ On the Windows stand, prefix each with `./infra/scripts/toolbox.sh bash`, and ru
 - A worker with `AGENT_RUNTIME_GATES_ENABLED=1` waits at the HITL merge gate. List the pending requests with `curl $API/hitl/pending`.
 - Approve: `curl -X POST $API/hitl/<id>/decision -H 'Content-Type: application/json' -d '{"action":"approve","decided_by":"<you>"}'`. To reject, use `"reject"`, which closes the PR.
 - `org-bootstrap onboard --project <name> [--stack python]` seeds the CI check profile and merge policy, sets `PLATFORM_GIT_URL` and protects `main`.
+
+### Run the platform (M11)
+
+After the L0 bootstrap (and `bootstrap.sh demo` for the demo service): `bash infra/scripts/platform.sh up` from host Git Bash. It pins `origin/main` into the worktree `.platform-live`, deploys the control plane as the Argo CD app `platform-control` and starts the daemon container `swarm-platform-daemon`. Then file an issue labelled `swarm` in an onboarded repo. Acceptance: `./infra/scripts/toolbox.sh bash infra/tests/m11_flow.sh`. Details: TUTORIAL.md §12.
+
+⚠ Rancher Desktop forwards NodePorts on `0.0.0.0`, and the Windows firewall allows them inbound on Private/Domain networks: the stand is visible from your LAN (TUTORIAL.md §12).
 
 ### Self-development (spec §13.7 level 2)
 

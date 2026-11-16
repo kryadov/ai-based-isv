@@ -25,7 +25,7 @@ What that means concretely:
 
 ## Current state
 
-**v1.0.0 — the full delivery loop runs on a laptop stand** (Rancher Desktop k3s +
+**v1.1.0 — the platform runs as a standing service on a laptop stand** (Rancher Desktop k3s +
 toolbox), every milestone proven by a live acceptance flow:
 
 - **L0** (OpenBao, Postgres+pgvector, Gitea + Actions, Argo CD + Rollouts,
@@ -41,6 +41,9 @@ toolbox), every milestone proven by a live acceptance flow:
 - **Self-development:** the platform develops itself through its own corridor.
 - **Organization panel** (`/ui`): Inbox decisions, Swarm, Projects, Memory,
   Metrics, Automations.
+- **Standing service** (`platform.sh up`): the control plane and the panel
+  in-cluster (http://localhost:30400/ui); a daemon picks up issues labelled
+  `swarm` in onboarded repos, runs them end to end and fires cron automations.
 
 Start with [TUTORIAL.md](TUTORIAL.md); the authoritative status is [STATE.md](STATE.md).
 

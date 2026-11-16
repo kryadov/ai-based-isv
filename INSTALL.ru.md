@@ -67,6 +67,7 @@ Python 3.12 подхватится автоматически (`.python-version`
 | Argo CD UI | http://localhost:30081 | `admin` / пароль из secret `argocd-initial-admin-secret` |
 | Grafana | http://localhost:30082 | `admin` / пароль в Vault `secret/grafana/admin` |
 | Prometheus | http://localhost:30090 | без авторизации (лаборатория); деплоер M6 берёт отсюда базовую линию |
+| Панель + control plane | http://localhost:30400/ui | пользователь `owner`, пароль: `bash infra/scripts/platform.sh password`; служебным эндпоинтам нужен bearer-токен из Vault `secret/platform/api` (M11, TUTORIAL.ru.md §12) |
 | isv-product (prod) | `kubectl -n prod get rollout isv-product` | канарейка Argo Rollouts; секции `rollouts` + `demo` (TUTORIAL.ru.md §8) |
 
 ## 5. Acceptance-тесты L0
@@ -89,6 +90,12 @@ Python 3.12 подхватится автоматически (`.python-version`
 - Воркер с `AGENT_RUNTIME_GATES_ENABLED=1` ждёт на HITL-гейте мержа. Ожидающие запросы показывает `curl $API/hitl/pending`.
 - Подтвердить: `curl -X POST $API/hitl/<id>/decision -H 'Content-Type: application/json' -d '{"action":"approve","decided_by":"<you>"}'`. Отклонить — `"reject"`, PR при этом закрывается.
 - `org-bootstrap onboard --project <name> [--stack python]` раскладывает check-профиль CI и политику мержа, выставляет `PLATFORM_GIT_URL` и защищает `main`.
+
+### Запуск платформы (M11)
+
+После bootstrap L0 (и `bootstrap.sh demo` для демо-сервиса): `bash infra/scripts/platform.sh up` из Git Bash на хосте. Команда пинит `origin/main` в worktree `.platform-live`, разворачивает control plane как приложение Argo CD `platform-control` и запускает контейнер-демон `swarm-platform-daemon`. Дальше заведите issue с меткой `swarm` в подключённом репо. Приёмка: `./infra/scripts/toolbox.sh bash infra/tests/m11_flow.sh`. Подробности — TUTORIAL.ru.md §12.
+
+⚠ Rancher Desktop пробрасывает NodePort'ы на `0.0.0.0`, а брандмауэр Windows пропускает их входящими в профилях Private/Domain: стенд виден из вашей локальной сети (TUTORIAL.ru.md §12).
 
 ### Самообеспечение (спека §13.7, уровень 2)
 

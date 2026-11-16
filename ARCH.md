@@ -199,6 +199,24 @@ The corridor, the agents, the reviewer, HITL and memory are stack-agnostic. `m9_
   - the host engine (`agent_runtime.automations`) works, then files an Inbox card (HITL `automation`);
   - **actions happen only after a human approves**: for `vuln-scan`, one tracker issue per affected repo.
 
+### 4·M11. The platform as a standing service
+
+```
+ host (Windows + Rancher Desktop)                       k3s (namespace platform)
+ ┌─────────────────────────────────────────┐          ┌──────────────────────────────┐
+ │ swarm-platform-daemon (toolbox image,   │  bearer   │ Argo CD app platform-control │
+ │  --restart unless-stopped, .platform-live)├────────▶│  agent-api (swarm-platform)  │
+ │  dispatcher: Gitea issues `swarm` → run  │  :30400   │  /ui panel (login)           │
+ │   → plan → worker subprocesses → judge   │◀──────────┤  ServiceMonitor → Prometheus │
+ │  automation poller: panel + cron         │           └──────────────────────────────┘
+ │  workers → k3s sandboxes (agents ns)     │
+ └─────────────────────────────────────────┘
+```
+
+- **Pinned code.** `platform.sh up` pins a commit (worktree `.platform-live`), builds `swarm-platform:<sha7>`, deploys it through Argo CD and (re)starts the daemon. Editing the dev tree never changes the running platform.
+- **Intake.** Each repo's `.platform/project.yaml` (`intake`, `paths`, `done_when`, `deploy`, `workers_per_run`) is a protected gate file. The dispatcher owns runs whose project is `intake:<owner/repo>`, dedups by `task_ref` and caps the load at 2 active runs and 11 sandboxes. A restart re-adopts pending runs.
+- **Service API.** The control plane requires a bearer token on service endpoints (stand NodePorts bind 0.0.0.0). The panel session may only read; actions go through `/ui/api`.
+
 ### 4a. Agent roles catalog
 
 Implemented via the `identities` registry (M3): a role maps to `allowed_sections`

@@ -272,6 +272,8 @@ Guarantees:
 
 ## 11. The organization panel and Automations (M10)
 
+> Since M11 the panel runs in-cluster at http://localhost:30400/ui: start it with `platform.sh up` (§12). The manual way below is for development.
+
 The panel is served by the control plane at `/ui`. It is for humans only; agents are service identities and never log in. Enable it with local users (OIDC is planned):
 
 ```bash
@@ -305,12 +307,67 @@ AGENT_RUNTIME_API_URL=http://127.0.0.1:8472 AUTOMATIONS_GITEA_TOKEN=$(bao_get se
 
 `vuln-scan` runs semgrep (configs from the definition) and gitleaks over its scope and files an Inbox card with the findings. Approving the card creates one `[vuln-scan]` fix task per affected repo. A rejection does nothing.
 
-## 12. What is not there yet
+## 12. Run the platform here: a standing service (M11)
+
+Until M11, the platform worked only while an acceptance script ran. Now it runs as a service on the stand.
+
+```bash
+bash infra/scripts/platform.sh up          # host Git Bash; idempotent; default ref: origin/main
+bash infra/scripts/platform.sh status      # pin, daemon, panel, Argo app
+bash infra/scripts/platform.sh password    # the panel password of user `owner` (prints it)
+bash infra/scripts/platform.sh logs 100    # the daemon: dispatcher + automation poller
+bash infra/scripts/platform.sh restart | down
+```
+
+`up` does three things:
+1. **Pins the code.** It creates the git worktree `.platform-live` at the ref. Editing your dev tree never changes the running platform; run `up` again to move the pin.
+2. **Deploys the control plane.** It builds the image `swarm-platform:<sha7>` and deploys agent_api plus the panel as the Argo CD app **`platform-control`** (namespace `platform`).
+3. **Starts the daemon.** The container `swarm-platform-daemon` runs with `--restart unless-stopped`, so it survives closed terminals and Rancher restarts.
+
+**The panel:** http://localhost:30400/ui, user `owner`. Every service endpoint on :30400 needs the bearer token from OpenBao `secret/platform/api`. Stand NodePorts listen on every interface, so the API is never left open. A logged-in panel session may *read* the listings the panel shows; every action goes through the panel's own `/ui/api`, recorded under your name.
+
+**Give the platform a task**
+1. The repo needs `.platform/project.yaml` with `intake: true`, which `onboard` seeds from the check profile:
+   ```yaml
+   intake: true
+   paths: ["src/**", "tests/**"]                 # what agents may change
+   done_when: "uv sync … && uv run pytest -q"    # the platform's acceptance command
+   deploy: {app: isv-product, namespace: prod}   # optional: canary after merge
+   workers_per_run: 3
+   ```
+2. File an issue there with the label **`swarm`**.
+3. Within ~30 s the dispatcher picks it up:
+   - creates a run, plans the vertex graph, starts agents and comments the plan on the issue;
+   - merge decisions appear in the panel **Inbox**;
+   - when every vertex is done, it judges merged `main` against `done_when` and comments the verdict.
+4. One issue gets one run: to retry, file a new issue.
+
+**Limits:**
+- 2 active runs and 11 sandboxes (the NodePort pool) at a time; extra issues wait.
+- The platform repo itself is opt-in (`intake: false` in its `.platform/project.yaml`); its merges stay HITL either way.
+- Restarting the daemon is safe: the next tick takes over pending runs, and expired leases are reclaimed.
+- After a Rancher Desktop restart OpenBao comes up sealed. The panel keeps working, but the daemon restarts until it can read its secrets: run `platform.sh up`, which unseals OpenBao first.
+
+**Updating gate files.** `onboard` and `seed-demo` update the profile files in an already protected repo through **one PR** (`platform/profile-update`), merged after CI.
+
+**Cron automations.** A definition with `trigger: cron` and `schedule: "<m h dom mon dow>"` (UTC) gets a run requested by the daemon's poller when a tick passes. A tick missed while the daemon was down is caught up once. `vuln-scan` runs on Mondays at 06:00 UTC; its findings still wait for your approval in the Inbox.
+
+**Acceptance:**
+```bash
+bash infra/scripts/platform.sh up --ref <ref>
+./infra/scripts/toolbox.sh bash infra/tests/m11_flow.sh   # e2e in Chromium + issue → merged → canary, no flow help
+```
+
+The browser e2e alone: `PANEL_URL=… PANEL_USER=owner PANEL_PASSWORD=… PANEL_CARD_ID=… bash infra/tests/e2e/run.sh`.
+
+> ⚠ **The stand's NodePorts are reachable from your LAN.** Rancher Desktop forwards them on `0.0.0.0`, and the Windows firewall allows `host-switch.exe` inbound on Private/Domain networks. Gitea, LiteLLM and Postgres are password- or key-protected, but the task-source MCP (:30085) and Prometheus (:30090) have no auth. Treat the stand as LAN-visible, or restrict the two "Rancher Desktop Networking … Exception" firewall rules.
+
+## 13. What is not there yet
 
 - OIDC/SSO.
 - The Pipeline kanban.
-- Browser e2e tests of the panel.
-- Cron scheduling for automations, and the other catalogue automations (dep-updates, log-analysis, feedback-ingest, …).
+- The other catalogue automations (dep-updates, log-analysis, feedback-ingest, …).
+- A service-identity scheme beyond one shared API token; browser e2e in CI.
 - Embeddings and code indexing.
 - Baseline invalidation.
 - Workers on several hosts.

@@ -3,7 +3,48 @@
 > Read this file FIRST. Then `ARCH.md` (how it works, diagrams), `AGENTS.md` (rules), `TODO.md` (backlog).
 > This file is updated at the end of EVERY increment. If your findings contradict it — verify, then update it.
 
-**Current (2026-11-16): M10 is CLOSED — organization panel + Automations; release v1.0.0 (all milestones M1–M10).** The control plane serves a panel at `/ui` for humans only: signed-session login with local users (`AGENT_API_UI_USERS`, `AGENT_API_SESSION_SECRET`; no users → disabled, never open), tabs Inbox (decisions under the human's name), Projects, Swarm, Automations, Metrics, Memory, EN/RU. Automations are code (`infra/automations/*.yaml`), runs live in the control plane, the host engine `python -m agent_runtime.automations run|poll` works and files an Inbox card — actions only after approval. `vuln-scan` (semgrep + gitleaks) → card → one `[vuln-scan]` fix task per repo. Acceptance `infra/tests/m10_flow.sh` PASS live: login/refusals, all 8 tabs, merge card decided as `operator` (second decision 409), vuln-scan on `swarm-lab/vuln-demo` found the shell=True call → card → approved → fix task created.
+**Current (2026-11-16): M11 is CLOSED — the platform runs as a standing service on the stand; release v1.1.0.** `bash infra/scripts/platform.sh up` does three things:
+- pins a commit (worktree `.platform-live`);
+- deploys agent_api and the panel in-cluster as the Argo CD app `platform-control` (image `swarm-platform:<sha7>`, NodePort 30400, ServiceMonitor);
+- starts the daemon container `swarm-platform-daemon` (`--restart unless-stopped`, own venv volume).
+
+Inside the daemon:
+- the **dispatcher** turns open issues labelled `swarm` in repos whose `.platform/project.yaml` says `intake: true` into runs: plan → run-scoped worker processes → judge → verdict comment. It dedups by `task_ref`, caps load at 2 active runs and 11 sandboxes, and re-adopts pending runs after a restart;
+- the **automation poller** handles panel requests plus **cron** (`trigger: cron`; `vuln-scan` runs Mondays 06:00 UTC).
+
+Acceptance `infra/tests/m11_flow.sh` PASS live (3rd run):
+- control plane Synced/Healthy, token enforced;
+- **browser e2e** (Playwright/Chromium) PASS;
+- issue `isv-product#16` → run 33 created by the dispatcher → daemon restarted mid-run → vertex reclaimed → PR → CI → review → merge card approved from the panel → canary Healthy → judged done, verdict on the issue, exactly 1 run.
+- m5 regression PASS (run 34) after the worker, store and sandbox fixes.
+
+Design `docs/superpowers/specs/2026-11-16-m11-platform-live-design.md`, plan `docs/superpowers/plans/2026-11-16-m11-platform-live.md`.
+
+**Live findings, all fixed with tests:**
+1. agent_api imported `yaml` without declaring pyyaml (crashed alone in its image) → dependency + packaging test.
+2. Stand NodePorts bind `0.0.0.0` and the Windows firewall lets Rancher's host-switch in on Private networks, so the stand is LAN-visible → **service-API bearer token** (OpenBao `secret/platform/api`; the panel session is read-only on service endpoints). The owner decides about the firewall (TODO "M11 follow-ups").
+3. Lease expiry compared Postgres timestamptz with the naive store clock (TypeError → claim 500) → expired leases were **never reclaimed** since M3.
+4. Reclaim race: two workers won the same expired vertex → optimistic guard on `attempts`.
+5. A reclaimed vertex's sandbox collided with the dead worker's leftovers → pre-start sweep.
+6. Concurrent canaries of one app (two merges of one swarm run) → per-app deploy lock + "already live".
+7. The orphan sweep window equalled the session timeout → window > session + 600 s.
+8. The judge cloned into the daemon's /tmp (invisible to docker for TS `done_when`) → workdir.
+
+**Other changes:**
+- profile updates into a protected `main` go through one PR (`platform/profile-update`);
+- the intake label `swarm` is created by the check profile.
+
+**Next:** TODO "M11 follow-ups":
+- the LAN-exposure decision;
+- per-identity tokens;
+- retry of failed tasks;
+- graceful worker shutdown;
+- e2e in CI;
+- baseline invalidation.
+
+Runs 31 and 32 (`isv-product#12`, `#13`) were casualties of findings 3–6: closed with an operator comment.
+
+**Earlier (2026-11-16): M10 closed — organization panel + Automations; release v1.0.0 (all milestones M1–M10).** The control plane serves a panel at `/ui` for humans only: signed-session login with local users (`AGENT_API_UI_USERS`, `AGENT_API_SESSION_SECRET`; no users → disabled, never open), tabs Inbox (decisions under the human's name), Projects, Swarm, Automations, Metrics, Memory, EN/RU. Automations are code (`infra/automations/*.yaml`), runs live in the control plane, the host engine `python -m agent_runtime.automations run|poll` works and files an Inbox card — actions only after approval. `vuln-scan` (semgrep + gitleaks) → card → one `[vuln-scan]` fix task per repo. Acceptance `infra/tests/m10_flow.sh` PASS live: login/refusals, all 8 tabs, merge card decided as `operator` (second decision 409), vuln-scan on `swarm-lab/vuln-demo` found the shell=True call → card → approved → fix task created.
 - Design `docs/superpowers/specs/2026-11-16-m10-ui-automations-design.md`, plan `docs/superpowers/plans/2026-11-16-m10-ui-automations.md`. Deferred: TODO "M10 follow-ups" (OIDC, Pipeline kanban, browser e2e, cron, more automations, charts, in-cluster agent_api).
 - **Next:** the roadmap of spec §8 is complete. Further work = TODO follow-ups, routed through the self-development corridor (AGENTS.md §11) where suitable.
 
@@ -34,7 +75,7 @@ Work moved to a no-GPU Windows workstation:
 - **Acceptance on the new stand:** see "Verified acceptance flows".
 - **Previous move:** `docs/superpowers/HANDOFF-2026-11-12.md`.
 
-Last updated: 2026-11-16 (M10 closed — v1.0.0; roadmap M1–M10 complete)
+Last updated: 2026-11-16 (M11 closed — v1.1.0; the platform runs as a standing service)
 
 ## What this project is
 
@@ -75,6 +116,7 @@ Verified acceptance flows (run them through the toolbox: `./infra/scripts/toolbo
 ./infra/tests/m4b_flow.sh          # same vertex in a k3s sandbox pod: NetworkPolicy + Secret + NodePort + netpol negative
 ./infra/tests/m4c_flow.sh          # Gitea issue → run → agent in pod via MCP → branch + evidence → tracker In Progress → Done; MCP netpol (I2/I3)
 ./infra/tests/m5_flow.sh           # + gate corridor: PR → CI (checks + security) → bot review → HITL approve → merged → issue Done
+./infra/tests/m11_flow.sh          # standing platform (after `platform.sh up`): browser e2e + swarm issue → dispatcher → merged → canary, daemon restart mid-run
 ```
 
 **m5_flow PASS live (2026-11-15, run 11):** PR #2 merged; `ci / checks` and `ci / security` green; one bot review; HITL #2 approved; 131 s from claim to merge. Before the green run, the corridor found and blocked real defects in its own environment:
