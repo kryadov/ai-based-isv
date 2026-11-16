@@ -1,7 +1,7 @@
 """Automation engine (M10, addendum §2): host-side runner of org automations.
 
     python -m agent_runtime.automations run vuln-scan     # manual / cron
-    python -m agent_runtime.automations poll [--once]     # runs requested from the panel
+    python -m agent_runtime.automations poll [--once]     # panel requests + cron schedules
 
 A run works, stores a REPORT, and — when there is something to act on — files
 an Inbox card (HITL kind ``automation``). Actions (creating fix tasks in the
@@ -22,12 +22,16 @@ import subprocess
 import tempfile
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import httpx
 
+from agent_runtime.cron import cron_matches, latest_tick
 from agent_runtime.gitops import _git_env
+
+__all__ = ["cron_matches", "due", "latest_tick", "schedule_tick"]
 
 GITLEAKS_IMAGE = "zricethezav/gitleaks:v8.28.0"
 TOP_FINDINGS = 20
@@ -244,6 +248,54 @@ async def _execute(api: httpx.AsyncClient, run: dict[str, Any], definitions: dic
         )  # fmt: skip
 
 
+def _parse_ts(text: str) -> datetime:
+    """agent_api timestamps: Postgres is tz-aware, SQLite naive UTC."""
+    moment = datetime.fromisoformat(text)
+    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+
+
+def due(
+    definition: dict[str, Any],
+    last_run_at: datetime | None,
+    now: datetime,
+    started_at: datetime,
+) -> bool:
+    """True iff a cron tick ≤ now passed after the last run (or after the poller
+    started, when the automation never ran: past ticks never fire on first start)."""
+    if definition.get("trigger") != "cron":
+        return False
+    try:
+        tick = latest_tick(str(definition.get("schedule", "")), now)
+    except ValueError:
+        return False
+    if tick is None:
+        return False
+    return tick > (last_run_at or started_at)
+
+
+async def schedule_tick(
+    api: httpx.AsyncClient,
+    definitions: dict[str, dict[str, Any]],
+    *,
+    now: datetime,
+    started_at: datetime,
+) -> list[str]:
+    """Request a run (``requested_by: cron``) of every due cron automation."""
+    fired: list[str] = []
+    for name, definition in sorted(definitions.items()):
+        if definition.get("trigger") != "cron":
+            continue
+        runs = (await api.get("/automations/runs", params={"name": name, "limit": 1})).json()
+        last = runs["runs"][0]["created_at"] if runs["runs"] else None
+        if due(definition, _parse_ts(last) if last else None, now, started_at):
+            response = await api.post(
+                "/automations/runs", json={"name": name, "requested_by": "cron"}
+            )
+            response.raise_for_status()
+            fired.append(name)
+    return fired
+
+
 async def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Automation engine (M10)")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -274,7 +326,19 @@ async def _main(argv: list[str] | None = None) -> int:
             )
             print(f"automation {ns.name}: run {run_id} executed")
             return 0
+        started_at = datetime.now(UTC)
         while True:
+            # Cron (M11): request due scheduled runs; executed below like panel requests.
+            try:
+                definitions = {
+                    d["name"]: d for d in (await api.get("/automations")).json()["automations"]
+                }
+                for name in await schedule_tick(
+                    api, definitions, now=datetime.now(UTC), started_at=started_at
+                ):
+                    print(f"automation {name}: scheduled run requested (cron)")
+            except httpx.HTTPError as exc:
+                print(f"automation scheduler: {exc}")
             for run in (await api.get("/automations/runs", params={"status": "requested"})).json()[
                 "runs"
             ]:
