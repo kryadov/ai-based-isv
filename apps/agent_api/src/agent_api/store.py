@@ -42,6 +42,40 @@ async def create_run(
     return row.id
 
 
+async def list_runs(
+    session: AsyncSession,
+    *,
+    task_ref: str = "",
+    project: str = "",
+    status: str = "",
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Runs newest first, optionally filtered — the dispatcher's dedup lookup (M11)."""
+    query = select(RunRow)
+    if task_ref:
+        query = query.where(RunRow.task_ref == task_ref)
+    if project:
+        query = query.where(RunRow.project == project)
+    if status:
+        query = query.where(RunRow.status == status)
+    rows = list(await session.scalars(query.order_by(RunRow.id.desc()).limit(limit)))
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        count = len(
+            list(await session.scalars(select(VertexRow.id).where(VertexRow.run_id == row.id)))
+        )
+        out.append(
+            {
+                "id": row.id,
+                "project": row.project,
+                "task_ref": row.task_ref,
+                "status": row.status,
+                "vertex_count": count,
+            }
+        )
+    return out
+
+
 async def add_vertex(
     session: AsyncSession,
     run_id: int,

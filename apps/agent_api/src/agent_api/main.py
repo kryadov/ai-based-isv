@@ -69,6 +69,16 @@ def create_app() -> FastAPI:
             )
             return {"run_id": run_id}
 
+    @app.get("/runs")
+    async def get_runs(
+        task_ref: str = "", project: str = "", status: str = "", limit: int = 50
+    ) -> dict[str, Any]:
+        async with app.state.session_factory() as session:
+            runs = await store.list_runs(
+                session, task_ref=task_ref, project=project, status=status, limit=limit
+            )
+        return {"runs": runs}
+
     @app.post("/runs/{run_id}/vertices")
     async def add_vertex(run_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         async with app.state.session_factory() as session:
