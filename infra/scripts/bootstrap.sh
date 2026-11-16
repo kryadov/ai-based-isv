@@ -522,6 +522,76 @@ section_mcp() {
   echo "mcp: task-source (write, host-only :30085), task-reader + llm + ci (sandbox, *.agents.svc:8000) Ready"
 }
 
+section_platform() {
+  # The control plane in-cluster (M11): agent_api + the panel as Argo CD app
+  # platform-control. Usage: bootstrap.sh platform <sha> (platform.sh up builds
+  # swarm-platform:<sha7> first). Idempotent:
+  #   - the owner's panel password + session secret live in OpenBao
+  #     secret/platform/ui (generated once, never printed here);
+  #   - Secret agent-api: DB URL (CNPG rw service), UI users, session secret;
+  #   - the pinned commit must be reachable in the lab Gitea copy: when it is
+  #     not on main yet (acceptance before merge) it is pushed to the unprotected
+  #     branch platform-live; the Application is pinned to that commit.
+  local sha="${1:-}" tag pw sess hash pgpw tok atok rel api="http://localhost:30080/api/v1" phase i
+  [ -n "$sha" ] || { echo "platform: usage: bootstrap.sh platform <commit sha>"; exit 2; }
+  tag="${sha:0:7}"
+  docker image inspect "swarm-platform:$tag" >/dev/null 2>&1 \
+    || { echo "platform: image swarm-platform:$tag missing — run platform.sh up"; exit 1; }
+  pw="$(vcli kv get -field=password secret/platform/ui 2>/dev/null || true)"
+  [ -n "$pw" ] || pw="$(openssl rand -hex 12)"
+  sess="$(vcli kv get -field=session-secret secret/platform/ui 2>/dev/null || true)"
+  [ -n "$sess" ] || sess="$(openssl rand -hex 32)"
+  vcli kv put secret/platform/ui username=owner "password=$pw" "session-secret=$sess" >/dev/null
+  hash="$(printf '%s' "$pw" | sha256sum | cut -d' ' -f1)"
+  pgpw="$(kubectl -n "$NS" get secret postgres-platform-app -o jsonpath='{.data.password}' | base64 -d)"
+  kubectl -n "$NS" create secret generic agent-api \
+    --from-literal="database-url=postgresql+asyncpg://gitea:$pgpw@postgres-platform-rw.$NS.svc.cluster.local:5432/swarm" \
+    --from-literal="ui-users=owner:$hash:admin" \
+    --from-literal="session-secret=$sess" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  # Argo CD reads the platform repo's lab copy as the non-admin agent user.
+  tok="$(vcli kv get -field=token secret/gitea/agent 2>/dev/null || true)"
+  [ -n "$tok" ] || { echo "platform: no secret/gitea/agent — run: bootstrap.sh agent-user"; exit 1; }
+  kubectl -n "$NS" create secret generic argocd-repo-gitea-ai-based-isv \
+    --from-literal=url=http://gitea-http.platform.svc.cluster.local:3000/swarm-lab/ai-based-isv.git \
+    --from-literal=username=swarm-agent --from-literal="password=$tok" \
+    --dry-run=client -o yaml \
+    | kubectl label --local -f - argocd.argoproj.io/secret-type=repository --dry-run=client -o yaml \
+    | kubectl apply -f - >/dev/null
+  # The pinned commit must exist in the Gitea copy.
+  atok="$(vcli kv get -field=token secret/gitea/admin)"
+  rel="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: token $atok" "$api/repos/swarm-lab/ai-based-isv/git/commits/$sha")"
+  if [ "$rel" != "200" ]; then
+    git -C "$ROOT/.." -c "http.extraHeader=Authorization: token $atok" \
+      push -q -f http://localhost:30080/swarm-lab/ai-based-isv.git "$sha:refs/heads/platform-live" \
+      || { echo "platform: could not push $tag to Gitea branch platform-live"; exit 1; }
+    echo "platform: $tag pushed to Gitea branch platform-live (not on main yet)"
+  fi
+  kubectl apply -f "$ROOT/../infra/argocd/appproject-platform.yaml" >/dev/null
+  kubectl apply -f "$ROOT/../infra/argocd/application-platform-control.yaml" >/dev/null
+  kubectl -n "$NS" patch application platform-control --type merge -p \
+    "{\"spec\":{\"source\":{\"targetRevision\":\"$sha\",\"kustomize\":{\"images\":[\"swarm-platform:unset=swarm-platform:$tag\"]}}}}" >/dev/null
+  kubectl -n "$NS" annotate application platform-control argocd.argoproj.io/refresh=hard --overwrite >/dev/null
+  phase=""
+  for i in $(seq 1 60); do
+    phase="$(kubectl -n "$NS" get application platform-control -o jsonpath='{.status.sync.status}/{.status.health.status}/{.status.sync.revision}' 2>/dev/null || true)"
+    case "$phase" in "Synced/Healthy/$sha") break ;; esac
+    sleep 5
+  done
+  case "$phase" in "Synced/Healthy/$sha") ;; *) echo "platform: platform-control not Synced/Healthy at $tag ($phase)"; exit 1 ;; esac
+  kubectl -n "$NS" rollout status deployment/agent-api --timeout=180s >/dev/null
+  for i in $(seq 1 30); do
+    curl -sf -m 3 -o /dev/null http://localhost:30400/healthz && break
+    sleep 2
+  done
+  curl -sf -m 3 -o /dev/null http://localhost:30400/healthz || { echo "platform: :30400/healthz not answering"; exit 1; }
+  echo "platform: control plane swarm-platform:$tag Healthy — panel http://localhost:30400/ui (user owner; password: platform.sh password)"
+}
+
+section_platform_password() {
+  vcli kv get -field=password secret/platform/ui
+}
+
 case "${1:-all}" in
   vault)  section_vault ;;
   cnpg)   section_cnpg ;;
@@ -540,7 +610,9 @@ case "${1:-all}" in
   llm-key) section_llm_key "${2:-}" ;;
   agents) section_agents ;;
   mcp)    section_mcp ;;
+  platform) section_platform "${2:-}" ;;
+  platform-password) section_platform_password ;;
   # `all` brings the stand cluster (k3d / Rancher Desktop) up first so `org-bootstrap apply` works on a fresh machine.
   all)    cluster_up; section_vault; section_cnpg; section_gitea; section_agent_user; section_runner; section_argocd; section_rollouts; section_monitoring; section_loki; section_demo; section_org_memory; section_openproject; section_litellm; section_agents; section_mcp ;;
-  *) echo "usage: $0 [cluster|vault|cnpg|gitea|agent-user|runner|argocd|rollouts|monitoring|loki|demo|org-memory|openproject|litellm|llm-key [zai|openrouter]|agents|mcp|all]"; exit 2 ;;
+  *) echo "usage: $0 [cluster|vault|cnpg|gitea|agent-user|runner|argocd|rollouts|monitoring|loki|demo|org-memory|openproject|litellm|llm-key [zai|openrouter]|agents|mcp|platform <sha>|platform-password|all]"; exit 2 ;;
 esac

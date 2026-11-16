@@ -7,6 +7,7 @@ import json
 import urllib.error
 import urllib.request
 from collections.abc import Mapping, Sequence
+from typing import Any
 
 REPO_NAME = "isv-product"
 README_CONTENT = """# isv-product
@@ -14,6 +15,10 @@ README_CONTENT = """# isv-product
 Organization demo project (seeded by the bootstrapper).
 Real code appears via tracker tasks through the platform pipeline.
 """
+
+
+# Issues with this label are picked up by the platform dispatcher (M11).
+INTAKE_LABEL = "swarm"
 
 
 class GiteaClient:
@@ -122,6 +127,24 @@ class GiteaClient:
             raise RuntimeError(f"gitea: could not open PR {branch} → main ({code})")
         return str(data.get("html_url", ""))
 
+    def ensure_label(self, repo: str, name: str, color: str, description: str) -> None:
+        """Create the issue label unless the repo already has it (M11 intake label)."""
+        code, body = self._request("GET", f"/repos/{self.owner}/{repo}/labels")
+        existing: Any = body
+        if (
+            code == 200
+            and isinstance(existing, list)
+            and any(isinstance(lb, dict) and lb.get("name") == name for lb in existing)
+        ):
+            return
+        code, _ = self._request(
+            "POST",
+            f"/repos/{self.owner}/{repo}/labels",
+            {"name": name, "color": color, "description": description},
+        )
+        if code >= 400 and code != 409:
+            raise RuntimeError(f"gitea: could not create label {name!r} on {repo} ({code})")
+
     def apply_check_profile(
         self,
         repo: str,
@@ -144,6 +167,7 @@ class GiteaClient:
         files = {**profile_files(stack), **(overrides or {})}
         for path, content in files.items():
             self.put_file(repo, path, content)
+        self.ensure_label(repo, INTAKE_LABEL, "#2f5bd3", "the platform picks this issue up (M11)")
         var_path = f"/repos/{self.owner}/{repo}/actions/variables/PLATFORM_GIT_URL"
         code, _ = self._request("POST", var_path, {"value": git_url})
         if code == 409:

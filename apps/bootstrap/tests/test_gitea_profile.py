@@ -211,3 +211,19 @@ def test_demo_project_config_deploys_isv_product() -> None:
     assert cfg.intake is True
     assert cfg.deploy is not None and cfg.deploy.app == "isv-product"
     assert cfg.deploy.namespace == "prod"
+
+
+def test_profile_ensures_the_intake_label() -> None:
+    rec = Recorder()
+    rec.apply_check_profile("demo", stack="python", git_url="http://gitea-http:3000")
+    posts = [(path, p) for m, path, p in rec.calls if m == "POST" and path.endswith("/labels")]
+    assert posts and posts[0][0] == "/repos/o/demo/labels"
+    assert posts[0][1] is not None and posts[0][1]["name"] == "swarm"
+
+
+def test_profile_keeps_an_existing_intake_label() -> None:
+    rec = Recorder()
+    rec.bodies[("GET", "/repos/o/demo/labels")] = [{"name": "swarm"}]  # type: ignore[assignment]
+    rec.responses[("GET", "/repos/o/demo/labels")] = 200
+    rec.apply_check_profile("demo", stack="python", git_url="http://gitea-http:3000")
+    assert not [p for m, p, _ in rec.calls if m == "POST" and p.endswith("/labels")]

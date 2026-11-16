@@ -1,0 +1,15 @@
+# Build context = the repo root (pinned worktree); only sources enter the image.
+**/.git
+**/.venv
+**/__pycache__
+**/.mypy_cache
+**/.pytest_cache
+**/.ruff_cache
+.agent-runtime-workspace
+.agent_runtime
+.platform-live
+.superpowers
+infra/.vault-*
+input-docs
+*.db
+.env
