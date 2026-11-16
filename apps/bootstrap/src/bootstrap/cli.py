@@ -155,6 +155,18 @@ def apply(
     typer.secho("Done.", fg=typer.colors.GREEN)
 
 
+# isv-product's intake config (M11): the python profile plus its canary target.
+DEMO_PROJECT_CONFIG = """\
+# Intake config (M11): the platform picks up open issues labelled `swarm`;
+# merged changes roll out by canary to the lab prod namespace (M6).
+intake: true
+paths: ["src/**", "tests/**", "docs/**"]
+done_when: "uv sync --quiet --all-groups && uv run --quiet pytest -q"
+deploy: {app: isv-product, namespace: prod}
+workers_per_run: 3
+"""
+
+
 @app.command()
 def seed_demo() -> None:
     """Seed swarm-lab/isv-product: service code + deploy/ + check profile (idempotent)."""
@@ -169,7 +181,12 @@ def seed_demo() -> None:
             push_seed(f"{url}.git", token, Path(tmp), message="seed: isv-product service + deploy")
     else:
         typer.secho("Repo exists: seed not re-applied (re-seed is explicit)", fg="yellow")
-    client.apply_check_profile(REPO_NAME, stack="python", git_url=PLATFORM_GIT_URL)
+    client.apply_check_profile(
+        REPO_NAME,
+        stack="python",
+        git_url=PLATFORM_GIT_URL,
+        overrides={".platform/project.yaml": DEMO_PROJECT_CONFIG},
+    )
     typer.secho(f"Demo repo: {status} → {url}", fg=typer.colors.GREEN)
 
 

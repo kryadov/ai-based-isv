@@ -6,7 +6,7 @@ import base64
 import json
 import urllib.error
 import urllib.request
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 REPO_NAME = "isv-product"
 README_CONTENT = """# isv-product
@@ -123,7 +123,13 @@ class GiteaClient:
         return str(data.get("html_url", ""))
 
     def apply_check_profile(
-        self, repo: str, *, stack: str, git_url: str, push_whitelist: Sequence[str] = ()
+        self,
+        repo: str,
+        *,
+        stack: str,
+        git_url: str,
+        push_whitelist: Sequence[str] = (),
+        overrides: Mapping[str, str] | None = None,
     ) -> None:
         """Seed the stack's CI corridor + merge policy and protect ``main`` (M5).
 
@@ -133,7 +139,10 @@ class GiteaClient:
         """
         from bootstrap.profiles import REQUIRED_CONTEXTS, profile_files
 
-        for path, content in profile_files(stack).items():
+        # ``overrides`` replace profile files per repo (e.g. a project.yaml with
+        # a deploy target) so a re-run never flips a file between two contents.
+        files = {**profile_files(stack), **(overrides or {})}
+        for path, content in files.items():
             self.put_file(repo, path, content)
         var_path = f"/repos/{self.owner}/{repo}/actions/variables/PLATFORM_GIT_URL"
         code, _ = self._request("POST", var_path, {"value": git_url})

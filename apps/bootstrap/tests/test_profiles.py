@@ -25,6 +25,7 @@ def test_python_profile_has_workflow_and_policy() -> None:
     assert set(profile_files("python")) == {
         ".gitea/workflows/ci.yml",
         ".platform/merge-policy.yaml",
+        ".platform/project.yaml",
     }
 
 

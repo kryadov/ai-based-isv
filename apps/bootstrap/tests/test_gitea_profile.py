@@ -38,6 +38,7 @@ def test_profile_files_then_variable_then_protection() -> None:
     assert files == [
         "/repos/o/demo/contents/.gitea/workflows/ci.yml",
         "/repos/o/demo/contents/.platform/merge-policy.yaml",
+        "/repos/o/demo/contents/.platform/project.yaml",
     ]
     order = [p for _, p in writes]
     var = order.index("/repos/o/demo/actions/variables/PLATFORM_GIT_URL")
@@ -183,3 +184,30 @@ def test_existing_protection_403_is_updated() -> None:
     rec = Recorder({("POST", "/repos/o/demo/branch_protections"): 403})
     rec.apply_check_profile("demo", stack="python", git_url="http://x")
     assert "/repos/o/demo/branch_protections/main" in _paths(rec, "PATCH")
+
+
+def test_profile_overrides_replace_a_profile_file() -> None:
+    rec = Recorder()
+    rec.apply_check_profile(
+        "demo",
+        stack="python",
+        git_url="http://gitea-http:3000",
+        overrides={".platform/project.yaml": "intake: true\n"},
+    )
+    puts = [p for m, path, p in rec.calls if path.endswith("/contents/.platform/project.yaml")]
+    assert len([p for p in puts if p]) == 1
+    import base64
+
+    last = puts[-1]
+    assert last is not None
+    assert base64.b64decode(str(last["content"])).decode() == "intake: true\n"
+
+
+def test_demo_project_config_deploys_isv_product() -> None:
+    from agent_runtime.project_config import parse_project_config
+    from bootstrap.cli import DEMO_PROJECT_CONFIG
+
+    cfg = parse_project_config(DEMO_PROJECT_CONFIG)
+    assert cfg.intake is True
+    assert cfg.deploy is not None and cfg.deploy.app == "isv-product"
+    assert cfg.deploy.namespace == "prod"

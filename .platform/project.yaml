@@ -1,0 +1,7 @@
+# Intake config of the platform repo itself (M11). Opt-in: self-development
+# through the standing dispatcher is off until the owner flips `intake`.
+# Every merge stays HITL either way (merge-policy.yaml, platform_repos).
+intake: false
+paths: ["apps/**", "packages/**", "docs/**"]
+done_when: "uv sync --quiet --all-packages --locked && uv run --quiet pytest -q"
+workers_per_run: 2
