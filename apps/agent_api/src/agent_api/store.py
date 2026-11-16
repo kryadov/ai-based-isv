@@ -32,6 +32,16 @@ def _now() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
+def lease_expired(lease_until: datetime | None, now: datetime) -> bool:
+    """True when a lease ended before ``now`` (naive UTC). Postgres timestamptz
+    comes back aware; SQLite naive — normalise before comparing (M11, live)."""
+    if lease_until is None:
+        return False
+    if lease_until.tzinfo is not None:
+        lease_until = lease_until.astimezone(UTC).replace(tzinfo=None)
+    return lease_until < now
+
+
 async def create_run(
     session: AsyncSession, project: str, task_ref: str, budget_tokens: int = 200_000
 ) -> int:
@@ -120,7 +130,7 @@ async def claim_vertex(
     now = _now()
     candidate: VertexRow | None = None
     for r in rows:
-        expired = r.lease_until is not None and r.lease_until < now
+        expired = lease_expired(r.lease_until, now)
         if r.status == "queued":
             pass  # candidate
         elif r.status in ("leased", "running") and expired:

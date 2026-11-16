@@ -1003,6 +1003,10 @@ def _default_extractor(settings: WorkerSettings, http: httpx.AsyncClient) -> Ext
 
 def main() -> None:
     """Entry point for ``python -m agent_runtime.worker``."""
+    # Daemon-spawned workers log to <workspace>/w<N>.log (M11): make warnings visible.
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
     settings = WorkerSettings()
     if settings.litellm_api_key:
         os.environ["LITELLM_API_KEY"] = settings.litellm_api_key
