@@ -181,12 +181,14 @@ def seed_demo() -> None:
             push_seed(f"{url}.git", token, Path(tmp), message="seed: isv-product service + deploy")
     else:
         typer.secho("Repo exists: seed not re-applied (re-seed is explicit)", fg="yellow")
-    client.apply_check_profile(
+    proposal = client.apply_check_profile(
         REPO_NAME,
         stack="python",
         git_url=PLATFORM_GIT_URL,
         overrides={".platform/project.yaml": DEMO_PROJECT_CONFIG},
     )
+    if proposal:
+        typer.secho(f"Profile update via PR (main is protected): {proposal}", fg="yellow")
     typer.secho(f"Demo repo: {status} → {url}", fg=typer.colors.GREEN)
 
 
@@ -229,9 +231,11 @@ def onboard(
                 build=lambda dest: template_tree(template, dest),
             )
     # The gate corridor (M5): CI check profile + merge policy + protected main.
-    client.apply_check_profile(
+    proposal = client.apply_check_profile(
         project, stack=stack, git_url=PLATFORM_GIT_URL, push_whitelist=push_whitelist
     )
+    if proposal:
+        typer.secho(f"Profile update via PR (main is protected): {proposal}", fg="yellow")
     register_or_update(ProjectRecord(name=project, kind=kind, owner=owner, reason=reason))
     typer.secho(
         f"Project {project}: repo {status}, registered in infra/projects.yaml",

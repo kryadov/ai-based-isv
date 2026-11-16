@@ -227,3 +227,37 @@ def test_profile_keeps_an_existing_intake_label() -> None:
     rec.responses[("GET", "/repos/o/demo/labels")] = 200
     rec.apply_check_profile("demo", stack="python", git_url="http://gitea-http:3000")
     assert not [p for m, p, _ in rec.calls if m == "POST" and p.endswith("/labels")]
+
+
+def test_protected_main_gets_one_proposal_pr() -> None:
+    rec = Recorder(
+        responses={
+            ("POST", "/repos/o/demo/contents/.platform/project.yaml"): 403,
+            ("GET", "/repos/o/demo/branches/platform/profile-update"): 404,
+            ("POST", "/repos/o/demo/contents"): 201,
+            ("POST", "/repos/o/demo/pulls"): 201,
+        },
+        bodies={("POST", "/repos/o/demo/pulls"): {"html_url": "http://g/o/demo/pulls/9"}},
+    )
+    url = rec.apply_check_profile("demo", stack="python", git_url="http://gitea-http:3000")
+    assert url == "http://g/o/demo/pulls/9"
+    multi = next(p for m, path, p in rec.calls if m == "POST" and path == "/repos/o/demo/contents")
+    assert multi is not None
+    assert multi["new_branch"] == "platform/profile-update"
+    files = multi["files"]
+    assert isinstance(files, list) and [f["path"] for f in files] == [".platform/project.yaml"]
+    assert files[0]["operation"] == "create"
+    # protection is still (re)applied
+    assert any(path.endswith("/branch_protections") for _, path, _ in rec.calls)
+
+
+def test_pending_proposal_is_not_duplicated() -> None:
+    rec = Recorder(
+        responses={
+            ("POST", "/repos/o/demo/contents/.platform/project.yaml"): 403,
+            ("GET", "/repos/o/demo/branches/platform/profile-update"): 200,
+        }
+    )
+    url = rec.apply_check_profile("demo", stack="python", git_url="http://gitea-http:3000")
+    assert url == "pending: platform/profile-update"
+    assert not [p for m, p, _ in rec.calls if m == "POST" and p == "/repos/o/demo/pulls"]

@@ -18,7 +18,10 @@ TABS = ["inbox", "projects", "swarm", "pipeline", "automations", "metrics", "mem
 def test_panel_end_to_end(page: Page) -> None:
     errors: list[str] = []
     page.on("pageerror", lambda exc: errors.append(f"pageerror: {exc}"))
-    page.on("console", lambda msg: errors.append(f"console: {msg.text}") if msg.type == "error" else None)
+    page.on(
+        "console",
+        lambda msg: errors.append(f"console: {msg.text}") if msg.type == "error" else None,
+    )
 
     # 1) login: a wrong password is refused, the right one opens the shell
     page.goto(f"{URL}/ui")
