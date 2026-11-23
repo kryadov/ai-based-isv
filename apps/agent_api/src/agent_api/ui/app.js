@@ -103,7 +103,15 @@ async function viewSwarm(view) {
     view.append(el("p", { class: "muted" }, t("swarm.empty")));
     return;
   }
+  const seen = new Set();  // runs come newest first: the first per task is its newest
   for (const run of runs) {
+    const newest = !seen.has(run.task_ref);
+    seen.add(run.task_ref);
+    const retry = async () => {
+      await api(`/ui/api/runs/${run.id}/retry`, { method: "POST" });
+      render();
+    };
+    const canRetry = newest && run.status === "failed" && run.project.startsWith("intake:");
     const rows = run.vertices.map((v) =>
       el(
         "tr",
@@ -122,6 +130,7 @@ async function viewSwarm(view) {
         { class: "card" },
         el("h3", {}, `${t("swarm.run")} ${run.id} · ${run.task_ref} `, status(run.status)),
         el("table", {}, el("tr", {}, ...["id", "vertex", "status", "deps", "agent", "PR"].map((h) => el("th", {}, h))), ...rows),
+        canRetry ? el("div", { class: "actions" }, el("button", { class: "retry", onclick: retry }, t("swarm.retry"))) : null,
       ),
     );
   }

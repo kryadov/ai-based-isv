@@ -121,6 +121,44 @@ def register_ui(app: FastAPI) -> None:
             )
         return {"id": request_id, "status": status, "decided_by": user}
 
+    @app.post("/ui/api/runs/{run_id}/retry")
+    async def ui_retry_run(run_id: int, request: Request) -> dict[str, Any]:
+        """A new run for a task whose newest run failed (M12). The dispatcher owns
+        ``intake:`` runs and plans a vertex-less pending run on its next tick."""
+        user = require_user(request)
+        if app.state.ui_users[user].role != "admin":
+            raise HTTPException(status_code=403, detail="admin role required")
+        async with app.state.session_factory() as session:
+            run = (await session.scalars(select(RunRow).where(RunRow.id == run_id))).first()
+            if run is None:
+                raise HTTPException(status_code=404, detail="run not found")
+            newest = (
+                await session.scalars(
+                    select(RunRow)
+                    .where(RunRow.task_ref == run.task_ref)
+                    .order_by(RunRow.id.desc())
+                    .limit(1)
+                )
+            ).first()
+            if run.status != "failed" or newest is None or newest.id != run.id:
+                raise HTTPException(
+                    status_code=409, detail="only the newest run of a task, when failed"
+                )
+            new_id = await store.create_run(
+                session,
+                project=run.project,
+                task_ref=run.task_ref,
+                budget_tokens=run.budget_tokens,
+            )
+            await store.append_audit(
+                session,
+                actor=f"ui:{user}",
+                action="run_retry",
+                target=f"run:{run_id}",
+                payload={"new_run_id": new_id, "task_ref": run.task_ref},
+            )
+        return {"run_id": new_id, "retry_of": run_id}
+
     @app.post("/ui/api/automations/{name}/run")
     async def ui_run_automation(name: str, request: Request) -> dict[str, Any]:
         user = require_user(request)

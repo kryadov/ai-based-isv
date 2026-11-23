@@ -14,6 +14,7 @@
   "inbox.waiting": "waiting",
   "swarm.empty": "No runs yet.",
   "swarm.run": "Run",
+  "swarm.retry": "Retry",
   "projects.registry": "Registry",
   "projects.runs": "Runs per repo",
   "automations.run": "Run now",

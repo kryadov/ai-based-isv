@@ -183,3 +183,40 @@ def test_stop_workers_terminates_then_kills_after_the_grace() -> None:
     assert polite.terminated and not polite.killed
     assert stubborn.terminated and stubborn.killed
     assert not gone.terminated
+
+
+async def test_stand_ports_read_labels_and_remove_the_retry_label() -> None:
+    import httpx
+    from agent_runtime.daemon import StandPorts
+
+    seen: list[tuple[str, str]] = []
+
+    def gitea(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        if request.url.path.endswith("/issues") and request.method == "GET":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "number": 7,
+                        "title": "t",
+                        "body": "b",
+                        "labels": [{"id": 3, "name": "swarm"}, {"id": 9, "name": "swarm-retry"}],
+                    }
+                ],
+            )
+        if request.url.path.endswith("/issues/7/labels") and request.method == "GET":
+            return httpx.Response(
+                200, json=[{"id": 3, "name": "swarm"}, {"id": 9, "name": "swarm-retry"}]
+            )
+        return httpx.Response(204)
+
+    settings = DaemonSettings(repo_root=Path("/repo"), workspace_dir=Path("/repo/ws"))
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(gitea), base_url="http://gitea"
+    ) as client:
+        ports = StandPorts(settings, Secrets(), client, client, client)
+        tasks = await ports.list_tasks("swarm-lab/demo")
+        await ports.remove_label("swarm-lab/demo", 7, "swarm-retry")
+    assert tasks[0].labels == ("swarm", "swarm-retry")
+    assert ("DELETE", "/api/v1/repos/swarm-lab/demo/issues/7/labels/9") in seen

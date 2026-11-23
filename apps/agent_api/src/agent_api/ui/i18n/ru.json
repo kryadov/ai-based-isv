@@ -14,6 +14,7 @@
   "inbox.waiting": "ждёт",
   "swarm.empty": "Запусков пока нет.",
   "swarm.run": "Запуск",
+  "swarm.retry": "Повторить",
   "projects.registry": "Реестр",
   "projects.runs": "Запуски по репозиториям",
   "automations.run": "Запустить",

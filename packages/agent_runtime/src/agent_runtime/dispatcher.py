@@ -22,13 +22,14 @@ The dispatcher owns the decisions; every side effect goes through ``Ports``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from agent_runtime.project_config import ProjectConfig, parse_project_config
 from agent_runtime.swarm import TERMINAL, JudgeVerdict, Proc
 
 INTAKE_PREFIX = "intake:"
+RETRY_LABEL = "swarm-retry"  # M12: a human asks for another run of a failed task
 
 
 @dataclass
@@ -38,6 +39,7 @@ class Task:
     title: str
     body: str
     open: bool = True
+    labels: tuple[str, ...] = field(default=())
 
     @property
     def ref(self) -> str:
@@ -49,6 +51,7 @@ class Ports(Protocol):
     async def read_config(self, repo: str) -> str | None: ...
     async def list_tasks(self, repo: str) -> list[Task]: ...
     async def comment(self, repo: str, number: int, text: str) -> None: ...
+    async def remove_label(self, repo: str, number: int, label: str) -> None: ...
     async def plan(self, run_id: int, task: Task, cfg: ProjectConfig) -> int: ...
     def spawn(self, run_id: int, task_ref: str, cfg: ProjectConfig, workers: int) -> list[Any]: ...
     async def judge(self, run_id: int, repo: str, cfg: ProjectConfig) -> JudgeVerdict: ...
@@ -177,6 +180,32 @@ class Dispatcher:
                 events.append(f"run {run_id}: {workers} worker(s) (re)started")
         return True
 
+    async def _retry_allowed(
+        self, task: Task, newest: dict[str, Any], workers: int, events: list[str]
+    ) -> bool:
+        """The ``swarm-retry`` label (M12): only a failed newest run gets a new one.
+
+        The label is consumed either way, with a comment saying what happened; the
+        new run itself is created (and planned) by the caller.
+        """
+        status = str(newest.get("status", ""))
+        run_id = int(newest["id"])
+        if status == "failed":
+            if self._sandboxes_free() < workers:
+                return False  # keep the label: retried once sandboxes free up
+            note = f"Platform: retry requested — run {run_id} failed; starting a new run."
+            events.append(f"{task.ref}: retry after failed run {run_id}")
+            allowed = True
+        elif status == "done":
+            note = f"Platform: retry ignored — run {run_id} is already done."
+            allowed = False
+        else:
+            note = f"Platform: retry ignored — run {run_id} is still running ({status})."
+            allowed = False
+        await self.ports.remove_label(task.repo, task.number, RETRY_LABEL)
+        await self.ports.comment(task.repo, task.number, note)
+        return allowed
+
     async def tick(self) -> list[str]:
         events: list[str] = []
         self._reap()
@@ -196,7 +225,11 @@ class Dispatcher:
                 if not task.open or active >= self.max_active_runs:
                     continue
                 existing = await self.ports.api_get("/runs", {"task_ref": task.ref, "limit": 1})
-                if existing["runs"]:
+                newest = existing["runs"][0] if existing["runs"] else None
+                retry = newest is not None and RETRY_LABEL in task.labels
+                if newest is not None and not (
+                    retry and await self._retry_allowed(task, newest, cfg.workers_per_run, events)
+                ):
                     continue
                 if self._sandboxes_free() < cfg.workers_per_run:
                     events.append(f"{task.ref}: waiting for sandboxes")

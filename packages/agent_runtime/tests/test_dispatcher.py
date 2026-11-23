@@ -36,6 +36,7 @@ class FakePorts:
     spawned: list[tuple[int, int]] = field(default_factory=list)
     procs: list[FakeProc] = field(default_factory=list)
     judged: list[int] = field(default_factory=list)
+    removed_labels: list[tuple[str, int, str]] = field(default_factory=list)
     plan_size: int = 2
     plan_error: bool = False
     fail_list_repos: bool = False
@@ -53,6 +54,9 @@ class FakePorts:
 
     async def comment(self, repo: str, number: int, text: str) -> None:
         self.comments.append((repo, number, text))
+
+    async def remove_label(self, repo: str, number: int, label: str) -> None:
+        self.removed_labels.append((repo, number, label))
 
     async def plan(self, run_id: int, task: Task, cfg: ProjectConfig) -> int:
         if self.plan_error:
@@ -244,3 +248,73 @@ async def test_tick_ignores_runs_it_does_not_own() -> None:
     )
     await Dispatcher(ports).tick()
     assert ports.spawned == [] and ports.judged == []
+
+
+# --- retry (M12): label `swarm-retry` on an issue whose newest run failed --------
+
+
+def _retry_ports(newest_status: str) -> FakePorts:
+    ports = _ports()
+    ports.tasks["swarm-lab/demo"] = [
+        Task("swarm-lab/demo", 7, "Add /ping", "body", True, labels=("swarm", "swarm-retry"))
+    ]
+    ports.runs.append(
+        {
+            "id": 1,
+            "project": f"{INTAKE_PREFIX}swarm-lab/demo",
+            "task_ref": "swarm-lab/demo#7",
+            "status": newest_status,
+            "vertex_count": 2,
+        }
+    )
+    ports.vertices[1] = [{"id": 1, "name": "v1", "status": "failed"}]
+    return ports
+
+
+async def test_retry_label_on_a_failed_task_starts_a_new_run() -> None:
+    ports = _retry_ports("failed")
+    events = await Dispatcher(ports).tick()
+    assert [r["id"] for r in ports.runs] == [1, 2]
+    assert ports.runs[1]["task_ref"] == "swarm-lab/demo#7"
+    assert ports.runs[1]["vertex_count"] == 2  # planned on the same tick
+    assert ports.removed_labels == [("swarm-lab/demo", 7, "swarm-retry")]
+    assert any("retry" in text and "run 1" in text for _, _, text in ports.comments)
+    assert any("retry" in e for e in events)
+
+
+async def test_retry_label_on_a_done_task_is_dropped_with_a_comment() -> None:
+    ports = _retry_ports("done")
+    await Dispatcher(ports).tick()
+    assert [r["id"] for r in ports.runs] == [1]
+    assert ports.removed_labels == [("swarm-lab/demo", 7, "swarm-retry")]
+    assert any("already done" in text for _, _, text in ports.comments)
+
+
+async def test_retry_label_while_a_run_is_still_active_never_starts_a_second() -> None:
+    ports = _retry_ports("pending")
+    ports.vertices[1] = [{"id": 1, "name": "v1", "status": "running"}]
+    await Dispatcher(ports).tick()
+    assert [r["id"] for r in ports.runs] == [1]
+    assert ports.removed_labels == [("swarm-lab/demo", 7, "swarm-retry")]
+    assert any("still running" in text for _, _, text in ports.comments)
+
+
+async def test_retry_waits_for_capacity_and_keeps_the_label() -> None:
+    ports = _retry_ports("failed")
+    await Dispatcher(ports, max_active_runs=0).tick()
+    assert [r["id"] for r in ports.runs] == [1]
+    assert ports.removed_labels == []
+
+
+async def test_failed_task_without_the_label_is_not_retried() -> None:
+    ports = _retry_ports("failed")
+    ports.tasks["swarm-lab/demo"][0].labels = ("swarm",)
+    await Dispatcher(ports).tick()
+    assert [r["id"] for r in ports.runs] == [1]
+
+
+async def test_retry_without_free_sandboxes_keeps_the_label() -> None:
+    ports = _retry_ports("failed")
+    await Dispatcher(ports, sandbox_cap=1).tick()  # workers_per_run is 2
+    assert [r["id"] for r in ports.runs] == [1]
+    assert ports.removed_labels == []

@@ -203,9 +203,26 @@ class StandPorts:
         )
         response.raise_for_status()
         return [
-            Task(repo, int(i["number"]), str(i["title"]), str(i.get("body") or ""), True)
+            Task(
+                repo,
+                int(i["number"]),
+                str(i["title"]),
+                str(i.get("body") or ""),
+                True,
+                labels=tuple(str(lb.get("name", "")) for lb in i.get("labels") or []),
+            )
             for i in response.json()
         ]
+
+    async def remove_label(self, repo: str, number: int, label: str) -> None:
+        response = await self.gitea.get(f"/api/v1/repos/{repo}/issues/{number}/labels")
+        response.raise_for_status()
+        for item in response.json():
+            if item.get("name") == label:
+                deleted = await self.gitea.delete(
+                    f"/api/v1/repos/{repo}/issues/{number}/labels/{int(item['id'])}"
+                )
+                deleted.raise_for_status()
 
     async def comment(self, repo: str, number: int, text: str) -> None:
         response = await self.gitea.post(
