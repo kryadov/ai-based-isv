@@ -67,7 +67,7 @@ Python 3.12 подхватится автоматически (`.python-version`
 | Argo CD UI | http://localhost:30081 | `admin` / пароль из secret `argocd-initial-admin-secret` |
 | Grafana | http://localhost:30082 | `admin` / пароль в Vault `secret/grafana/admin` |
 | Prometheus | http://localhost:30090 | без авторизации (лаборатория); деплоер M6 берёт отсюда базовую линию |
-| Панель + control plane | http://localhost:30400/ui | пользователь `owner`, пароль: `bash infra/scripts/platform.sh password`; служебным эндпоинтам нужен bearer-токен из Vault `secret/platform/api` (M11, TUTORIAL.ru.md §12) |
+| Панель + control plane | http://localhost:30400/ui | пользователь `owner`, пароль: `bash infra/scripts/platform.sh password`; служебным эндпоинтам нужен bearer-токен — у каждой идентичности свой, в Vault `secret/platform/api` (`token` — оператор; M11–M12, TUTORIAL.ru.md §12) |
 | isv-product (prod) | `kubectl -n prod get rollout isv-product` | канарейка Argo Rollouts; секции `rollouts` + `demo` (TUTORIAL.ru.md §8) |
 
 ## 5. Acceptance-тесты L0
@@ -95,7 +95,7 @@ Python 3.12 подхватится автоматически (`.python-version`
 
 После bootstrap L0 (и `bootstrap.sh demo` для демо-сервиса): `bash infra/scripts/platform.sh up` из Git Bash на хосте. Команда пинит `origin/main` в worktree `.platform-live`, разворачивает control plane как приложение Argo CD `platform-control` и запускает контейнер-демон `swarm-platform-daemon`. Дальше заведите issue с меткой `swarm` в подключённом репо. Приёмка: `./infra/scripts/toolbox.sh bash infra/tests/m11_flow.sh`. Подробности — TUTORIAL.ru.md §12.
 
-⚠ Rancher Desktop пробрасывает NodePort'ы на `0.0.0.0`, а брандмауэр Windows пропускает их входящими в профилях Private/Domain: стенд виден из вашей локальной сети (TUTORIAL.ru.md §12).
+⚠ Rancher Desktop пробрасывает NodePort'ы на `0.0.0.0`, а брандмауэр Windows пропускает их входящими в профилях Private/Domain. Один раз уберите их из локальной сети — в PowerShell **от администратора**: `powershell -ExecutionPolicy Bypass -File infra\rancher\restrict-firewall.ps1` (проверка: `-Check`; `platform.sh status` показывает `lan: …`; TUTORIAL.ru.md §12).
 
 ### Самообеспечение (спека §13.7, уровень 2)
 

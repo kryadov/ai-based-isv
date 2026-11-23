@@ -28,14 +28,14 @@
 - [ ] `set_task_status` does PATCH then comment (non-atomic): comment first.
 - [ ] in-progress/blocked reopen an issue a human closed: skip the PATCH when the issue is closed and status != done.
 - [ ] Raw failure text (exception messages) is posted to issue comments: truncate, or post reason codes.
-- [ ] Secrets on command lines (`--from-literal`, `curl -H "Authorization…"`, python argv) in `section_mcp`, `section_litellm` and `m4c_flow`: use stdin, env or header files.
+- [x] Secrets on command lines — **done in M12** for all of `bootstrap.sh` (OpenBao token/values over stdin, `apply_secret`, curl `-K -` configs, helm values file, `GIT_CONFIG_*`); the flows' own argv patterns are an M12 follow-up.
 - [ ] Collapsed line continuations (long space runs) in `bootstrap.sh` `section_mcp` and `m4c_flow.sh`: cosmetic.
 - [ ] Poller checkpoint written after the loop, in `$TMP`; no server-side uniqueness on `task_ref` (fine for acceptance, not for a real poller).
 - [ ] `list_issues` has a fixed `limit=50` and no pagination.
 - [ ] MCP Dockerfile: unpinned pip install (not from `uv.lock`), no `.dockerignore`.
 - [ ] Worker `attempts >= 3` is checked after the claim increment, so only 2 real executions happen (pre-existing).
 - [ ] `llm.complete` bypasses token budgets (M5); the git MCP server is built but not wired (M5 scoped tokens).
-- [ ] MCP servers have no auth token; sandboxes use the LiteLLM master key: add an MCP auth token and a scoped LiteLLM virtual key per run/role.
+- [ ] MCP servers have no auth token; sandboxes use the LiteLLM master key: add an MCP auth token and a scoped LiteLLM virtual key per run/role. (M12: the host-facing task-source now requires a bearer token; the sandbox-facing servers stay NetworkPolicy-bounded; virtual keys: open.)
 - [x] `org-bootstrap check` marks a tool `[ok]` even when `--version` fails: check the exit code. Done by an agent through the self-development corridor (Gitea PR #3 → GitHub PR #29, 2026-11-15).
 - [ ] LLM: set `OPENROUTER_API_KEY` in `.env`, so the fallback works when the z.ai Coding Plan limit is hit. z.ai ToS lists supported tools only (LiteLLM is not listed): if the plan gets restricted, route z.ai only through the OpenCode provider.
 
@@ -98,19 +98,25 @@
 
 ## M11 follow-ups (2026-11-16)
 
-- [ ] **Stand LAN exposure:** Rancher Desktop forwards every NodePort on `0.0.0.0` and the Windows firewall allows `host-switch.exe` inbound on Private/Domain networks. The control plane now requires a token, but the task-source MCP (:30085) and Prometheus (:30090) have no auth. Owner decision: restrict the two "Rancher Desktop Networking … Exception" rules, or add auth to those services.
-- [ ] Per-identity service tokens (today one shared `secret/platform/api` token for the daemon, workers and poller); rotation.
-- [ ] Retry of a failed task: today one issue = one run (dedup by `task_ref`, any status); a `swarm-retry` label or a panel action.
-- [ ] Graceful worker shutdown on daemon restart (SIGTERM → finish/abandon the session, tear the sandbox down); today leases expire and the orphan sweep reclaims sandboxes.
-- [ ] Browser e2e in CI (Playwright against a local agent_api with SQLite).
+- [x] **Stand LAN exposure** — **done in M12** (owner decision: both). `infra/rancher/restrict-firewall.ps1` narrows the host-switch allow rules to loopback (`-Check` in `platform.sh status`); the task-source MCP requires a bearer token. Prometheus relies on the firewall. The owner applies the script once from an elevated PowerShell.
+- [x] Per-identity service tokens + rotation — **done in M12** (`daemon`/`worker`/`poller`/`token`=operator; hashes only in the cluster; only the operator decides HITL; `bootstrap.sh platform-token rotate`).
+- [x] Retry of a failed task — **done in M12** (label `swarm-retry` or the panel's Retry button).
+- [x] Graceful worker shutdown — **done in M12** (SIGTERM → `POST /vertices/{id}/release`, the attempt is given back; sandbox torn down; 60 s grace, 120 s container stop timeout).
+- [x] Browser e2e in CI — **done in M12** (`infra/tests/e2e/ci.sh`, GitHub job `e2e`).
 - [ ] Baseline invalidation and coordinator reset (spec §7.3): re-plan vertices when `main` moves under them.
-- [ ] Remove the stale Gitea branch `platform-live` once the pinned commit is on `main` (`platform.sh up` from main does not need it).
+- [x] Remove the stale Gitea branch `platform-live` — **done in M12** (already gone; `section_platform` drops it once its tip is on the lab `main`).
+
+## M12 follow-ups (2026-11-23)
+
+- [ ] Acceptance flows (`infra/tests/*_flow.sh`) still pass some secrets on argv (`kubectl exec … BAO_TOKEN=…`, `curl -H "Authorization…"`): move them to the bootstrap helpers (`vcli`, `tcurl`/`bcurl`).
+- [ ] Prometheus (:30090) has no auth of its own (firewall only): an auth proxy, or drop the NodePort and reach it through the observability MCP / port-forward.
+- [ ] Per-identity tokens are not yet *scoped* beyond HITL decisions (e.g. a worker may still post `/runs`); route-level permissions per identity.
 
 ## M10 follow-ups (2026-11-16)
 
 - [ ] OIDC/SSO for the panel; server-side user profiles (language preference).
 - [ ] Pipeline kanban (task → spec → code → gates → review → canary → prod) and Settings tab.
-- [x] Browser e2e tests of the panel — **done in M11** (Playwright, `infra/tests/e2e`); running it in CI: open.
+- [x] Browser e2e tests of the panel — **done in M11** (Playwright, `infra/tests/e2e`); in CI since M12.
 - [x] Cron scheduling of automations — **done in M11** (the daemon's poller evaluates `trigger: cron`).
 - [ ] The other starter automations (dep-updates, log-analysis, feedback-ingest) and the 26-item catalogue as workflow functions.
 - [ ] Charts in Metrics (trusted change, time-to-accept, DORA, verification debt).

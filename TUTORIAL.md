@@ -324,7 +324,7 @@ bash infra/scripts/platform.sh restart | down
 2. **Deploys the control plane.** It builds the image `swarm-platform:<sha7>` and deploys agent_api plus the panel as the Argo CD app **`platform-control`** (namespace `platform`).
 3. **Starts the daemon.** The container `swarm-platform-daemon` runs with `--restart unless-stopped`, so it survives closed terminals and Rancher restarts.
 
-**The panel:** http://localhost:30400/ui, user `owner`. Every service endpoint on :30400 needs the bearer token from OpenBao `secret/platform/api`. Stand NodePorts listen on every interface, so the API is never left open. A logged-in panel session may *read* the listings the panel shows; every action goes through the panel's own `/ui/api`, recorded under your name.
+**The panel:** http://localhost:30400/ui, user `owner`. Every service endpoint on :30400 needs a bearer token. Each identity has its own token in OpenBao `secret/platform/api` (M12): `daemon`, `worker`, `poller`, and `token` for the operator (you, the acceptance flows). The cluster stores only their sha256 hashes. Only the operator may decide a HITL request over the API (a worker gets 403), and audit rows record the calling identity. Rotate with `./infra/scripts/toolbox.sh bash infra/scripts/bootstrap.sh platform-token rotate [daemon|worker|poller|token|all]`, which restarts the control plane and the daemon. A logged-in panel session may *read* the listings the panel shows; every action goes through the panel's own `/ui/api`, recorded under your name.
 
 **Give the platform a task**
 1. The repo needs `.platform/project.yaml` with `intake: true`, which `onboard` seeds from the check profile:
@@ -340,12 +340,12 @@ bash infra/scripts/platform.sh restart | down
    - creates a run, plans the vertex graph, starts agents and comments the plan on the issue;
    - merge decisions appear in the panel **Inbox**;
    - when every vertex is done, it judges merged `main` against `done_when` and comments the verdict.
-4. One issue gets one run: to retry, file a new issue.
+4. One issue gets one run. **To retry a failed task** (M12), add the label **`swarm-retry`** to the issue, or press **Retry** on the failed run in the panel's Swarm tab (admin role). Either starts a new run when the task's newest run failed; on a done or still-running task the label is removed with a comment.
 
 **Limits:**
 - 2 active runs and 11 sandboxes (the NodePort pool) at a time; extra issues wait.
 - The platform repo itself is opt-in (`intake: false` in its `.platform/project.yaml`); its merges stay HITL either way.
-- Restarting the daemon is safe: the next tick takes over pending runs, and expired leases are reclaimed.
+- Restarting the daemon is safe (M12): workers get SIGTERM, give their vertex back at once (the attempt is not counted) and tear their sandbox down; the container has a 120 s stop timeout. The next tick re-spawns workers for the released vertices.
 - After a Rancher Desktop restart OpenBao comes up sealed. The panel keeps working, but the daemon restarts until it can read its secrets: run `platform.sh up`, which unseals OpenBao first.
 
 **Updating gate files.** `onboard` and `seed-demo` update the profile files in an already protected repo through **one PR** (`platform/profile-update`), merged after CI.
@@ -358,16 +358,21 @@ bash infra/scripts/platform.sh up --ref <ref>
 ./infra/scripts/toolbox.sh bash infra/tests/m11_flow.sh   # e2e in Chromium + issue → merged → canary, no flow help
 ```
 
-The browser e2e alone: `PANEL_URL=… PANEL_USER=owner PANEL_PASSWORD=… PANEL_CARD_ID=… bash infra/tests/e2e/run.sh`.
+The browser e2e alone: `PANEL_URL=… PANEL_USER=owner PANEL_PASSWORD=… PANEL_CARD_ID=… bash infra/tests/e2e/run.sh`. Against a throwaway local agent_api (what GitHub CI runs): `bash infra/tests/e2e/ci.sh`.
 
-> ⚠ **The stand's NodePorts are reachable from your LAN.** Rancher Desktop forwards them on `0.0.0.0`, and the Windows firewall allows `host-switch.exe` inbound on Private/Domain networks. Gitea, LiteLLM and Postgres are password- or key-protected, but the task-source MCP (:30085) and Prometheus (:30090) have no auth. Treat the stand as LAN-visible, or restrict the two "Rancher Desktop Networking … Exception" firewall rules.
+> ⚠ **Keep the stand's NodePorts off your LAN (M12).** Rancher Desktop forwards them on `0.0.0.0`, and its installer lets `host-switch.exe` in on Private/Domain networks. Run once, in an **elevated** PowerShell at the repo root:
+> ```powershell
+> powershell -ExecutionPolicy Bypass -File infra\rancher\restrict-firewall.ps1          # loopback only
+> powershell -ExecutionPolicy Bypass -File infra\rancher\restrict-firewall.ps1 -Check   # no admin needed
+> ```
+> `platform.sh status` prints the result as `lan: …` (a Rancher upgrade can recreate the rules; `-Revert` restores them). Defence in depth: the task-source MCP (:30085) also requires its bearer token (OpenBao `secret/mcp/task-source`). Prometheus (:30090) relies on the firewall.
 
 ## 13. What is not there yet
 
 - OIDC/SSO.
 - The Pipeline kanban.
 - The other catalogue automations (dep-updates, log-analysis, feedback-ingest, …).
-- A service-identity scheme beyond one shared API token; browser e2e in CI.
+- Scoped LiteLLM virtual keys per run (sandboxes still use the master key).
 - Embeddings and code indexing.
 - Baseline invalidation.
 - Workers on several hosts.

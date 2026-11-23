@@ -3,7 +3,18 @@
 > Read this file FIRST. Then `ARCH.md` (how it works, diagrams), `AGENTS.md` (rules), `TODO.md` (backlog).
 > This file is updated at the end of EVERY increment. If your findings contradict it — verify, then update it.
 
-**Current (2026-11-16): M11 is CLOSED — the platform runs as a standing service on the stand; release v1.1.0.** `bash infra/scripts/platform.sh up` does three things:
+**Current (2026-11-23): M12 "hardening" — code done on branch `feat/m12-hardening`, deployed to the stand; live acceptance pending.** Design `docs/superpowers/specs/2026-11-23-m12-hardening-design.md`, plan `docs/superpowers/plans/2026-11-23-m12-hardening.md`. What changed:
+- **LAN exposure (owner decision: both).** `infra/rancher/restrict-firewall.ps1` narrows Rancher Desktop's host-switch allow rules to loopback; `platform.sh status` prints `lan: …` (`-Check`, no admin). **The owner still has to run it once from an elevated PowerShell** — until then status says `EXPOSED`. The task-source MCP (:30085) requires a bearer token (`MCP_AUTH_TOKEN`, OpenBao `secret/mcp/task-source`); verified live: 401 without, 200 with.
+- **Per-identity service tokens.** `secret/platform/api` fields `daemon`, `worker`, `poller`, `token` (= operator); the cluster Secret holds sha256 hashes only (`AGENT_API_SERVICE_TOKENS`); only the operator decides HITL over the API (worker → 403, verified live); audit rows carry `identity`; `bootstrap.sh platform-token rotate [id|all]`.
+- **Secrets never on argv** anywhere in `bootstrap.sh` (OpenBao root token, unseal key and values over stdin; `apply_secret`; curl `-K -` configs; helm values file; `GIT_CONFIG_*`).
+- **Graceful shutdown.** `POST /vertices/{id}/release` (attempt given back); workers release on SIGTERM in the session and gate phases and tear the sandbox down; daemon grace 60 s, container stop timeout 120 s; `platform.sh` stops before removing. Verified live: the daemon logs `stopped` on restart.
+- **Retry.** Label `swarm-retry` (check profile creates it) or the panel's Retry on the newest failed run.
+- **Panel e2e in GitHub CI** (`infra/tests/e2e/ci.sh`, job `e2e`); its first run found an empty Memory tab with no message (fixed).
+- **Found live, fixed:** the floating runner image `gitea/runner-images:ubuntu-latest` moved to Python 3.14, so `uvx … semgrep` with `pydantic<2.12` built pydantic-core from source and failed — **every onboarded repo's `ci / security` job was red**. Profiles now run `uvx --python 3.12 …`; onboarded repos need their profile re-applied (`org-bootstrap onboard`, one `platform/profile-update` PR each).
+- **Acceptance status:** gates green (ruff, mypy --strict, pytest); `ci.sh` e2e PASS in the Playwright image. The `m5_flow` regression was stopped by the operator tooling (host memory pressure) after reaching PR → CI → review; it exposed the semgrep break above. `m5_flow` and `m11_flow` must be re-run before merge.
+- Next: re-run m5/m11 → merge → release v1.2.0 → re-apply profiles; then TODO "M12 follow-ups" and the rest of the backlog (baseline invalidation is M13).
+
+**Earlier (2026-11-16): M11 is CLOSED — the platform runs as a standing service on the stand; release v1.1.0.** `bash infra/scripts/platform.sh up` does three things:
 - pins a commit (worktree `.platform-live`);
 - deploys agent_api and the panel in-cluster as the Argo CD app `platform-control` (image `swarm-platform:<sha7>`, NodePort 30400, ServiceMonitor);
 - starts the daemon container `swarm-platform-daemon` (`--restart unless-stopped`, own venv volume).
@@ -75,7 +86,7 @@ Work moved to a no-GPU Windows workstation:
 - **Acceptance on the new stand:** see "Verified acceptance flows".
 - **Previous move:** `docs/superpowers/HANDOFF-2026-11-12.md`.
 
-Last updated: 2026-11-16 (M11 closed — v1.1.0; the platform runs as a standing service)
+Last updated: 2026-11-23 (M12 hardening on feat/m12-hardening; live acceptance pending)
 
 ## What this project is
 
