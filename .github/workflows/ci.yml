@@ -16,3 +16,16 @@ jobs:
       - run: uv run ruff check .
       - run: uv run mypy packages apps
       - run: uv run pytest
+  e2e:
+    # Browser e2e of the organization panel (M12): local agent_api on SQLite,
+    # a seeded HITL card, Playwright Chromium (infra/tests/e2e/ci.sh).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --all-packages --locked
+      - run: uv run --with playwright==1.49.0 python -m playwright install --with-deps chromium
+      - run: bash infra/tests/e2e/ci.sh

@@ -109,3 +109,13 @@ async def test_inbox_decision_records_user_and_refuses_twice(client: AsyncClient
     assert again.status_code == 409
     audit = (await client.get("/audit", params={"target": f"hitl:{hid}"})).json()["events"]
     assert any(e["actor"] == "ui:alice" for e in audit)
+
+
+def test_every_tab_says_something_when_it_has_no_data() -> None:
+    """M12 (found by the CI browser e2e): an empty Memory tab rendered only a
+    search box — every list view names its empty state."""
+    js = (UI_DIR / "app.js").read_text(encoding="utf-8")
+    en = json.loads((UI_DIR / "i18n" / "en.json").read_text(encoding="utf-8"))
+    for key in ("inbox.empty", "swarm.empty", "memory.empty"):
+        assert f't("{key}")' in js, key
+        assert key in en, key

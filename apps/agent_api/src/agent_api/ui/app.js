@@ -214,6 +214,10 @@ async function viewMemory(view) {
   const list = el("div");
   const search = async () => {
     const { episodes } = await api(`/ui/api/memory?q=${encodeURIComponent(box.value)}`);
+    if (!episodes.length) {
+      list.replaceChildren(el("p", { class: "muted" }, t("memory.empty")));
+      return;
+    }
     list.replaceChildren(
       ...episodes.map((e) =>
         el(

@@ -23,6 +23,7 @@
   "metrics.title": "Control-plane metrics",
   "memory.search": "Search lessons, postmortems, decisions…",
   "memory.promote": "Promote with: org-bootstrap memory promote --episode",
+  "memory.empty": "No episodes match.",
   "planned": "Planned — not in v0.",
   "health.pending": "Pending decisions",
   "health.runs_done": "Runs done",
