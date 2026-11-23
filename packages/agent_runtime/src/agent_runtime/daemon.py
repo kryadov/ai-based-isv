@@ -23,6 +23,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -59,6 +60,7 @@ class DaemonSettings(BaseSettings):
     model: str = "litellm/qwen3"
     planner_model: str = "qwen3"
     session_timeout_s: int = 600
+    shutdown_grace_s: float = 60.0  # M12: workers release their vertex, then are killed
     host_litellm_url: str = "http://localhost:30084/v1"
 
 
@@ -279,6 +281,25 @@ class StandPorts:
         return body
 
 
+def stop_workers(
+    procs: list[Any],
+    grace_s: float,
+    *,
+    now: Callable[[], float] = time.monotonic,
+    pause: Callable[[float], None] = time.sleep,
+) -> None:
+    """SIGTERM every live process, wait up to ``grace_s`` for them, then SIGKILL (M12)."""
+    live = [p for p in procs if p.poll() is None]
+    for proc in live:
+        proc.terminate()
+    deadline = now() + grace_s
+    while any(p.poll() is None for p in live) and now() < deadline:
+        pause(0.5)
+    for proc in live:
+        if proc.poll() is None:
+            proc.kill()
+
+
 def _kubectl(argv: list[str], stdin: str | None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(  # noqa: S603 - fixed kubectl argv
         argv, input=stdin, capture_output=True, text=True, check=False, timeout=60
@@ -390,10 +411,10 @@ async def _main() -> int:
 
         log(f"dispatcher up: org={settings.org} api={settings.api_url}")
         await run_loop(tick, interval_s=settings.interval_s, stop=stop, log=log)
-    poller.terminate()
-    for procs in dispatcher.procs.values():
-        for proc in procs:
-            proc.terminate()  # leases expire; the next daemon re-spawns workers
+    # M12: workers get SIGTERM, release the vertex in flight and tear their
+    # sandbox down; the next daemon re-spawns them for the requeued vertices.
+    procs = [poller, *(p for ps in dispatcher.procs.values() for p in ps)]
+    await asyncio.to_thread(stop_workers, procs, settings.shutdown_grace_s)
     log("stopped")
     return 0
 

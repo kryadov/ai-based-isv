@@ -149,3 +149,37 @@ def test_poller_env_carries_the_poller_token() -> None:
     env = poller_env(settings, Secrets(api_token="d", poller_api_token="p", gitea_token="g"), {})
     assert env["AGENT_RUNTIME_API_TOKEN"] == "p"
     assert env["AUTOMATIONS_GITEA_TOKEN"] == "g"
+
+
+class _Proc:
+    def __init__(self, exits_on_terminate: bool) -> None:
+        self.exits_on_terminate = exits_on_terminate
+        self.terminated = False
+        self.killed = False
+        self.code: int | None = None
+
+    def poll(self) -> int | None:
+        return self.code
+
+    def terminate(self) -> None:
+        self.terminated = True
+        if self.exits_on_terminate:
+            self.code = 0
+
+    def kill(self) -> None:
+        self.killed = True
+        self.code = -9
+
+
+def test_stop_workers_terminates_then_kills_after_the_grace() -> None:
+    from agent_runtime.daemon import stop_workers
+
+    polite, stubborn, gone = _Proc(True), _Proc(False), _Proc(True)
+    gone.code = 0  # already exited: left alone
+    clock = iter([0.0, 0.5, 1.0, 1.5, 2.5, 3.0, 9.0])
+    stop_workers(
+        [polite, stubborn, gone], grace_s=2.0, now=lambda: next(clock), pause=lambda _: None
+    )
+    assert polite.terminated and not polite.killed
+    assert stubborn.terminated and stubborn.killed
+    assert not gone.terminated

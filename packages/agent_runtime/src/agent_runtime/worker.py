@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import shutil
+import signal
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -137,6 +138,13 @@ class ControlPlaneClient:
         response = await self._http.post(
             f"/vertices/{vertex_id}/fail",
             json=payload,
+        )
+        response.raise_for_status()
+
+    async def release(self, vertex_id: int) -> None:
+        """Give the vertex back on shutdown (M12): queued again, attempt returned."""
+        response = await self._http.post(
+            f"/vertices/{vertex_id}/release", json={"agent": self._settings.agent}
         )
         response.raise_for_status()
 
@@ -502,6 +510,20 @@ async def _heartbeat_loop(
         raise
 
 
+async def _release_on_shutdown(client: ControlPlaneClient, vertex_id: int) -> None:
+    try:
+        await client.release(vertex_id)
+        outcome = "ok"
+    except Exception:  # the lease expires anyway; the orphan sweep reclaims the sandbox
+        outcome = "error"
+    await client.audit(
+        action="release",
+        target=f"vertex:{vertex_id}",
+        outcome=outcome,
+        payload={"reason": "worker_shutdown"},
+    )
+
+
 async def _process_vertex(
     settings: WorkerSettings,
     executor: Executor,
@@ -597,8 +619,9 @@ async def _process_vertex(
 
         wait_task = asyncio.create_task(session.wait_done())
         lease_wait = asyncio.create_task(lease_lost.wait())
+        stop_wait = asyncio.create_task(stop.wait())
         done, pending = await asyncio.wait(
-            {wait_task, lease_wait},
+            {wait_task, lease_wait, stop_wait},
             timeout=settings.session_timeout_seconds,
             return_when=asyncio.FIRST_COMPLETED,
         )
@@ -610,6 +633,12 @@ async def _process_vertex(
         if lease_lost.is_set():
             # Lease lost: do NOT complete or fail. The control plane will
             # requeue via lease expiry.
+            return
+
+        if stop.is_set() and wait_task not in done:
+            # Shutdown (M12): give the vertex back at once instead of letting
+            # the lease expire; finally stops the session (sandbox teardown).
+            await _release_on_shutdown(client, vertex_id)
             return
 
         if not done:
@@ -763,7 +792,10 @@ async def _process_vertex(
             outcome = await runner(ctx, stop)
             session.session_log.append("gates", dataclasses.asdict(outcome))
             if outcome.status == "stopped":
-                return  # the lease expires; the PR stays open for the next attempt
+                # Shutdown (M12): the PR stays open for the next attempt, and
+                # the vertex is given back now rather than at lease expiry.
+                await _release_on_shutdown(client, vertex_id)
+                return
             if outcome.status != "merged":
                 reason = f"gate:{outcome.reason}"
                 if outcome.reason == "fix_rounds_exhausted":
@@ -1008,6 +1040,26 @@ def _default_extractor(settings: WorkerSettings, http: httpx.AsyncClient) -> Ext
     return extract
 
 
+async def run_until_signalled(main: Callable[[asyncio.Event], Awaitable[None]]) -> None:
+    """Run ``main(stop)``; SIGTERM/SIGINT set ``stop`` (M12 graceful shutdown).
+
+    The daemon terminates its workers on restart: the loop then releases the
+    vertex in flight and stops its session instead of dying mid-sandbox.
+    """
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    installed: list[signal.Signals] = []
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        with contextlib.suppress(NotImplementedError, RuntimeError):
+            loop.add_signal_handler(sig, stop.set)
+            installed.append(sig)
+    try:
+        await main(stop)
+    finally:
+        for sig in installed:
+            loop.remove_signal_handler(sig)
+
+
 def main() -> None:
     """Entry point for ``python -m agent_runtime.worker``."""
     # Daemon-spawned workers log to <workspace>/w<N>.log (M11): make warnings visible.
@@ -1029,7 +1081,7 @@ def main() -> None:
     executor = startup_executor(settings, repo_dir=repo_dir)
 
     with contextlib.suppress(KeyboardInterrupt):
-        asyncio.run(worker_loop(settings, executor))
+        asyncio.run(run_until_signalled(lambda stop: worker_loop(settings, executor, stop=stop)))
 
 
 if __name__ == "__main__":

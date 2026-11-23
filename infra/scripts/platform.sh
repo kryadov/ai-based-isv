@@ -36,10 +36,18 @@ repo_daemon_path() {
   esac
 }
 
+stop_daemon() {
+  # SIGTERM first (M12): workers release their vertices and tear sandboxes down
+  # within the container stop timeout; only then is the container removed.
+  docker inspect "$NAME" >/dev/null 2>&1 || return 1
+  docker stop "$NAME" >/dev/null 2>&1 || true
+  docker rm "$NAME" >/dev/null 2>&1 || true
+}
+
 start_daemon() {
   local repo
   repo="$(repo_daemon_path)"
-  docker rm -f "$NAME" >/dev/null 2>&1 || true
+  stop_daemon || true
   TOOLBOX_DETACH="$NAME" TOOLBOX_VENV=swarm-platform-venv TOOLBOX_WORKDIR="$LIVE" \
     "$TB" env \
       SWARM_DAEMON_REPO_ROOT="$repo" \
@@ -84,7 +92,7 @@ case "${1:-}" in
   status) cmd_status ;;
   logs) docker logs --tail "${2:-100}" "$NAME" ;;
   restart) docker restart "$NAME" >/dev/null && echo "platform: daemon restarted" ;;
-  down) docker rm -f "$NAME" >/dev/null 2>&1 && echo "platform: daemon stopped (control plane stays up)" || echo "platform: daemon not running" ;;
+  down) if stop_daemon; then echo "platform: daemon stopped (control plane stays up)"; else echo "platform: daemon not running"; fi ;;
   password) "$TB" bash infra/scripts/bootstrap.sh platform-password ;;
   *) usage ;;
 esac

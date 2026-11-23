@@ -190,6 +190,8 @@ class FakeControlPlane:
         self.audit_calls: list[dict[str, Any]] = []
         self.complete_called = asyncio.Event()
         self.fail_called = asyncio.Event()
+        self.release_calls: list[tuple[int, dict[str, Any]]] = []
+        self.release_called = asyncio.Event()
         self.heartbeat_called = asyncio.Event()
         # swarm (M8): pending HITL merges (backpressure) and the run graph (handoffs)
         self.pending_merges: list[int] = []
@@ -234,6 +236,12 @@ class FakeControlPlane:
             vertex_id = int(fail_match.group(1))
             self.fail_calls.append((vertex_id, body))
             self.fail_called.set()
+            return httpx.Response(200, json={"ok": True, "requeued": True})
+
+        release_match = re.match(r"/vertices/(\d+)/release", path)
+        if release_match:
+            self.release_calls.append((int(release_match.group(1)), body))
+            self.release_called.set()
             return httpx.Response(200, json={"ok": True, "requeued": True})
 
         if path == "/audit" and method == "POST":
@@ -1470,3 +1478,72 @@ def test_no_tracker_without_task_ref(tmp_path: Path) -> None:
         update={"task_source_url": "http://tracker.test/mcp"}
     )
     assert worker_module.build_tracker(settings, httpx.AsyncClient()) is None
+
+
+async def test_shutdown_mid_session_releases_the_vertex_and_stops_the_session(
+    tmp_path: Path,
+) -> None:
+    """M12: SIGTERM (stop) while an agent works gives the vertex back — no failure,
+    no burnt attempt — and tears the session (sandbox) down."""
+    bare = _init_bare_repo(tmp_path)
+    executor = FakeExecutor(diff=_GREETING_DIFF, diff_files=["greeting.py"], block_until_stop=True)
+    plane = FakeControlPlane(vertices=[_greet_vertex(11)])
+    settings = _settings(tmp_path, str(bare))
+    stop = asyncio.Event()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(plane.handler), base_url="http://test"
+    ) as http:
+        task = asyncio.create_task(worker_loop(settings, executor, http=http, stop=stop))
+        for _ in range(100):
+            if executor.sessions:
+                break
+            await asyncio.sleep(0.02)
+        assert executor.sessions, "the session never started"
+        stop.set()
+        await asyncio.wait_for(task, timeout=3.0)
+    assert plane.release_calls == [(11, {"agent": "test-worker"})]
+    assert plane.fail_calls == []
+    assert plane.complete_calls == []
+    assert executor.sessions[0].stopped is True
+    assert any(a["action"] == "release" for a in plane.audit_calls)
+
+
+async def test_stop_while_idle_exits_without_releasing(tmp_path: Path) -> None:
+    bare = _init_bare_repo(tmp_path)
+    plane = FakeControlPlane(vertices=[])
+    settings = _settings(tmp_path, str(bare))
+    stop = asyncio.Event()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(plane.handler), base_url="http://test"
+    ) as http:
+        task = asyncio.create_task(worker_loop(settings, FakeExecutor(), http=http, stop=stop))
+        await asyncio.sleep(0.1)
+        stop.set()
+        await asyncio.wait_for(task, timeout=2.0)
+    assert plane.release_calls == []
+
+
+async def test_sigterm_sets_the_stop_event() -> None:
+    import signal
+
+    seen: list[bool] = []
+
+    async def main(stop: asyncio.Event) -> None:
+        os.kill(os.getpid(), signal.SIGTERM)
+        await asyncio.wait_for(stop.wait(), timeout=2.0)
+        seen.append(stop.is_set())
+
+    await worker_module.run_until_signalled(main)
+    assert seen == [True]
+
+
+async def test_gates_stopped_by_shutdown_release_the_vertex(tmp_path: Path) -> None:
+    """M12: a shutdown while waiting for CI/HITL gives the vertex back (the PR
+    stays open for the next attempt) instead of waiting for the lease to expire."""
+
+    async def runner(ctx: Any, stop: asyncio.Event) -> Any:
+        return _outcome("stopped", "stopped")
+
+    plane, _ = await _run_gated(tmp_path, runner=runner)
+    assert plane.release_calls and plane.release_calls[0][0] == 1
+    assert plane.fail_calls == [] and plane.complete_calls == []

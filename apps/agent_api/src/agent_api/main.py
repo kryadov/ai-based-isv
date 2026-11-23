@@ -306,6 +306,14 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=409, detail="vertex not leased by agent")
             return {"ok": True, "requeued": not terminal}
 
+    @app.post("/vertices/{vertex_id}/release")
+    async def release(vertex_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        async with app.state.session_factory() as session:
+            ok = await store.release_vertex(session, vertex_id, agent=str(payload.get("agent", "")))
+            if not ok:
+                raise HTTPException(status_code=409, detail="vertex not leased by agent")
+            return {"ok": True, "requeued": True}
+
     @app.post("/identities")
     async def register_identity(payload: dict[str, Any]) -> dict[str, Any]:
         async with app.state.session_factory() as session:

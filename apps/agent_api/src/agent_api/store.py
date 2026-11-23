@@ -11,7 +11,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import select, update
+from sqlalchemy import case, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -223,6 +223,25 @@ async def fail_vertex(
             VertexRow.id == vertex_id, VertexRow.leased_by == agent, VertexRow.status == "running"
         )
         .values(status="failed" if terminal else "queued", leased_by=None, lease_until=None)
+    )
+    await session.commit()
+    return cast(CursorResult[Any], result).rowcount > 0
+
+
+async def release_vertex(session: AsyncSession, vertex_id: int, agent: str) -> bool:
+    """Give a leased vertex back (M12: worker shutdown): queued again at once and
+    the attempt returned — a restart is not a failure. Lease holder only."""
+    result = await session.execute(
+        update(VertexRow)
+        .where(
+            VertexRow.id == vertex_id, VertexRow.leased_by == agent, VertexRow.status == "running"
+        )
+        .values(
+            status="queued",
+            leased_by=None,
+            lease_until=None,
+            attempts=case((VertexRow.attempts > 0, VertexRow.attempts - 1), else_=0),
+        )
     )
     await session.commit()
     return cast(CursorResult[Any], result).rowcount > 0
