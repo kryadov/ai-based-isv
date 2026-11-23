@@ -60,6 +60,28 @@ def test_no_secret_reaches_argv_anywhere_in_bootstrap() -> None:
     # helm --set with a password; git -c with a token; bao token/values in exec argv
     assert not re.search(r"--set \"[^\n]*(password|PASSWD)", text)
     assert "http.extraHeader=Authorization" not in text
-    assert "BAO_TOKEN=\"$RTOK\"" not in text
+    assert 'BAO_TOKEN="$RTOK"' not in text
     assert not re.search(r"vcli kv put", text)
     assert not re.search(r"operator unseal \"\$", text)
+
+
+def test_section_platform_writes_identity_tokens_and_only_hashes_reach_the_cluster() -> None:
+    body = "".join(
+        _section(n) for n in ("section_platform", "platform_api_tokens", "apply_agent_api_secret")
+    )
+    text = BOOTSTRAP.read_text(encoding="utf-8")
+    assert 'PLATFORM_IDENTITIES="token daemon worker poller"' in text
+    assert "platform_api_tokens" in body and "apply_agent_api_secret" in body
+    assert "service-tokens=" in body
+    assert "sha256sum" in body
+    # no plaintext service token in the agent-api Secret any more
+    assert '"service-token=' not in body
+
+
+def test_platform_token_rotate_is_dispatchable() -> None:
+    text = BOOTSTRAP.read_text(encoding="utf-8")
+    assert re.search(r"platform-token\)[^\n]*section_platform_token", text)
+    body = _section("section_platform_token")
+    assert "rotate" in body
+    assert "rollout restart" in body
+    assert "openssl rand" in _section("platform_api_tokens")

@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     # --- service API (M11): empty = open (host-run flows on 127.0.0.1); the
     # in-cluster control plane sets it — stand NodePorts bind 0.0.0.0 ---
     service_token: str = ""
+    # --- per-identity tokens (M12): "name:sha256hex,..." (daemon, worker, poller,
+    # operator); the legacy service_token above counts as the operator ---
+    service_tokens: str = ""
 
     model_config = {"env_prefix": "AGENT_API_"}
 

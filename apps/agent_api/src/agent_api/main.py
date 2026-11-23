@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -57,26 +58,74 @@ def _panel_user(app: FastAPI, request: Request) -> str | None:
     return user if user and user in app.state.ui_users else None
 
 
-def _guard_service_api(app: FastAPI, token: str) -> None:
-    """Require ``Authorization: Bearer <token>`` on every service endpoint (M11)."""
-    if not token:
-        return
-    expected = f"Bearer {token}".encode()
+OPERATOR = "operator"  # the identity that may decide HITL requests (M12)
+
+
+def _sha256(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def parse_service_tokens(spec: str) -> dict[str, str]:
+    """``name:sha256hex,...`` → {sha256hex: name}; malformed entries are skipped (M12).
+
+    Only hashes are configured, so the Deployment's Secret never holds a usable token.
+    """
+    out: dict[str, str] = {}
+    for entry in spec.split(","):
+        name, _, digest = entry.strip().partition(":")
+        digest = digest.strip().lower()
+        if name.strip() and len(digest) == 64 and all(c in "0123456789abcdef" for c in digest):
+            out[digest] = name.strip()
+    return out
+
+
+def _identity_of(header: str, identities: dict[str, str]) -> str | None:
+    """The identity whose token is in ``Authorization: Bearer <token>``, else None.
+
+    Every configured hash is compared (constant time) so the timing does not tell
+    which identity — or whether any — matched.
+    """
+    scheme, _, token = header.partition(" ")
+    token = token.strip()
+    if scheme.lower() != "bearer" or not token:
+        return None
+    given = _sha256(token).encode()
+    found: str | None = None
+    for digest, name in identities.items():
+        if hmac.compare_digest(given, digest.encode()):
+            found = name
+    return found
+
+
+def _guard_service_api(app: FastAPI, identities: dict[str, str]) -> None:
+    """Require a known bearer token on every service endpoint (M11; per identity M12).
+
+    ``request.state.identity`` carries who called: an identity name, ``panel:<user>``
+    for a logged-in human reading a listing, or ``""`` when no token is configured.
+    """
+    app.state.service_auth = bool(identities)
 
     @app.middleware("http")
     async def service_token(request: Request, call_next: Any) -> Response:
+        request.state.identity = ""
         path = request.url.path
-        if path in OPEN_PATHS or path == PANEL_PREFIX or path.startswith(PANEL_PREFIX + "/"):
+        if (
+            not identities
+            or path in OPEN_PATHS
+            or path == PANEL_PREFIX
+            or path.startswith(PANEL_PREFIX + "/")
+        ):
             response: Response = await call_next(request)
             return response
-        given = request.headers.get("authorization", "").encode()
-        if request.method == "GET" and _panel_user(app, request):
+        identity = _identity_of(request.headers.get("authorization", ""), identities)
+        if identity is None and request.method == "GET":
             # The panel reads a few service listings (automations); a logged-in
             # human may READ them, while actions go through /ui/api (decided_by).
-            response = await call_next(request)
-            return response
-        if not hmac.compare_digest(given, expected):
+            user = _panel_user(app, request)
+            identity = f"panel:{user}" if user else None
+        if identity is None:
             return JSONResponse({"detail": "service token required"}, status_code=401)
+        request.state.identity = identity
         response = await call_next(request)
         return response
 
@@ -90,7 +139,10 @@ def create_app() -> FastAPI:
     app.state.automations_dir = current.automations_dir
     register_automations(app)
     register_ui(app)
-    _guard_service_api(app, current.service_token)
+    identities = parse_service_tokens(current.service_tokens)
+    if current.service_token:  # the M11 single token stays valid as the operator
+        identities[_sha256(current.service_token)] = OPERATOR
+    _guard_service_api(app, identities)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
@@ -314,7 +366,13 @@ def create_app() -> FastAPI:
             }
 
     @app.post("/hitl/{request_id}/decision")
-    async def decide_hitl(request_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+    async def decide_hitl(
+        request_id: int, payload: dict[str, Any], request: Request
+    ) -> dict[str, Any]:
+        # M12: with service auth on, only the operator decides — a worker, the
+        # daemon or the poller can never approve its own merge.
+        if app.state.service_auth and request.state.identity != OPERATOR:
+            raise HTTPException(status_code=403, detail="only the operator decides HITL")
         async with app.state.session_factory() as session:
             from sqlalchemy import select
 
@@ -335,7 +393,12 @@ def create_app() -> FastAPI:
             return {"status": status}
 
     @app.post("/audit")
-    async def append_audit(payload: dict[str, Any]) -> dict[str, Any]:
+    async def append_audit(payload: dict[str, Any], request: Request) -> dict[str, Any]:
+        body = payload.get("payload")
+        identity = request.state.identity
+        if identity:  # M12: who really called, next to the self-reported actor
+            base = body if isinstance(body, dict) else ({} if body is None else {"value": body})
+            body = {**base, "identity": identity}
         async with app.state.session_factory() as session:
             event_id = await store.append_audit(
                 session,
@@ -343,7 +406,7 @@ def create_app() -> FastAPI:
                 action=str(payload["action"]),
                 target=str(payload["target"]),
                 outcome=str(payload.get("outcome", "ok")),
-                payload=payload.get("payload"),
+                payload=body,
             )
             return {"event_id": event_id}
 

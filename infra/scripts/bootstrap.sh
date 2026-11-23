@@ -581,6 +581,56 @@ section_mcp() {
   echo "mcp: task-source (write, host-only :30085, bearer 401/200 ok), task-reader + llm + ci (sandbox, *.agents.svc:8000) Ready"
 }
 
+PLATFORM_IDENTITIES="token daemon worker poller"  # `token` = the operator (M11 name)
+
+platform_api_tokens() {
+  # platform_api_tokens [identity...] — ensure one bearer token per identity in
+  # OpenBao secret/platform/api; the identities named are rotated (new value).
+  local id val rotate=" $* " args=()
+  for id in $PLATFORM_IDENTITIES; do
+    val="$(vcli kv get -field="$id" secret/platform/api 2>/dev/null || true)"
+    case "$rotate" in *" $id "*|*" all "*) val="" ;; esac
+    [ -n "$val" ] || val="$(openssl rand -hex 32)"
+    args+=("$id=$val")
+  done
+  vput secret/platform/api "${args[@]}"
+}
+
+apply_agent_api_secret() {
+  # Secret agent-api from OpenBao: DB URL, UI users, session secret and the
+  # service identities as sha256 hashes only — the cluster holds no usable token.
+  local pw sess hash pgpw id val name spec=""
+  pw="$(vcli kv get -field=password secret/platform/ui)"
+  sess="$(vcli kv get -field=session-secret secret/platform/ui)"
+  hash="$(printf '%s' "$pw" | sha256sum | cut -d' ' -f1)"
+  for id in $PLATFORM_IDENTITIES; do
+    val="$(vcli kv get -field="$id" secret/platform/api)"
+    name="$id"; [ "$id" = token ] && name=operator
+    spec="${spec:+$spec,}$name:$(printf '%s' "$val" | sha256sum | cut -d' ' -f1)"
+  done
+  pgpw="$(kubectl -n "$NS" get secret postgres-platform-app -o jsonpath='{.data.password}' | base64 -d)"
+  apply_secret "$NS" agent-api \
+    "database-url=postgresql+asyncpg://gitea:$pgpw@postgres-platform-rw.$NS.svc.cluster.local:5432/swarm" \
+    "ui-users=owner:$hash:admin" "session-secret=$sess" "service-tokens=$spec"
+}
+
+section_platform_token() {
+  # bootstrap.sh platform-token rotate [token|daemon|worker|poller|all] (M12):
+  # new bearer token(s) in OpenBao, the control plane restarted with the new
+  # hashes, the daemon restarted so it reads its own and the workers' tokens.
+  [ "${1:-}" = "rotate" ] || { echo "usage: bootstrap.sh platform-token rotate [token|daemon|worker|poller|all]"; exit 2; }
+  shift
+  [ $# -gt 0 ] || set -- all
+  platform_api_tokens "$@"
+  apply_agent_api_secret
+  kubectl -n "$NS" rollout restart deployment/agent-api >/dev/null
+  kubectl -n "$NS" rollout status deployment/agent-api --timeout=180s >/dev/null
+  if docker inspect swarm-platform-daemon >/dev/null 2>&1; then
+    docker restart swarm-platform-daemon >/dev/null
+  fi
+  echo "platform-token: rotated ($*); control plane and daemon restarted"
+}
+
 section_platform() {
   # The control plane in-cluster (M11): agent_api + the panel as Argo CD app
   # platform-control. Usage: bootstrap.sh platform <sha> (platform.sh up builds
@@ -591,7 +641,7 @@ section_platform() {
   #   - the pinned commit must be reachable in the lab Gitea copy: when it is
   #     not on main yet (acceptance before merge) it is pushed to the unprotected
   #     branch platform-live; the Application is pinned to that commit.
-  local sha="${1:-}" tag pw sess svc hash pgpw tok atok rel api="http://localhost:30080/api/v1" phase i
+  local sha="${1:-}" tag pw sess tok atok rel api="http://localhost:30080/api/v1" phase i
   [ -n "$sha" ] || { echo "platform: usage: bootstrap.sh platform <commit sha>"; exit 2; }
   tag="${sha:0:7}"
   docker image inspect "swarm-platform:$tag" >/dev/null 2>&1 \
@@ -601,16 +651,10 @@ section_platform() {
   sess="$(vcli kv get -field=session-secret secret/platform/ui 2>/dev/null || true)"
   [ -n "$sess" ] || sess="$(openssl rand -hex 32)"
   vput secret/platform/ui username=owner "password=$pw" "session-secret=$sess"
-  # Service-API bearer token (M11): stand NodePorts bind 0.0.0.0, so the
-  # control plane's service endpoints are never open; the daemon reads it here.
-  svc="$(vcli kv get -field=token secret/platform/api 2>/dev/null || true)"
-  [ -n "$svc" ] || svc="$(openssl rand -hex 32)"
-  vput secret/platform/api "token=$svc"
-  hash="$(printf '%s' "$pw" | sha256sum | cut -d' ' -f1)"
-  pgpw="$(kubectl -n "$NS" get secret postgres-platform-app -o jsonpath='{.data.password}' | base64 -d)"
-  apply_secret "$NS" agent-api \
-    "database-url=postgresql+asyncpg://gitea:$pgpw@postgres-platform-rw.$NS.svc.cluster.local:5432/swarm" \
-    "ui-users=owner:$hash:admin" "session-secret=$sess" "service-token=$svc"
+  # Service-API bearer tokens (M11; one per identity since M12): stand NodePorts
+  # bind 0.0.0.0, so the control plane's service endpoints are never open.
+  platform_api_tokens
+  apply_agent_api_secret
   # Argo CD reads the platform repo's lab copy as the non-admin agent user.
   tok="$(vcli kv get -field=token secret/gitea/agent 2>/dev/null || true)"
   [ -n "$tok" ] || { echo "platform: no secret/gitea/agent — run: bootstrap.sh agent-user"; exit 1; }
@@ -672,7 +716,8 @@ case "${1:-all}" in
   mcp)    section_mcp ;;
   platform) section_platform "${2:-}" ;;
   platform-password) section_platform_password ;;
+  platform-token) shift; section_platform_token "$@" ;;
   # `all` brings the stand cluster (k3d / Rancher Desktop) up first so `org-bootstrap apply` works on a fresh machine.
   all)    cluster_up; section_vault; section_cnpg; section_gitea; section_agent_user; section_runner; section_argocd; section_rollouts; section_monitoring; section_loki; section_demo; section_org_memory; section_openproject; section_litellm; section_agents; section_mcp ;;
-  *) echo "usage: $0 [cluster|vault|cnpg|gitea|agent-user|runner|argocd|rollouts|monitoring|loki|demo|org-memory|openproject|litellm|llm-key [zai|openrouter]|agents|mcp|platform <sha>|platform-password|all]"; exit 2 ;;
+  *) echo "usage: $0 [cluster|vault|cnpg|gitea|agent-user|runner|argocd|rollouts|monitoring|loki|demo|org-memory|openproject|litellm|llm-key [zai|openrouter]|agents|mcp|platform <sha>|platform-password|platform-token rotate [id|all]|all]"; exit 2 ;;
 esac

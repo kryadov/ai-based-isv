@@ -118,3 +118,34 @@ def test_worker_env_carries_the_task_source_token() -> None:
     )
     assert env["AGENT_RUNTIME_TASK_SOURCE_TOKEN"] == "ts-token"
     assert "ts-token" not in repr(Secrets(task_source_token="ts-token"))
+
+
+def test_workers_get_the_worker_identity_token() -> None:
+    settings = DaemonSettings(repo_root=Path("/repo"), workspace_dir=Path("/repo/ws"))
+    env = build_worker_env(
+        settings,
+        Secrets(litellm_key="mk", api_token="daemon-tok", worker_api_token="worker-tok"),
+        run_id=1,
+        repo="swarm-lab/demo",
+        cfg=parse_project_config(CFG),
+        base={},
+    )
+    assert env["AGENT_RUNTIME_API_TOKEN"] == "worker-tok"
+
+
+def test_identity_tokens_fall_back_to_the_shared_token() -> None:
+    from agent_runtime.daemon import identity_tokens
+
+    shared = {"token": "t0"}
+    assert identity_tokens(shared) == ("t0", "t0", "t0")
+    split = {"token": "t0", "daemon": "d", "worker": "w", "poller": "p"}
+    assert identity_tokens(split) == ("d", "w", "p")
+
+
+def test_poller_env_carries_the_poller_token() -> None:
+    from agent_runtime.daemon import poller_env
+
+    settings = DaemonSettings(repo_root=Path("/repo"), workspace_dir=Path("/repo/ws"))
+    env = poller_env(settings, Secrets(api_token="d", poller_api_token="p", gitea_token="g"), {})
+    assert env["AGENT_RUNTIME_API_TOKEN"] == "p"
+    assert env["AUTOMATIONS_GITEA_TOKEN"] == "g"
