@@ -58,7 +58,8 @@ tty_flags=(-i)
 # own venv volume (TOOLBOX_VENV) so dev runs never re-sync the running
 # platform's environment, and TOOLBOX_WORKDIR (relative to the repo) as cwd.
 run_flags=(--rm "${tty_flags[@]}")
-[ -n "${TOOLBOX_DETACH:-}" ] && run_flags=(-d --restart unless-stopped --name "$TOOLBOX_DETACH")
+# --stop-timeout: the daemon releases vertices and tears sandboxes down (60 s grace, M12).
+[ -n "${TOOLBOX_DETACH:-}" ] && run_flags=(-d --restart unless-stopped --stop-timeout 120 --name "$TOOLBOX_DETACH")
 venv="${TOOLBOX_VENV:-swarm-toolbox-venv}"
 workdir="$REPO${TOOLBOX_WORKDIR:+/$TOOLBOX_WORKDIR}"
 

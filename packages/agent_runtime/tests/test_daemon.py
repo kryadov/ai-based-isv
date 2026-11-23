@@ -104,3 +104,119 @@ def test_worker_env_carries_the_service_token() -> None:
     )
     assert env["AGENT_RUNTIME_API_TOKEN"] == "svc-token"
     assert "svc-token" not in repr(Secrets(api_token="svc-token"))
+
+
+def test_worker_env_carries_the_task_source_token() -> None:
+    settings = DaemonSettings(repo_root=Path("/repo"), workspace_dir=Path("/repo/ws"))
+    env = build_worker_env(
+        settings,
+        Secrets(litellm_key="mk", task_source_token="ts-token"),
+        run_id=1,
+        repo="swarm-lab/demo",
+        cfg=parse_project_config(CFG),
+        base={},
+    )
+    assert env["AGENT_RUNTIME_TASK_SOURCE_TOKEN"] == "ts-token"
+    assert "ts-token" not in repr(Secrets(task_source_token="ts-token"))
+
+
+def test_workers_get_the_worker_identity_token() -> None:
+    settings = DaemonSettings(repo_root=Path("/repo"), workspace_dir=Path("/repo/ws"))
+    env = build_worker_env(
+        settings,
+        Secrets(litellm_key="mk", api_token="daemon-tok", worker_api_token="worker-tok"),
+        run_id=1,
+        repo="swarm-lab/demo",
+        cfg=parse_project_config(CFG),
+        base={},
+    )
+    assert env["AGENT_RUNTIME_API_TOKEN"] == "worker-tok"
+
+
+def test_identity_tokens_fall_back_to_the_shared_token() -> None:
+    from agent_runtime.daemon import identity_tokens
+
+    shared = {"token": "t0"}
+    assert identity_tokens(shared) == ("t0", "t0", "t0")
+    split = {"token": "t0", "daemon": "d", "worker": "w", "poller": "p"}
+    assert identity_tokens(split) == ("d", "w", "p")
+
+
+def test_poller_env_carries_the_poller_token() -> None:
+    from agent_runtime.daemon import poller_env
+
+    settings = DaemonSettings(repo_root=Path("/repo"), workspace_dir=Path("/repo/ws"))
+    env = poller_env(settings, Secrets(api_token="d", poller_api_token="p", gitea_token="g"), {})
+    assert env["AGENT_RUNTIME_API_TOKEN"] == "p"
+    assert env["AUTOMATIONS_GITEA_TOKEN"] == "g"
+
+
+class _Proc:
+    def __init__(self, exits_on_terminate: bool) -> None:
+        self.exits_on_terminate = exits_on_terminate
+        self.terminated = False
+        self.killed = False
+        self.code: int | None = None
+
+    def poll(self) -> int | None:
+        return self.code
+
+    def terminate(self) -> None:
+        self.terminated = True
+        if self.exits_on_terminate:
+            self.code = 0
+
+    def kill(self) -> None:
+        self.killed = True
+        self.code = -9
+
+
+def test_stop_workers_terminates_then_kills_after_the_grace() -> None:
+    from agent_runtime.daemon import stop_workers
+
+    polite, stubborn, gone = _Proc(True), _Proc(False), _Proc(True)
+    gone.code = 0  # already exited: left alone
+    clock = iter([0.0, 0.5, 1.0, 1.5, 2.5, 3.0, 9.0])
+    stop_workers(
+        [polite, stubborn, gone], grace_s=2.0, now=lambda: next(clock), pause=lambda _: None
+    )
+    assert polite.terminated and not polite.killed
+    assert stubborn.terminated and stubborn.killed
+    assert not gone.terminated
+
+
+async def test_stand_ports_read_labels_and_remove_the_retry_label() -> None:
+    import httpx
+    from agent_runtime.daemon import StandPorts
+
+    seen: list[tuple[str, str]] = []
+
+    def gitea(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path))
+        if request.url.path.endswith("/issues") and request.method == "GET":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "number": 7,
+                        "title": "t",
+                        "body": "b",
+                        "labels": [{"id": 3, "name": "swarm"}, {"id": 9, "name": "swarm-retry"}],
+                    }
+                ],
+            )
+        if request.url.path.endswith("/issues/7/labels") and request.method == "GET":
+            return httpx.Response(
+                200, json=[{"id": 3, "name": "swarm"}, {"id": 9, "name": "swarm-retry"}]
+            )
+        return httpx.Response(204)
+
+    settings = DaemonSettings(repo_root=Path("/repo"), workspace_dir=Path("/repo/ws"))
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(gitea), base_url="http://gitea"
+    ) as client:
+        ports = StandPorts(settings, Secrets(), client, client, client)
+        tasks = await ports.list_tasks("swarm-lab/demo")
+        await ports.remove_label("swarm-lab/demo", 7, "swarm-retry")
+    assert tasks[0].labels == ("swarm", "swarm-retry")
+    assert ("DELETE", "/api/v1/repos/swarm-lab/demo/issues/7/labels/9") in seen

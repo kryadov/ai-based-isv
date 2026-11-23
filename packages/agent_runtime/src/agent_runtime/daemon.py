@@ -23,6 +23,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,10 +36,11 @@ from agent_runtime.dispatcher import Dispatcher, Task
 from agent_runtime.planner import plan_task
 from agent_runtime.project_config import ProjectConfig
 from agent_runtime.swarm import JudgeVerdict, _check_main_factory, judge_run, post_plan, worker_env
-from agent_runtime.vault_broker import AGENT_TOKEN_PATH, read_gitea_token
+from agent_runtime.vault_broker import AGENT_TOKEN_PATH, VaultBrokerError, read_gitea_token
 
 LITELLM_MASTER_PATH = "secret/litellm/master"
 SERVICE_TOKEN_PATH = "secret/platform/api"
+TASK_SOURCE_TOKEN_PATH = "secret/mcp/task-source"  # M12, written by bootstrap.sh mcp
 INTAKE_LABEL = "swarm"
 
 
@@ -58,6 +60,7 @@ class DaemonSettings(BaseSettings):
     model: str = "litellm/qwen3"
     planner_model: str = "qwen3"
     session_timeout_s: int = 600
+    shutdown_grace_s: float = 60.0  # M12: workers release their vertex, then are killed
     host_litellm_url: str = "http://localhost:30084/v1"
 
 
@@ -65,7 +68,10 @@ class DaemonSettings(BaseSettings):
 class Secrets:
     litellm_key: str = field(default="", repr=False)
     gitea_token: str = field(default="", repr=False)
-    api_token: str = field(default="", repr=False)
+    api_token: str = field(default="", repr=False)  # the daemon's own identity
+    worker_api_token: str = field(default="", repr=False)  # M12: per-identity tokens
+    poller_api_token: str = field(default="", repr=False)
+    task_source_token: str = field(default="", repr=False)
 
 
 def build_worker_env(
@@ -84,7 +90,7 @@ def build_worker_env(
     env.update(
         {
             "AGENT_RUNTIME_API_URL": settings.api_url,
-            "AGENT_RUNTIME_API_TOKEN": secrets.api_token,
+            "AGENT_RUNTIME_API_TOKEN": secrets.worker_api_token or secrets.api_token,
             "AGENT_RUNTIME_RUN_ID": str(run_id),
             "AGENT_RUNTIME_AGENT": "swarm",
             "AGENT_RUNTIME_REPO_URL": f"{settings.gitea_url}/{repo}.git",
@@ -102,6 +108,7 @@ def build_worker_env(
             ),
             "AGENT_RUNTIME_TASK_REF": task_ref,
             "AGENT_RUNTIME_TASK_SOURCE_URL": "http://localhost:30085/mcp",
+            "AGENT_RUNTIME_TASK_SOURCE_TOKEN": secrets.task_source_token,
             "AGENT_RUNTIME_GATES_ENABLED": "1",
             "AGENT_RUNTIME_CI_TIMEOUT_S": "1500",
             "AGENT_RUNTIME_HITL_POLL_S": "15",
@@ -196,9 +203,26 @@ class StandPorts:
         )
         response.raise_for_status()
         return [
-            Task(repo, int(i["number"]), str(i["title"]), str(i.get("body") or ""), True)
+            Task(
+                repo,
+                int(i["number"]),
+                str(i["title"]),
+                str(i.get("body") or ""),
+                True,
+                labels=tuple(str(lb.get("name", "")) for lb in i.get("labels") or []),
+            )
             for i in response.json()
         ]
+
+    async def remove_label(self, repo: str, number: int, label: str) -> None:
+        response = await self.gitea.get(f"/api/v1/repos/{repo}/issues/{number}/labels")
+        response.raise_for_status()
+        for item in response.json():
+            if item.get("name") == label:
+                deleted = await self.gitea.delete(
+                    f"/api/v1/repos/{repo}/issues/{number}/labels/{int(item['id'])}"
+                )
+                deleted.raise_for_status()
 
     async def comment(self, repo: str, number: int, text: str) -> None:
         response = await self.gitea.post(
@@ -274,36 +298,91 @@ class StandPorts:
         return body
 
 
+def stop_workers(
+    procs: list[Any],
+    grace_s: float,
+    *,
+    now: Callable[[], float] = time.monotonic,
+    pause: Callable[[float], None] = time.sleep,
+) -> None:
+    """SIGTERM every live process, wait up to ``grace_s`` for them, then SIGKILL (M12)."""
+    live = [p for p in procs if p.poll() is None]
+    for proc in live:
+        proc.terminate()
+    deadline = now() + grace_s
+    while any(p.poll() is None for p in live) and now() < deadline:
+        pause(0.5)
+    for proc in live:
+        if proc.poll() is None:
+            proc.kill()
+
+
 def _kubectl(argv: list[str], stdin: str | None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(  # noqa: S603 - fixed kubectl argv
         argv, input=stdin, capture_output=True, text=True, check=False, timeout=60
     )
 
 
-def load_secrets(settings: DaemonSettings) -> Secrets:
-    root = (settings.repo_root / "infra" / ".vault-root-token").read_text(encoding="utf-8").strip()
-    return Secrets(
-        litellm_key=read_gitea_token(
-            _kubectl, root_token=root, path=LITELLM_MASTER_PATH, field="master-key"
-        ),
-        gitea_token=read_gitea_token(_kubectl, root_token=root, path=AGENT_TOKEN_PATH),
-        api_token=read_gitea_token(_kubectl, root_token=root, path=SERVICE_TOKEN_PATH),
+def identity_tokens(fields: dict[str, str]) -> tuple[str, str, str]:
+    """(daemon, worker, poller) service tokens from ``secret/platform/api`` (M12).
+
+    A stand bootstrapped before M12 has only the shared ``token``: every identity
+    falls back to it until ``bootstrap.sh platform`` writes the per-identity ones.
+    """
+    shared = fields.get("token", "")
+    return (
+        fields.get("daemon") or shared,
+        fields.get("worker") or shared,
+        fields.get("poller") or shared,
     )
 
 
-def _start_poller(settings: DaemonSettings, secrets: Secrets) -> subprocess.Popen[bytes]:
-    env = dict(os.environ)
+def load_secrets(settings: DaemonSettings) -> Secrets:
+    root = (settings.repo_root / "infra" / ".vault-root-token").read_text(encoding="utf-8").strip()
+
+    def read(path: str, name: str = "token") -> str:
+        return read_gitea_token(_kubectl, root_token=root, path=path, field=name)
+
+    def optional(path: str, name: str) -> str:
+        try:
+            return read(path, name)
+        except VaultBrokerError:
+            return ""
+
+    api_fields = {
+        name: optional(SERVICE_TOKEN_PATH, name) for name in ("daemon", "worker", "poller")
+    }
+    api_fields["token"] = read(SERVICE_TOKEN_PATH)
+    daemon, worker, poller = identity_tokens(api_fields)
+    return Secrets(
+        litellm_key=read(LITELLM_MASTER_PATH, "master-key"),
+        gitea_token=read(AGENT_TOKEN_PATH),
+        api_token=daemon,
+        worker_api_token=worker,
+        poller_api_token=poller,
+        task_source_token=read(TASK_SOURCE_TOKEN_PATH),
+    )
+
+
+def poller_env(settings: DaemonSettings, secrets: Secrets, base: dict[str, str]) -> dict[str, str]:
+    """The automation poller's environment: its own service identity (M12)."""
+    env = dict(base)
     env.update(
         {
             "AGENT_RUNTIME_API_URL": settings.api_url,
-            "AGENT_RUNTIME_API_TOKEN": secrets.api_token,
+            "AGENT_RUNTIME_API_TOKEN": secrets.poller_api_token or secrets.api_token,
             "AUTOMATIONS_GITEA_URL": settings.gitea_url,
             "AUTOMATIONS_GITEA_TOKEN": secrets.gitea_token,
             "AUTOMATIONS_WORKDIR": str(settings.workspace_dir / "automations"),
         }
     )
+    return env
+
+
+def _start_poller(settings: DaemonSettings, secrets: Secrets) -> subprocess.Popen[bytes]:
     return subprocess.Popen(  # noqa: S603 - fixed argv
-        [sys.executable, "-m", "agent_runtime.automations", "poll", "--interval", "30"], env=env
+        [sys.executable, "-m", "agent_runtime.automations", "poll", "--interval", "30"],
+        env=poller_env(settings, secrets, dict(os.environ)),
     )
 
 
@@ -349,10 +428,10 @@ async def _main() -> int:
 
         log(f"dispatcher up: org={settings.org} api={settings.api_url}")
         await run_loop(tick, interval_s=settings.interval_s, stop=stop, log=log)
-    poller.terminate()
-    for procs in dispatcher.procs.values():
-        for proc in procs:
-            proc.terminate()  # leases expire; the next daemon re-spawns workers
+    # M12: workers get SIGTERM, release the vertex in flight and tear their
+    # sandbox down; the next daemon re-spawns them for the requeued vertices.
+    procs = [poller, *(p for ps in dispatcher.procs.values() for p in ps)]
+    await asyncio.to_thread(stop_workers, procs, settings.shutdown_grace_s)
     log("stopped")
     return 0
 

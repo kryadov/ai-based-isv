@@ -121,3 +121,17 @@ async def test_connection_error_raises_tracker_error() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         with pytest.raises(TrackerError):
             await TrackerClient(http, URL).add_comment("o/r#5", "x")
+
+
+async def test_tracker_sends_the_task_source_bearer_when_configured() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return _ok({"commented": True})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        await TrackerClient(http, URL, token="tok-1").add_comment("o/r#5", "hi")
+        await TrackerClient(http, URL).add_comment("o/r#5", "hi")
+    assert seen[0].headers["Authorization"] == "Bearer tok-1"
+    assert "Authorization" not in seen[1].headers

@@ -35,6 +35,12 @@ spec:
                 secretKeyRef:
                   name: mcp-task-source
                   key: gitea-token
+            # M12: the bearer every HTTP call must carry (NodePort 30085 is host-facing).
+            - name: MCP_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-task-source
+                  key: auth-token
             - name: PORT
               value: "8000"
           ports:

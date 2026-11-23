@@ -49,6 +49,7 @@ class WorkerSettings(BaseSettings):
     # --- tracker status loop (M4c): task_ref "owner/repo#N"; empty = disabled ---
     task_ref: str = ""
     task_source_url: str = ""  # task-source MCP endpoint reachable from the worker host
+    task_source_token: str = ""  # M12: bearer for the host-facing task-source (OpenBao)
     # --- gate corridor (M5): PR → CI → review → fix rounds → HITL → merge ---
     gates_enabled: bool = False  # False keeps the M4 behaviour (complete on push)
     max_fix_rounds: int = 2

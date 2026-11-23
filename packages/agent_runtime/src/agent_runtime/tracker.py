@@ -26,9 +26,14 @@ class TrackerError(RuntimeError):
 class TrackerClient:
     """Calls the task-source MCP tools over one ``httpx.AsyncClient``."""
 
-    def __init__(self, http: httpx.AsyncClient, base_url: str) -> None:
+    def __init__(self, http: httpx.AsyncClient, base_url: str, token: str = "") -> None:
         self._http = http
         self._url = base_url
+        # M12: the host-facing task-source requires a bearer token; it rides on
+        # this client's calls only (the shared http client also reaches Gitea).
+        self._headers = {"Accept": _ACCEPT, "Content-Type": "application/json"}
+        if token:
+            self._headers["Authorization"] = f"Bearer {token}"
         self._ids = itertools.count(1)
 
     async def set_status(self, task_ref: str, status: str, note: str = "") -> None:
@@ -53,7 +58,7 @@ class TrackerClient:
             response = await self._http.post(
                 self._url,
                 json=payload,
-                headers={"Accept": _ACCEPT, "Content-Type": "application/json"},
+                headers=self._headers,
             )
         except httpx.HTTPError as exc:
             raise TrackerError(f"{tool}: tracker unreachable: {exc}") from None

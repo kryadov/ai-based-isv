@@ -216,6 +216,7 @@ The corridor, the agents, the reviewer, HITL and memory are stack-agnostic. `m9_
 - **Pinned code.** `platform.sh up` pins a commit (worktree `.platform-live`), builds `swarm-platform:<sha7>`, deploys it through Argo CD and (re)starts the daemon. Editing the dev tree never changes the running platform.
 - **Intake.** Each repo's `.platform/project.yaml` (`intake`, `paths`, `done_when`, `deploy`, `workers_per_run`) is a protected gate file. The dispatcher owns runs whose project is `intake:<owner/repo>`, dedups by `task_ref` and caps the load at 2 active runs and 11 sandboxes. A restart re-adopts pending runs.
 - **Service API.** The control plane requires a bearer token on service endpoints (stand NodePorts bind 0.0.0.0). The panel session may only read; actions go through `/ui/api`.
+- **Hardening (M12).** One token per identity (`daemon`, `worker`, `poller`, operator), only their sha256 hashes in the cluster; only the operator decides HITL over the API; audit rows carry the caller's identity. The host-facing task-source MCP (:30085) needs its own bearer token; the firewall script keeps NodePorts loopback-only. Lifecycle: a SIGTERMed worker *releases* its vertex (`/vertices/{id}/release`, attempt given back) and tears its sandbox down; a failed task gets a new run through the `swarm-retry` label or the panel's Retry.
 
 ### 4a. Agent roles catalog
 

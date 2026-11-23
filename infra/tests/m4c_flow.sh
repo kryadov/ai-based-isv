@@ -162,6 +162,10 @@ MK="$(kubectl -n "$NS" exec "$VAULT_POD" -- \
   env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$(cat "$ROOT_TOKEN_FILE")" \
   bao kv get -field=master-key secret/litellm/master)"
 [ -n "$MK" ] || fail "no LiteLLM master key in OpenBao secret/litellm/master"
+# M12: the host-facing task-source needs its bearer token (section_mcp writes it).
+TASK_SOURCE_TOKEN="$(kubectl -n "$NS" exec "$VAULT_POD" -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$(cat "$ROOT_TOKEN_FILE")" bao kv get -field=token secret/mcp/task-source)"
+[ -n "$TASK_SOURCE_TOKEN" ] || fail "no task-source token in OpenBao secret/mcp/task-source (run: bootstrap.sh mcp)"
+export TASK_SOURCE_TOKEN
 python3 - "$MODEL_ALIAS" "$TMP" <<'PY'
 import json, sys
 alias, tmp = sys.argv[1], sys.argv[2]
@@ -350,7 +354,8 @@ def post(url, body, headers):
 
 rpc = post(mcp_url, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                      "params": {"name": "list_tasks", "arguments": {"task_ref_prefix": prefix}}},
-           {"Accept": "application/json, text/event-stream"})
+           {"Accept": "application/json, text/event-stream",
+            "Authorization": "Bearer " + __import__("os").environ["TASK_SOURCE_TOKEN"]})
 result = rpc["result"]
 assert not result.get("isError"), result
 tasks = result["structuredContent"]["result"]
@@ -442,7 +447,7 @@ env \
   AGENT_RUNTIME_MCP_TASK_SOURCE_URL="$TASK_READER_POD_URL" \
   AGENT_RUNTIME_MCP_LLM_URL="$LLM_POD_URL" \
   AGENT_RUNTIME_TASK_REF="$TASK_REF" \
-  AGENT_RUNTIME_TASK_SOURCE_URL="$TASK_SOURCE_HOST_URL" \
+  AGENT_RUNTIME_TASK_SOURCE_URL="$TASK_SOURCE_HOST_URL" AGENT_RUNTIME_TASK_SOURCE_TOKEN="$TASK_SOURCE_TOKEN" \
   uv run python -m agent_runtime.worker > "$WORKER_LOG" 2>&1 &
 WORKER_PID=$!
 echo "M4c flow: worker pid=$WORKER_PID (log: $WORKER_LOG)"

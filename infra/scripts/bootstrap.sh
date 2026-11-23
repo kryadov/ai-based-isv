@@ -9,12 +9,83 @@ NS=platform
 
 # CLI-хелперы OpenBao через exec в под (под выбирается по лейблу — имя меняется с чартом).
 # Рут-токен: infra/.vault-root-token (gitignored, создаётся section_vault при инициализации).
-vcli() {
-  local POD RTOK
+#
+# Secret hygiene (M12): no secret value ever reaches a process argv (visible in
+# `ps` on the stand host). The root token and secret values travel over stdin:
+# `printf` is a bash builtin, so `printf … | cmd` never execs with the value.
+_bao_exec() {
+  # stdin: root token on the first line, then the payload for bao (if any).
+  local POD
   POD="$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=openbao -o jsonpath='{.items[0].metadata.name}')"
+  kubectl -n "$NS" exec -i "$POD" -- sh -c \
+    'IFS= read -r T; export BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$T"; exec bao "$@"' sh "$@"
+}
+
+_root_token() {
+  local RTOK
   RTOK="$(cat "$ROOT/.vault-root-token" 2>/dev/null || true)"
-  [ -n "$RTOK" ] || { echo "openbao: нет root-токена ($ROOT/.vault-root-token)"; return 2; }
-  kubectl -n "$NS" exec "$POD" -- env BAO_ADDR=http://127.0.0.1:8200 VAULT_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$RTOK" VAULT_TOKEN="$RTOK" bao "$@"
+  [ -n "$RTOK" ] || { echo "openbao: no root token ($ROOT/.vault-root-token)" >&2; return 2; }
+  printf '%s' "$RTOK"
+}
+
+vcli() {
+  # bao CLI with the root token over stdin. Never pass secret values here —
+  # writes go through vput.
+  local RTOK
+  RTOK="$(_root_token)" || return 2
+  printf '%s\n' "$RTOK" | _bao_exec "$@"
+}
+
+_json_str() {
+  local s="$1"
+  s="${s//\\/\\\\}"; s="${s//\"/\\\"}"
+  printf '"%s"' "$s"
+}
+
+vput() {
+  # vput <path> key=value... — replaces the secret at <path>; values over stdin as JSON.
+  local path="$1" kv first=1 RTOK
+  shift
+  RTOK="$(_root_token)" || return 2
+  {
+    printf '%s\n{' "$RTOK"
+    for kv in "$@"; do
+      [ "$first" = 1 ] || printf ','
+      first=0
+      _json_str "${kv%%=*}"; printf ':'; _json_str "${kv#*=}"
+    done
+    printf '}'
+  } | _bao_exec kv put "$path" - >/dev/null
+}
+
+apply_secret() {
+  # apply_secret <namespace> <name> [--label k=v] key=value... — an Opaque
+  # Secret rendered with builtins into `kubectl apply -f -` (no literal flags on argv).
+  local ns="$1" name="$2" kv label=""
+  shift 2
+  if [ "${1:-}" = "--label" ]; then label="$2"; shift 2; fi
+  {
+    printf 'apiVersion: v1\nkind: Secret\ntype: Opaque\nmetadata:\n  name: %s\n  namespace: %s\n' "$name" "$ns"
+    [ -z "$label" ] || printf '  labels:\n    %s: "%s"\n' "${label%%=*}" "${label#*=}"
+    printf 'data:\n'
+    for kv in "$@"; do
+      printf '  %s: %s\n' "${kv%%=*}" "$(printf '%s' "${kv#*=}" | base64 | tr -d '\n')"
+    done
+  } | kubectl apply -f - >/dev/null
+}
+
+# curl with a credential from a stdin config (`-K -`), never from argv.
+tcurl() { local t="$1"; shift; printf 'header = "Authorization: token %s"\n' "$t" | curl -K - "$@"; }
+bcurl() { local t="$1"; shift; printf 'header = "Authorization: Bearer %s"\n' "$t" | curl -K - "$@"; }
+ucurl() { local u="$1"; shift; printf 'user = "%s"\n' "$u" | curl -K - "$@"; }
+# tdcurl/udcurl <cred> <body> args… — the request body rides in the same stdin config.
+tdcurl() {
+  local t="$1" d="$2"; shift 2
+  { printf 'header = "Authorization: token %s"\ndata = ' "$t"; _json_str "$d"; printf '\n'; } | curl -K - "$@"
+}
+udcurl() {
+  local u="$1" d="$2"; shift 2
+  { printf 'user = "%s"\ndata = ' "$u"; _json_str "$d"; printf '\n'; } | curl -K - "$@"
 }
 
 section_vault() {
@@ -50,7 +121,8 @@ section_vault() {
   if echo "$STATUS_OUT" | grep "Sealed" | grep -q "true"; then
     ukey="$(python3 -c 'import json;print(json.load(open("'"$keys_file"'"))["unseal_keys_b64"][0])' 2>/dev/null || true)"
     [ -n "$ukey" ] || { echo "vault: нет unseal-ключей ($keys_file)"; exit 1; }
-    vrun operator unseal "$ukey" >/dev/null
+    # the key travels over stdin (`-`), never argv (M12)
+    printf '%s\n' "$ukey" | kubectl -n "$NS" exec -i "$POD" -- env BAO_ADDR=http://127.0.0.1:8200 bao operator unseal - >/dev/null
   fi
   echo "$STATUS_OUT" | grep -E "Initialized|Sealed"
   # OpenBao 2.x не монтирует secret/ автоматически — включаем kv-v2 (идемпотентно)
@@ -79,19 +151,18 @@ ensure_admin_token() {
   pw="$(vcli kv get -field=password secret/gitea/admin 2>/dev/null || true)"
   old="$(vcli kv get -field=token secret/gitea/admin 2>/dev/null || true)"
   if [ -n "$old" ]; then
-    code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: token $old" http://localhost:30080/api/v1/user || true)"
+    code="$(tcurl "$old" -s -o /dev/null -w '%{http_code}' http://localhost:30080/api/v1/user || true)"
     [ "$code" = "200" ] && { echo "gitea: existing admin token valid"; return 0; }
   fi
   local name="bootstrap-$(date +%s)"
-  code="$(curl -s -o /tmp/gitea-token.json -w '%{http_code}' \
-    -u "swarm-admin:$pw" -X POST \
+  code="$(ucurl "swarm-admin:$pw" -s -o /tmp/gitea-token.json -w '%{http_code}' -X POST \
     -H 'Content-Type: application/json' \
     -d "{\"name\":\"$name\",\"scopes\":[\"all\"]}" \
     http://localhost:30080/api/v1/users/swarm-admin/tokens)"
   [ "$code" = "201" ] || { echo "gitea: token create failed ($code): $(cat /tmp/gitea-token.json)"; exit 1; }
   tok="$(python3 -c 'import json;print(json.load(open("/tmp/gitea-token.json"))["sha1"])')"
   [ -n "$tok" ] || { echo "gitea: empty token sha1"; exit 1; }
-  vcli kv put secret/gitea/admin username=swarm-admin "password=$pw" "token=$tok" >/dev/null
+  vput secret/gitea/admin username=swarm-admin "password=$pw" "token=$tok"
   echo "gitea: admin token stored in vault"
 }
 
@@ -100,18 +171,22 @@ section_gitea() {
   helm repo update gitea >/dev/null
   local pw dbpw
   pw="$(vcli kv get -field=password secret/gitea/admin 2>/dev/null || true)"
-  [ -n "$pw" ] || { pw="$(openssl rand -hex 16)"; vcli kv put secret/gitea/admin username=swarm-admin "password=$pw" >/dev/null; }
-  local extvals=()
+  [ -n "$pw" ] || { pw="$(openssl rand -hex 16)"; vput secret/gitea/admin username=swarm-admin "password=$pw"; }
+  local extvals=() secvals
+  # Passwords reach helm through a 0600 values file, never --set (argv; M12).
+  secvals="$(mktemp)"; chmod 600 "$secvals"
+  printf 'gitea:\n  admin:\n    username: swarm-admin\n    password: %s\n' "$(_json_str "$pw")" > "$secvals"
   if kubectl -n "$NS" get secret postgres-platform-app >/dev/null 2>&1; then
     dbpw="$(kubectl -n "$NS" get secret postgres-platform-app -o jsonpath='{.data.password}' | base64 -d)"
-    extvals=(--values "$ROOT/gitea/values-external-db.yaml" --set "gitea.config.database.PASSWD=$dbpw")
+    printf '  config:\n    database:\n      PASSWD: %s\n' "$(_json_str "$dbpw")" >> "$secvals"
+    extvals=(--values "$ROOT/gitea/values-external-db.yaml")
   fi
   helm upgrade --install gitea gitea/gitea \
     --namespace "$NS" \
-    --set gitea.admin.username=swarm-admin \
-    --set "gitea.admin.password=$pw" \
     --values "$ROOT/gitea/values.yaml" \
-    "${extvals[@]}" --wait --timeout 10m
+    "${extvals[@]}" --values "$secvals" --wait --timeout 10m \
+    || { rm -f "$secvals"; exit 1; }
+  rm -f "$secvals"
   kubectl -n "$NS" wait --for=condition=Ready pod -l app.kubernetes.io/name=gitea --timeout=300s 2>/dev/null || true
   ensure_admin_token
   local code
@@ -131,45 +206,43 @@ section_agent_user() {
   out="$(mktemp)"
   pw="$(vcli kv get -field=password secret/gitea/agent 2>/dev/null || true)"
   [ -n "$pw" ] || pw="$(openssl rand -hex 16)"
-  code="$(curl -s -o "$out" -w '%{http_code}' -X POST -H "Authorization: token $atok" \
-    -H 'Content-Type: application/json' "$api/admin/users" \
-    -d "{\"username\":\"swarm-agent\",\"email\":\"swarm-agent@lab.local\",\"password\":\"$pw\",\"must_change_password\":false}")"
+  code="$(tdcurl "$atok" "{\"username\":\"swarm-agent\",\"email\":\"swarm-agent@lab.local\",\"password\":\"$pw\",\"must_change_password\":false}" \
+    -s -o "$out" -w '%{http_code}' -X POST -H 'Content-Type: application/json' "$api/admin/users")"
   case "$code" in
     201) echo "agent-user: swarm-agent created" ;;
     422) echo "agent-user: swarm-agent exists" ;;
     *) echo "agent-user: create failed ($code): $(cat "$out")"; exit 1 ;;
   esac
   # The stored password must work (a user created by an older run keeps its own).
-  curl -s -o /dev/null -X PATCH -H "Authorization: token $atok" -H 'Content-Type: application/json' \
-    "$api/admin/users/swarm-agent" \
-    -d "{\"login_name\":\"swarm-agent\",\"source_id\":0,\"password\":\"$pw\",\"must_change_password\":false,\"admin\":false}"
+  tdcurl "$atok" "{\"login_name\":\"swarm-agent\",\"source_id\":0,\"password\":\"$pw\",\"must_change_password\":false,\"admin\":false}" \
+    -s -o /dev/null -X PATCH -H 'Content-Type: application/json' "$api/admin/users/swarm-agent"
   tok="$(vcli kv get -field=token secret/gitea/agent 2>/dev/null || true)"
-  if [ -n "$tok" ] && [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: token $tok" "$api/user")" = "200" ]; then
+  if [ -n "$tok" ] && [ "$(tcurl "$tok" -s -o /dev/null -w '%{http_code}' "$api/user")" = "200" ]; then
     echo "agent-user: existing token valid"
   else
-    code="$(curl -s -o "$out" -w '%{http_code}' -u "swarm-agent:$pw" -X POST \
+    code="$(ucurl "swarm-agent:$pw" -s -o "$out" -w '%{http_code}' -X POST \
       -H 'Content-Type: application/json' "$api/users/swarm-agent/tokens" \
       -d "{\"name\":\"agent-$(date +%s)\",\"scopes\":[\"write:repository\",\"write:issue\",\"read:user\",\"read:organization\"]}")"
     [ "$code" = "201" ] || { echo "agent-user: token create failed ($code)"; exit 1; }
     tok="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["sha1"])' "$out")"
   fi
-  vcli kv put secret/gitea/agent username=swarm-agent "password=$pw" "token=$tok" >/dev/null
+  vput secret/gitea/agent username=swarm-agent "password=$pw" "token=$tok"
   # Org swarm-lab (flows and the platform repo live there) + team agents.
-  if [ "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: token $atok" "$api/orgs/swarm-lab")" != "200" ]; then
-    curl -sf -o /dev/null -X POST -H "Authorization: token $atok" -H 'Content-Type: application/json' \
+  if [ "$(tcurl "$atok" -s -o /dev/null -w '%{http_code}' "$api/orgs/swarm-lab")" != "200" ]; then
+    tcurl "$atok" -sf -o /dev/null -X POST -H 'Content-Type: application/json' \
       "$api/orgs" -d '{"username":"swarm-lab","visibility":"private"}' \
       || { echo "agent-user: could not create org swarm-lab"; exit 1; }
   fi
-  tid="$(curl -sf -H "Authorization: token $atok" "$api/orgs/swarm-lab/teams" \
+  tid="$(tcurl "$atok" -sf "$api/orgs/swarm-lab/teams" \
     | python3 -c 'import json,sys;print(next((t["id"] for t in json.load(sys.stdin) if t["name"]=="agents"),""))')"
   if [ -z "$tid" ]; then
-    curl -sf -o "$out" -X POST -H "Authorization: token $atok" -H 'Content-Type: application/json' \
+    tcurl "$atok" -sf -o "$out" -X POST -H 'Content-Type: application/json' \
       "$api/orgs/swarm-lab/teams" \
       -d '{"name":"agents","permission":"write","includes_all_repositories":true,"units":["repo.code","repo.pulls","repo.issues","repo.actions"]}' \
       || { echo "agent-user: could not create team agents"; exit 1; }
     tid="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["id"])' "$out")"
   fi
-  curl -sf -o /dev/null -X PUT -H "Authorization: token $atok" "$api/teams/$tid/members/swarm-agent" \
+  tcurl "$atok" -sf -o /dev/null -X PUT "$api/teams/$tid/members/swarm-agent" \
     || { echo "agent-user: could not add swarm-agent to team agents"; exit 1; }
   rm -f "$out"
   echo "agent-user: swarm-agent (non-admin) → team agents (write, swarm-lab); token in secret/gitea/agent"
@@ -180,15 +253,13 @@ section_runner() {
   local rtok n
   ensure_admin_token
   local atok; atok="$(vcli kv get -field=token secret/gitea/admin)"
-  rtok="$(curl -sf -X POST -H "Authorization: token $atok" http://localhost:30080/api/v1/admin/actions/runners/registration-token | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])')"
-  kubectl -n "$NS" create secret generic act-runner-registration \
-    --from-literal="token=$rtok" \
-    --dry-run=client -o yaml | kubectl apply -f -
+  rtok="$(tcurl "$atok" -sf -X POST http://localhost:30080/api/v1/admin/actions/runners/registration-token | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])')"
+  apply_secret "$NS" act-runner-registration "token=$rtok"
   kubectl apply -f "$ROOT/gitea/act-runner.yaml"
   # Labels/instance URL live in a ConfigMap: restart so a changed config is picked up.
   kubectl -n "$NS" rollout restart deploy/act-runner >/dev/null
   kubectl -n "$NS" rollout status deploy/act-runner --timeout=300s
-  n="$(curl -sf -H "Authorization: token $atok" http://localhost:30080/api/v1/admin/actions/runners | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')"
+  n="$(tcurl "$atok" -sf http://localhost:30080/api/v1/admin/actions/runners | python3 -c 'import json,sys;print(len(json.load(sys.stdin)))')"
   [ "$n" -ge 1 ] || { echo "runner: not registered"; exit 1; }
   echo "runner: registered ($n)"
 }
@@ -206,14 +277,8 @@ section_argocd() {
     local gtok
     gtok="${GITHUB_TOKEN:-$(gh auth token 2>/dev/null || true)}"
     [ -n "$gtok" ] || { echo "argocd: репо приватное и нет gh-токена (gh auth login или GITHUB_TOKEN)"; exit 1; }
-    kubectl -n "$NS" create secret generic argocd-repo-github-ai-based-isv \
-      --from-literal=url=https://github.com/kryadov/ai-based-isv \
-      --from-literal=username=kryadov \
-      --from-literal="password=$gtok" \
-      --type=Opaque \
-      --dry-run=client -o yaml \
-    | kubectl label --local -f - argocd.argoproj.io/secret-type=repository --dry-run=client -o yaml \
-    | kubectl apply -f - >/dev/null
+    apply_secret "$NS" argocd-repo-github-ai-based-isv --label argocd.argoproj.io/secret-type=repository \
+      url=https://github.com/kryadov/ai-based-isv username=kryadov "password=$gtok"
     echo "argocd: repo creds wired (private repo)"
   else
     echo "argocd: repo public — anonymous clone"
@@ -229,17 +294,15 @@ section_monitoring() {
   helm repo update prometheus-community >/dev/null
   local pw
   pw="$(vcli kv get -field=password secret/grafana/admin 2>/dev/null || true)"
-  [ -n "$pw" ] || { pw="$(openssl rand -hex 12)"; vcli kv put secret/grafana/admin username=admin "password=$pw" >/dev/null; }
-  kubectl -n "$NS" create secret generic grafana-admin \
-    --from-literal=username=admin --from-literal="password=$pw" \
-    --dry-run=client -o yaml | kubectl apply -f -
+  [ -n "$pw" ] || { pw="$(openssl rand -hex 12)"; vput secret/grafana/admin username=admin "password=$pw"; }
+  apply_secret "$NS" grafana-admin username=admin "password=$pw"
   helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
     --version 93.0.0 \
     --namespace "$NS" \
     -f "$ROOT/monitoring/values.yaml" --wait --timeout 15m
   kubectl -n "$NS" wait --for=condition=Available deployment/kube-prometheus-stack-grafana --timeout=300s 2>/dev/null || true
   local code
-  code="$(curl -s -o /dev/null -w '%{http_code}' -u "admin:$pw" http://localhost:30082/api/health || true)"
+  code="$(ucurl "admin:$pw" -s -o /dev/null -w '%{http_code}' http://localhost:30082/api/health || true)"
   [ "$code" = "200" ] || { echo "grafana: not reachable ($code)"; exit 1; }
   echo "monitoring: kube-prometheus-stack ready (grafana http://localhost:30082)"
 }
@@ -296,12 +359,9 @@ section_demo() {
   # Argo CD reads the Gitea repo as the non-admin agent user (read is enough).
   tok="$(vcli kv get -field=token secret/gitea/agent 2>/dev/null || true)"
   [ -n "$tok" ] || { echo "demo: no secret/gitea/agent — run: bootstrap.sh agent-user"; exit 1; }
-  kubectl -n "$NS" create secret generic argocd-repo-gitea-isv-product \
-    --from-literal=url=http://gitea-http.platform.svc.cluster.local:3000/swarm-lab/isv-product.git \
-    --from-literal=username=swarm-agent --from-literal="password=$tok" \
-    --dry-run=client -o yaml \
-    | kubectl label --local -f - argocd.argoproj.io/secret-type=repository --dry-run=client -o yaml \
-    | kubectl apply -f - >/dev/null
+  apply_secret "$NS" argocd-repo-gitea-isv-product --label argocd.argoproj.io/secret-type=repository \
+    url=http://gitea-http.platform.svc.cluster.local:3000/swarm-lab/isv-product.git \
+    username=swarm-agent "password=$tok"
   # The pre-M6 podinfo demo: its Application had no finalizer, so delete its objects too.
   kubectl -n "$NS" delete application demo-prod --ignore-not-found >/dev/null
   kubectl -n prod delete deploy,svc,servicemonitor -l app=podinfo --ignore-not-found >/dev/null 2>&1 || true
@@ -332,10 +392,8 @@ section_openproject() {
   helm repo update openproject >/dev/null
   local pw
   pw="$(vcli kv get -field=password secret/openproject/admin 2>/dev/null || true)"
-  [ -n "$pw" ] || { pw="$(openssl rand -hex 12)"; vcli kv put secret/openproject/admin username=op-admin "password=$pw" >/dev/null; }
-  kubectl -n "$NS" create secret generic openproject-admin \
-    --from-literal="password=$pw" \
-    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  [ -n "$pw" ] || { pw="$(openssl rand -hex 12)"; vput secret/openproject/admin username=op-admin "password=$pw"; }
+  apply_secret "$NS" openproject-admin "password=$pw"
   helm upgrade --install openproject openproject/openproject \
     --namespace "$NS" \
     --values "$ROOT/openproject/values.yaml" --wait --timeout 20m
@@ -358,7 +416,7 @@ section_litellm() {
   # .env (owner) → OpenBao secret/litellm/{zai,openrouter} → Secret litellm-provider.
   local mk zkey okey
   mk="$(vcli kv get -field=master-key secret/litellm/master 2>/dev/null || true)"
-  [ -n "$mk" ] || { mk="sk-lab-$(openssl rand -hex 12)"; vcli kv put secret/litellm/master "master-key=$mk" >/dev/null; }
+  [ -n "$mk" ] || { mk="sk-lab-$(openssl rand -hex 12)"; vput secret/litellm/master "master-key=$mk"; }
   [ -n "$mk" ] || { echo "litellm: пустой master key — прерываю"; exit 1; }
   import_llm_keys_from_dotenv
   zkey="$(vcli kv get -field=api-key secret/litellm/zai 2>/dev/null || true)"
@@ -367,22 +425,17 @@ section_litellm() {
   [ -n "$zkey" ] || echo "litellm: WARNING no z.ai key — every request goes to the OpenRouter fallback"
   [ -n "$okey" ] || echo "litellm: WARNING no OpenRouter key — no fallback when the z.ai plan limit is hit"
   local -a lits=()
-  [ -n "$zkey" ] && lits+=(--from-literal="zai-api-key=$zkey")
-  [ -n "$okey" ] && lits+=(--from-literal="openrouter-api-key=$okey")
-  kubectl -n "$NS" create secret generic litellm-provider "${lits[@]}" \
-    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  [ -n "$zkey" ] && lits+=("zai-api-key=$zkey")
+  [ -n "$okey" ] && lits+=("openrouter-api-key=$okey")
+  apply_secret "$NS" litellm-provider "${lits[@]}"
   # БД для LiteLLM (ключи/teams хранятся там же)
   kubectl apply -f "$ROOT/postgres/litellm-database.yaml"
   kubectl -n "$NS" wait --for=jsonpath='{.status.ready}'=true database/litellm-db --timeout=180s 2>/dev/null || true
   local dbpw dburl
   dbpw="$(kubectl -n "$NS" get secret postgres-platform-app -o jsonpath='{.data.password}' | base64 -d)"
   dburl="postgresql://gitea:${dbpw}@postgres-platform-rw.$NS.svc.cluster.local:5432/litellm"
-  kubectl -n "$NS" create secret generic litellm-db-url \
-    --from-literal="url=$dburl" \
-    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-  kubectl -n "$NS" create secret generic litellm-master \
-    --from-literal="master-key=$mk" \
-    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  apply_secret "$NS" litellm-db-url "url=$dburl"
+  apply_secret "$NS" litellm-master "master-key=$mk"
   # OpenRouter only on the z.ai plan limit: the gate callback is mounted next
   # to config.yaml (infra/litellm/zai_limit_gate.py).
   kubectl -n "$NS" create configmap litellm-hooks \
@@ -397,7 +450,7 @@ section_litellm() {
   local code i
   code=""
   for i in $(seq 1 12); do
-    code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $mk" -H 'Content-Type: application/json' \
+    code="$(bcurl "$mk" -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
       -d '{"model":"qwen-coder","messages":[{"role":"user","content":"ping"}],"max_tokens":16}' \
       http://localhost:30084/v1/chat/completions || true)"
     [ "$code" = "200" ] && break
@@ -457,13 +510,10 @@ section_llm_key() {
 
 # stdin → OpenBao secret/litellm/<provider> (api-key); never via argv.
 store_llm_key() {
-  local POD RTOK
-  POD="$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=openbao -o jsonpath='{.items[0].metadata.name}')"
-  RTOK="$(cat "$ROOT/.vault-root-token" 2>/dev/null || true)"
-  [ -n "$RTOK" ] || { echo "openbao: нет root-токена ($ROOT/.vault-root-token)"; exit 2; }
-  # `api-key=-` makes bao read the value from stdin (exec -i), never from argv.
-  kubectl -n "$NS" exec -i "$POD" -- env BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$RTOK" \
-    bao kv put "secret/litellm/$1" api-key=- >/dev/null
+  local RTOK
+  RTOK="$(_root_token)" || exit 2
+  # The root token is the first stdin line; `api-key=-` reads the rest as the value.
+  { printf '%s\n' "$RTOK"; cat; } | _bao_exec kv put "secret/litellm/$1" api-key=- >/dev/null
 }
 
 section_agents() {
@@ -485,7 +535,7 @@ section_mcp() {
   # (read-only, for sandboxes) + llm (LiteLLM proxy) in `agents`.
   # The image is built on the host and made visible to the cluster: `agents` is
   # default-deny, so pods cannot pip-install at boot.
-  local img="mcp-servers:0.1.0" gt mk
+  local img="mcp-servers:0.1.0" gt mk at
   docker build -q -f "$ROOT/mcp/Dockerfile" -t "$img" "$ROOT/../packages/mcp_servers" >/dev/null
   cluster_image_import "$img"
   # Credentials: OpenBao -> per-server k8s Secrets (values never echoed).
@@ -493,8 +543,11 @@ section_mcp() {
   [ -n "$gt" ] || { echo "mcp: no Gitea token at secret/gitea/admin (OpenBao sealed?)"; exit 1; }
   mk="$(vcli kv get -field=master-key secret/litellm/master 2>/dev/null || true)"
   [ -n "$mk" ] || { echo "mcp: no LiteLLM key at secret/litellm/master"; exit 1; }
-  kubectl -n agents create secret generic mcp-task-source --from-literal="gitea-token=$gt"     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-  kubectl -n agents create secret generic mcp-llm --from-literal="api-key=$mk"     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  # Bearer token of the host-facing task-source (M12): generated once.
+  at="$(vcli kv get -field=token secret/mcp/task-source 2>/dev/null || true)"
+  [ -n "$at" ] || { at="$(openssl rand -hex 32)"; vput secret/mcp/task-source "token=$at"; }
+  apply_secret agents mcp-task-source "gitea-token=$gt" "auth-token=$at"
+  apply_secret agents mcp-llm "api-key=$mk"
   kubectl apply -f "$ROOT/agents/netpol-allow.yaml"
   kubectl apply -f "$ROOT/agents/netpol-mcp.yaml"
   kubectl apply -f "$ROOT/mcp/task-source.yaml"
@@ -511,15 +564,87 @@ section_mcp() {
   kubectl -n agents rollout status deploy/observability --timeout=180s
   # Host access for the worker's tracker loop: publish NodePort 30085 once.
   cluster_publish_nodeport 30085
-  local code i
+  local code i anon
+  local -a probe=(-s -o /dev/null -w '%{http_code}' -X POST http://localhost:30085/mcp
+    -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream'
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
   code=""
   for i in $(seq 1 20); do
-    code="$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:30085/mcp       -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream'       -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' || true)"
+    code="$(bcurl "$at" "${probe[@]}" || true)"
     [ "$code" = "200" ] && break
     sleep 3
   done
   [ "$code" = "200" ] || { echo "mcp: task-source not answering on :30085 ($code)"; exit 1; }
-  echo "mcp: task-source (write, host-only :30085), task-reader + llm + ci (sandbox, *.agents.svc:8000) Ready"
+  # M12: the same call without the bearer token must be refused.
+  anon="$(curl "${probe[@]}" || true)"
+  [ "$anon" = "401" ] || { echo "mcp: task-source answers without a token ($anon)"; exit 1; }
+  echo "mcp: task-source (write, host-only :30085, bearer 401/200 ok), task-reader + llm + ci (sandbox, *.agents.svc:8000) Ready"
+}
+
+PLATFORM_IDENTITIES="token daemon worker poller"  # `token` = the operator (M11 name)
+
+platform_api_tokens() {
+  # platform_api_tokens [identity...] — ensure one bearer token per identity in
+  # OpenBao secret/platform/api; the identities named are rotated (new value).
+  local id val rotate=" $* " args=()
+  for id in $PLATFORM_IDENTITIES; do
+    val="$(vcli kv get -field="$id" secret/platform/api 2>/dev/null || true)"
+    case "$rotate" in *" $id "*|*" all "*) val="" ;; esac
+    [ -n "$val" ] || val="$(openssl rand -hex 32)"
+    args+=("$id=$val")
+  done
+  vput secret/platform/api "${args[@]}"
+}
+
+apply_agent_api_secret() {
+  # Secret agent-api from OpenBao: DB URL, UI users, session secret and the
+  # service identities as sha256 hashes only — the cluster holds no usable token.
+  local pw sess hash pgpw id val name spec=""
+  pw="$(vcli kv get -field=password secret/platform/ui)"
+  sess="$(vcli kv get -field=session-secret secret/platform/ui)"
+  hash="$(printf '%s' "$pw" | sha256sum | cut -d' ' -f1)"
+  for id in $PLATFORM_IDENTITIES; do
+    val="$(vcli kv get -field="$id" secret/platform/api)"
+    name="$id"; [ "$id" = token ] && name=operator
+    spec="${spec:+$spec,}$name:$(printf '%s' "$val" | sha256sum | cut -d' ' -f1)"
+  done
+  pgpw="$(kubectl -n "$NS" get secret postgres-platform-app -o jsonpath='{.data.password}' | base64 -d)"
+  apply_secret "$NS" agent-api \
+    "database-url=postgresql+asyncpg://gitea:$pgpw@postgres-platform-rw.$NS.svc.cluster.local:5432/swarm" \
+    "ui-users=owner:$hash:admin" "session-secret=$sess" "service-tokens=$spec"
+}
+
+section_platform_token() {
+  # bootstrap.sh platform-token rotate [token|daemon|worker|poller|all] (M12):
+  # new bearer token(s) in OpenBao, the control plane restarted with the new
+  # hashes, the daemon restarted so it reads its own and the workers' tokens.
+  [ "${1:-}" = "rotate" ] || { echo "usage: bootstrap.sh platform-token rotate [token|daemon|worker|poller|all]"; exit 2; }
+  shift
+  [ $# -gt 0 ] || set -- all
+  platform_api_tokens "$@"
+  apply_agent_api_secret
+  kubectl -n "$NS" rollout restart deployment/agent-api >/dev/null
+  kubectl -n "$NS" rollout status deployment/agent-api --timeout=180s >/dev/null
+  if docker inspect swarm-platform-daemon >/dev/null 2>&1; then
+    docker restart swarm-platform-daemon >/dev/null
+  fi
+  echo "platform-token: rotated ($*); control plane and daemon restarted"
+}
+
+drop_merged_platform_live() {
+  # M12: the acceptance-only Gitea branch platform-live goes away once its tip
+  # is on the lab copy's main (checked against Gitea's main, which may lag GitHub).
+  local atok="$1" api="$2" tip
+  tip="$(tcurl "$atok" -sf "$api/repos/swarm-lab/ai-based-isv/branches/platform-live" 2>/dev/null \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["commit"]["id"])' 2>/dev/null || true)"
+  [ -n "$tip" ] || return 0
+  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="Authorization: token $atok" \
+    git -C "$ROOT/.." fetch -q http://localhost:30080/swarm-lab/ai-based-isv.git main 2>/dev/null || return 0
+  if git -C "$ROOT/.." merge-base --is-ancestor "$tip" FETCH_HEAD 2>/dev/null; then
+    tcurl "$atok" -sf -o /dev/null -X DELETE "$api/repos/swarm-lab/ai-based-isv/branches/platform-live" \
+      && echo "platform: stale Gitea branch platform-live removed (its commit is on main)"
+  fi
+  return 0
 }
 
 section_platform() {
@@ -532,7 +657,7 @@ section_platform() {
   #   - the pinned commit must be reachable in the lab Gitea copy: when it is
   #     not on main yet (acceptance before merge) it is pushed to the unprotected
   #     branch platform-live; the Application is pinned to that commit.
-  local sha="${1:-}" tag pw sess svc hash pgpw tok atok rel api="http://localhost:30080/api/v1" phase i
+  local sha="${1:-}" tag pw sess tok atok rel api="http://localhost:30080/api/v1" phase i
   [ -n "$sha" ] || { echo "platform: usage: bootstrap.sh platform <commit sha>"; exit 2; }
   tag="${sha:0:7}"
   docker image inspect "swarm-platform:$tag" >/dev/null 2>&1 \
@@ -541,36 +666,28 @@ section_platform() {
   [ -n "$pw" ] || pw="$(openssl rand -hex 12)"
   sess="$(vcli kv get -field=session-secret secret/platform/ui 2>/dev/null || true)"
   [ -n "$sess" ] || sess="$(openssl rand -hex 32)"
-  vcli kv put secret/platform/ui username=owner "password=$pw" "session-secret=$sess" >/dev/null
-  # Service-API bearer token (M11): stand NodePorts bind 0.0.0.0, so the
-  # control plane's service endpoints are never open; the daemon reads it here.
-  svc="$(vcli kv get -field=token secret/platform/api 2>/dev/null || true)"
-  [ -n "$svc" ] || svc="$(openssl rand -hex 32)"
-  vcli kv put secret/platform/api "token=$svc" >/dev/null
-  hash="$(printf '%s' "$pw" | sha256sum | cut -d' ' -f1)"
-  pgpw="$(kubectl -n "$NS" get secret postgres-platform-app -o jsonpath='{.data.password}' | base64 -d)"
-  kubectl -n "$NS" create secret generic agent-api \
-    --from-literal="database-url=postgresql+asyncpg://gitea:$pgpw@postgres-platform-rw.$NS.svc.cluster.local:5432/swarm" \
-    --from-literal="ui-users=owner:$hash:admin" \
-    --from-literal="session-secret=$sess"     --from-literal="service-token=$svc" \
-    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  vput secret/platform/ui username=owner "password=$pw" "session-secret=$sess"
+  # Service-API bearer tokens (M11; one per identity since M12): stand NodePorts
+  # bind 0.0.0.0, so the control plane's service endpoints are never open.
+  platform_api_tokens
+  apply_agent_api_secret
   # Argo CD reads the platform repo's lab copy as the non-admin agent user.
   tok="$(vcli kv get -field=token secret/gitea/agent 2>/dev/null || true)"
   [ -n "$tok" ] || { echo "platform: no secret/gitea/agent — run: bootstrap.sh agent-user"; exit 1; }
-  kubectl -n "$NS" create secret generic argocd-repo-gitea-ai-based-isv \
-    --from-literal=url=http://gitea-http.platform.svc.cluster.local:3000/swarm-lab/ai-based-isv.git \
-    --from-literal=username=swarm-agent --from-literal="password=$tok" \
-    --dry-run=client -o yaml \
-    | kubectl label --local -f - argocd.argoproj.io/secret-type=repository --dry-run=client -o yaml \
-    | kubectl apply -f - >/dev/null
+  apply_secret "$NS" argocd-repo-gitea-ai-based-isv --label argocd.argoproj.io/secret-type=repository \
+    url=http://gitea-http.platform.svc.cluster.local:3000/swarm-lab/ai-based-isv.git \
+    username=swarm-agent "password=$tok"
   # The pinned commit must exist in the Gitea copy.
   atok="$(vcli kv get -field=token secret/gitea/admin)"
-  rel="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: token $atok" "$api/repos/swarm-lab/ai-based-isv/git/commits/$sha")"
+  rel="$(tcurl "$atok" -s -o /dev/null -w '%{http_code}' "$api/repos/swarm-lab/ai-based-isv/git/commits/$sha")"
   if [ "$rel" != "200" ]; then
-    git -C "$ROOT/.." -c "http.extraHeader=Authorization: token $atok" \
-      push -q -f http://localhost:30080/swarm-lab/ai-based-isv.git "$sha:refs/heads/platform-live" \
+    # The header rides in the environment (GIT_CONFIG_*), never argv (M12).
+    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="Authorization: token $atok" \
+      git -C "$ROOT/.." push -q -f http://localhost:30080/swarm-lab/ai-based-isv.git "$sha:refs/heads/platform-live" \
       || { echo "platform: could not push $tag to Gitea branch platform-live"; exit 1; }
     echo "platform: $tag pushed to Gitea branch platform-live (not on main yet)"
+  else
+    drop_merged_platform_live "$atok" "$api"
   fi
   kubectl apply -f "$ROOT/../infra/argocd/appproject-platform.yaml" >/dev/null
   kubectl apply -f "$ROOT/../infra/argocd/application-platform-control.yaml" >/dev/null
@@ -617,7 +734,8 @@ case "${1:-all}" in
   mcp)    section_mcp ;;
   platform) section_platform "${2:-}" ;;
   platform-password) section_platform_password ;;
+  platform-token) shift; section_platform_token "$@" ;;
   # `all` brings the stand cluster (k3d / Rancher Desktop) up first so `org-bootstrap apply` works on a fresh machine.
   all)    cluster_up; section_vault; section_cnpg; section_gitea; section_agent_user; section_runner; section_argocd; section_rollouts; section_monitoring; section_loki; section_demo; section_org_memory; section_openproject; section_litellm; section_agents; section_mcp ;;
-  *) echo "usage: $0 [cluster|vault|cnpg|gitea|agent-user|runner|argocd|rollouts|monitoring|loki|demo|org-memory|openproject|litellm|llm-key [zai|openrouter]|agents|mcp|platform <sha>|platform-password|all]"; exit 2 ;;
+  *) echo "usage: $0 [cluster|vault|cnpg|gitea|agent-user|runner|argocd|rollouts|monitoring|loki|demo|org-memory|openproject|litellm|llm-key [zai|openrouter]|agents|mcp|platform <sha>|platform-password|platform-token rotate [id|all]|all]"; exit 2 ;;
 esac

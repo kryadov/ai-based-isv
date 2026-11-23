@@ -19,6 +19,8 @@ Real code appears via tracker tasks through the platform pipeline.
 
 # Issues with this label are picked up by the platform dispatcher (M11).
 INTAKE_LABEL = "swarm"
+# A human adds this to an issue whose run failed to get a new run (M12).
+RETRY_LABEL = "swarm-retry"
 # Branch of the single PR that carries profile updates into a protected main.
 PROFILE_BRANCH = "platform/profile-update"
 
@@ -237,6 +239,7 @@ class GiteaClient:
             else None
         )
         self.ensure_label(repo, INTAKE_LABEL, "#2f5bd3", "the platform picks this issue up (M11)")
+        self.ensure_label(repo, RETRY_LABEL, "#d97706", "run a failed swarm task again (M12)")
         var_path = f"/repos/{self.owner}/{repo}/actions/variables/PLATFORM_GIT_URL"
         code, _ = self._request("POST", var_path, {"value": git_url})
         if code == 409:

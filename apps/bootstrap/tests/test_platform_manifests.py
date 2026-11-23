@@ -44,7 +44,7 @@ def test_deployment_local_image_and_secret_env_only() -> None:
         "AGENT_API_DATABASE_URL",
         "AGENT_API_UI_USERS",
         "AGENT_API_SESSION_SECRET",
-        "AGENT_API_SERVICE_TOKEN",
+        "AGENT_API_SERVICE_TOKENS",
     }
     assert container["readinessProbe"]["httpGet"]["path"] == "/healthz"
     assert container["securityContext"]["runAsNonRoot"] is True

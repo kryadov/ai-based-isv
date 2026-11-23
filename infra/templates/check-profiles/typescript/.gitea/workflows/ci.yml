@@ -56,4 +56,4 @@ jobs:
           gitleaks detect --no-git --redact --source .
       - name: semgrep (SAST)
         # semgrep 1.140.0 crashes on import with pydantic>=2.12.
-        run: uvx --with "pydantic<2.12" "semgrep==${SEMGREP_VERSION}" scan --config p/ci --error --metrics off .
+        run: uvx --python 3.12 --with "pydantic<2.12" "semgrep==${SEMGREP_VERSION}" scan --config p/ci --error --metrics off .

@@ -226,7 +226,8 @@ def test_profile_keeps_an_existing_intake_label() -> None:
     rec.bodies[("GET", "/repos/o/demo/labels")] = [{"name": "swarm"}]  # type: ignore[assignment]
     rec.responses[("GET", "/repos/o/demo/labels")] = 200
     rec.apply_check_profile("demo", stack="python", git_url="http://gitea-http:3000")
-    assert not [p for m, p, _ in rec.calls if m == "POST" and p.endswith("/labels")]
+    created = [b for m, p, b in rec.calls if m == "POST" and p.endswith("/labels")]
+    assert not [b for b in created if b is not None and b["name"] == "swarm"]
 
 
 def test_protected_main_gets_one_proposal_pr() -> None:
@@ -261,3 +262,14 @@ def test_pending_proposal_is_not_duplicated() -> None:
     url = rec.apply_check_profile("demo", stack="python", git_url="http://gitea-http:3000")
     assert url == "pending: platform/profile-update"
     assert not [p for m, p, _ in rec.calls if m == "POST" and p == "/repos/o/demo/pulls"]
+
+
+def test_profile_ensures_the_retry_label() -> None:
+    rec = Recorder()
+    rec.apply_check_profile("demo", stack="python", git_url="http://gitea-http:3000")
+    names = [
+        p["name"]
+        for m, path, p in rec.calls
+        if m == "POST" and path.endswith("/labels") and p is not None
+    ]
+    assert "swarm-retry" in names
