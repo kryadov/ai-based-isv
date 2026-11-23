@@ -132,3 +132,14 @@ def test_platform_policy_never_auto_merges() -> None:
 
     text = profile_files("platform")[".platform/merge-policy.yaml"]
     assert load_policy(text, platform_repo=False).auto_merge_enabled is False
+
+
+@pytest.mark.parametrize("stack", ["python", "typescript", "docs", "platform"])
+def test_semgrep_pins_a_python_with_prebuilt_wheels(stack: str) -> None:
+    # M12, live: the floating runner image moved to Python 3.14; uvx then built
+    # pydantic-core<2.12 from source and PyO3 refused 3.14 — every security job red.
+    raw = profile_files(stack)[".gitea/workflows/ci.yml"]
+    semgrep = [line for line in raw.splitlines() if "semgrep==" in line and "uvx" in line]
+    assert semgrep, stack
+    for line in semgrep:
+        assert "uvx --python 3.12 " in line, line
