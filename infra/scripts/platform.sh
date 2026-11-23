@@ -85,6 +85,16 @@ cmd_status() {
   "$TB" kubectl -n platform get application platform-control \
     -o jsonpath='argo:    {.status.sync.status}/{.status.health.status} @ {.status.sync.revision}{"\n"}' 2>/dev/null \
     || echo "argo:    platform-control not deployed"
+  # M12: NodePorts bind 0.0.0.0 — the firewall must keep them off the LAN.
+  if command -v powershell.exe >/dev/null 2>&1; then
+    if powershell.exe -NoProfile -ExecutionPolicy Bypass \
+        -File "$(cygpath -w "$ROOT/infra/rancher/restrict-firewall.ps1" 2>/dev/null || echo infra/rancher/restrict-firewall.ps1)" \
+        -Check >/dev/null 2>&1; then
+      echo "lan:     NodePorts loopback-only (firewall)"
+    else
+      echo "lan:     EXPOSED — run infra/rancher/restrict-firewall.ps1 in an elevated PowerShell"
+    fi
+  fi
 }
 
 case "${1:-}" in

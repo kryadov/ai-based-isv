@@ -631,6 +631,22 @@ section_platform_token() {
   echo "platform-token: rotated ($*); control plane and daemon restarted"
 }
 
+drop_merged_platform_live() {
+  # M12: the acceptance-only Gitea branch platform-live goes away once its tip
+  # is on the lab copy's main (checked against Gitea's main, which may lag GitHub).
+  local atok="$1" api="$2" tip
+  tip="$(tcurl "$atok" -sf "$api/repos/swarm-lab/ai-based-isv/branches/platform-live" 2>/dev/null \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["commit"]["id"])' 2>/dev/null || true)"
+  [ -n "$tip" ] || return 0
+  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="Authorization: token $atok" \
+    git -C "$ROOT/.." fetch -q http://localhost:30080/swarm-lab/ai-based-isv.git main 2>/dev/null || return 0
+  if git -C "$ROOT/.." merge-base --is-ancestor "$tip" FETCH_HEAD 2>/dev/null; then
+    tcurl "$atok" -sf -o /dev/null -X DELETE "$api/repos/swarm-lab/ai-based-isv/branches/platform-live" \
+      && echo "platform: stale Gitea branch platform-live removed (its commit is on main)"
+  fi
+  return 0
+}
+
 section_platform() {
   # The control plane in-cluster (M11): agent_api + the panel as Argo CD app
   # platform-control. Usage: bootstrap.sh platform <sha> (platform.sh up builds
@@ -670,6 +686,8 @@ section_platform() {
       git -C "$ROOT/.." push -q -f http://localhost:30080/swarm-lab/ai-based-isv.git "$sha:refs/heads/platform-live" \
       || { echo "platform: could not push $tag to Gitea branch platform-live"; exit 1; }
     echo "platform: $tag pushed to Gitea branch platform-live (not on main yet)"
+  else
+    drop_merged_platform_live "$atok" "$api"
   fi
   kubectl apply -f "$ROOT/../infra/argocd/appproject-platform.yaml" >/dev/null
   kubectl apply -f "$ROOT/../infra/argocd/application-platform-control.yaml" >/dev/null

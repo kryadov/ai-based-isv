@@ -85,3 +85,10 @@ def test_platform_token_rotate_is_dispatchable() -> None:
     assert "rotate" in body
     assert "rollout restart" in body
     assert "openssl rand" in _section("platform_api_tokens")
+
+
+def test_section_platform_drops_a_merged_platform_live_branch() -> None:
+    body = _section("drop_merged_platform_live")
+    assert "merge-base --is-ancestor" in body
+    assert "branches/platform-live" in body and "DELETE" in body
+    assert "drop_merged_platform_live" in _section("section_platform")
