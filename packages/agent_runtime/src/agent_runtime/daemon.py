@@ -39,6 +39,7 @@ from agent_runtime.vault_broker import AGENT_TOKEN_PATH, read_gitea_token
 
 LITELLM_MASTER_PATH = "secret/litellm/master"
 SERVICE_TOKEN_PATH = "secret/platform/api"
+TASK_SOURCE_TOKEN_PATH = "secret/mcp/task-source"  # M12, written by bootstrap.sh mcp
 INTAKE_LABEL = "swarm"
 
 
@@ -66,6 +67,7 @@ class Secrets:
     litellm_key: str = field(default="", repr=False)
     gitea_token: str = field(default="", repr=False)
     api_token: str = field(default="", repr=False)
+    task_source_token: str = field(default="", repr=False)
 
 
 def build_worker_env(
@@ -102,6 +104,7 @@ def build_worker_env(
             ),
             "AGENT_RUNTIME_TASK_REF": task_ref,
             "AGENT_RUNTIME_TASK_SOURCE_URL": "http://localhost:30085/mcp",
+            "AGENT_RUNTIME_TASK_SOURCE_TOKEN": secrets.task_source_token,
             "AGENT_RUNTIME_GATES_ENABLED": "1",
             "AGENT_RUNTIME_CI_TIMEOUT_S": "1500",
             "AGENT_RUNTIME_HITL_POLL_S": "15",
@@ -288,6 +291,7 @@ def load_secrets(settings: DaemonSettings) -> Secrets:
         ),
         gitea_token=read_gitea_token(_kubectl, root_token=root, path=AGENT_TOKEN_PATH),
         api_token=read_gitea_token(_kubectl, root_token=root, path=SERVICE_TOKEN_PATH),
+        task_source_token=read_gitea_token(_kubectl, root_token=root, path=TASK_SOURCE_TOKEN_PATH),
     )
 
 

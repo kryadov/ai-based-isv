@@ -104,3 +104,17 @@ def test_worker_env_carries_the_service_token() -> None:
     )
     assert env["AGENT_RUNTIME_API_TOKEN"] == "svc-token"
     assert "svc-token" not in repr(Secrets(api_token="svc-token"))
+
+
+def test_worker_env_carries_the_task_source_token() -> None:
+    settings = DaemonSettings(repo_root=Path("/repo"), workspace_dir=Path("/repo/ws"))
+    env = build_worker_env(
+        settings,
+        Secrets(litellm_key="mk", task_source_token="ts-token"),
+        run_id=1,
+        repo="swarm-lab/demo",
+        cfg=parse_project_config(CFG),
+        base={},
+    )
+    assert env["AGENT_RUNTIME_TASK_SOURCE_TOKEN"] == "ts-token"
+    assert "ts-token" not in repr(Secrets(task_source_token="ts-token"))

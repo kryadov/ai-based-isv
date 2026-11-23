@@ -869,6 +869,13 @@ async def _process_vertex(
                 await asyncio.shield(session.stop())
 
 
+def build_tracker(settings: WorkerSettings, http: httpx.AsyncClient) -> TrackerClient | None:
+    """The tracker status loop client, or None when the task has no tracker (M4c, M12)."""
+    if not (settings.task_ref and settings.task_source_url):
+        return None
+    return TrackerClient(http, settings.task_source_url, token=settings.task_source_token)
+
+
 async def worker_loop(
     settings: WorkerSettings,
     executor: Executor,
@@ -893,7 +900,7 @@ async def worker_loop(
     tracker_http: httpx.AsyncClient | None = None
     if settings.task_ref and tracker is None and settings.task_source_url:
         tracker_http = httpx.AsyncClient(timeout=30.0)
-        tracker = TrackerClient(tracker_http, settings.task_source_url)
+        tracker = build_tracker(settings, tracker_http)
     client: ControlPlaneClient = (
         TrackedControlPlaneClient(http, settings, tracker)
         if settings.task_ref and tracker is not None

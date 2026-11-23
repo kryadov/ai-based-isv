@@ -1441,3 +1441,32 @@ async def test_backpressure_waits_while_merges_pile_up(tmp_path: Path) -> None:
         stop.set()
         await asyncio.wait_for(task, timeout=3.0)
     assert plane.claim_calls >= 1
+
+
+async def test_built_tracker_carries_the_task_source_token(tmp_path: Path) -> None:
+    """M12: the host-facing task-source needs its bearer; the worker's own tracker sends it."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"content": []}})
+
+    settings = _settings(tmp_path, "http://git.test/r.git").model_copy(
+        update={
+            "task_ref": "o/r#1",
+            "task_source_url": "http://tracker.test/mcp",
+            "task_source_token": "ts-tok",
+        }
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        tracker = worker_module.build_tracker(settings, http)
+        assert tracker is not None
+        await tracker.add_comment("o/r#1", "x")
+    assert seen[0].headers["Authorization"] == "Bearer ts-tok"
+
+
+def test_no_tracker_without_task_ref(tmp_path: Path) -> None:
+    settings = _settings(tmp_path, "http://git.test/r.git").model_copy(
+        update={"task_source_url": "http://tracker.test/mcp"}
+    )
+    assert worker_module.build_tracker(settings, httpx.AsyncClient()) is None

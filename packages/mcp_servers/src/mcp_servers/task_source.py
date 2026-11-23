@@ -17,6 +17,7 @@ read its task but never close or comment on any issue (M4c review I3).
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 import re
@@ -26,6 +27,8 @@ from typing import Any, Literal
 import httpx
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
+from starlette.middleware import Middleware
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from mcp_servers.gitea_client import GiteaError, GiteaIssuesClient, IssueSummary
 
@@ -143,6 +146,53 @@ def create_task_source_app(
     return mcp
 
 
+class BearerAuthMiddleware:
+    """Pure ASGI guard (M12): HTTP requests need ``Authorization: Bearer <token>``.
+
+    The write-capable task-source is published on a host NodePort, and stand
+    NodePorts bind every interface; the token keeps LAN neighbours out even if
+    the firewall is opened again. The refusal never echoes the header.
+    """
+
+    def __init__(self, app: ASGIApp, *, token: str) -> None:
+        if not token.strip():
+            raise ValueError("BearerAuthMiddleware needs a non-empty token")
+        self.app = app
+        self._expected = f"Bearer {token.strip()}".encode()
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        given = b""
+        for name, value in scope.get("headers", []):
+            if name.lower() == b"authorization":
+                given = value
+                break
+        if not hmac.compare_digest(given, self._expected):
+            body = b'{"detail":"bearer token required"}'
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 401,
+                    "headers": [
+                        (b"content-type", b"application/json"),
+                        (b"content-length", str(len(body)).encode()),
+                        (b"www-authenticate", b"Bearer"),
+                    ],
+                }
+            )
+            await send({"type": "http.response.body", "body": body})
+            return
+        await self.app(scope, receive, send)
+
+
+def auth_middleware(token: str) -> list[Middleware]:
+    """The HTTP middleware for ``MCP_AUTH_TOKEN``: none when it is unset (tests, dev)."""
+    token = token.strip()
+    return [Middleware(BearerAuthMiddleware, token=token)] if token else []
+
+
 def _with_ref(owner: str, repo: str, issue: IssueSummary) -> dict[str, Any]:
     return {"task_ref": f"{owner}/{repo}#{issue.number}", **issue.model_dump()}
 
@@ -150,7 +200,8 @@ def _with_ref(owner: str, repo: str, issue: IssueSummary) -> dict[str, Any]:
 def main() -> None:
     """Serve over streamable HTTP.
 
-    Config from env: GITEA_BASE_URL, GITEA_TOKEN, PORT, TASK_SOURCE_READ_ONLY.
+    Config from env: GITEA_BASE_URL, GITEA_TOKEN, PORT, TASK_SOURCE_READ_ONLY,
+    MCP_AUTH_TOKEN (M12: when set, every HTTP call needs it as a bearer token).
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     app = create_task_source_app(
@@ -166,6 +217,7 @@ def main() -> None:
         port=int(os.environ.get("PORT", "8000")),
         stateless_http=True,
         json_response=True,
+        middleware=auth_middleware(os.environ.get("MCP_AUTH_TOKEN", "")),
     )
 
 
